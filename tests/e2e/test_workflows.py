@@ -1,5 +1,5 @@
 """
-LOYALEY - End-to-End Tests
+ROYALEY - End-to-End Tests
 Complete workflow tests simulating real user scenarios
 """
 

@@ -1,5 +1,5 @@
 """
-LOYALEY - Core Unit Tests
+ROYALEY - Core Unit Tests
 Comprehensive tests for core components
 """
 

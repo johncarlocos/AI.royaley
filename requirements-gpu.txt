@@ -1,4 +1,4 @@
-# LOYALEY - GPU Dependencies
+# ROYALEY - GPU Dependencies
 # Version: 2.0.0
 # For Enterprise Multi-GPU (4x RTX A6000)  with NVIDIA RTX PRO 6000 (96GB VRAM)
 

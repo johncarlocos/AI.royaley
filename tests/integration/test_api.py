@@ -1,5 +1,5 @@
 """
-LOYALEY - Integration Tests
+ROYALEY - Integration Tests
 API endpoint integration tests with database and services
 """
 

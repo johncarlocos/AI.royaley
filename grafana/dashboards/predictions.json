@@ -234,12 +234,12 @@
   "refresh": "1m",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "predictions"],
+  "tags": ["royaley", "predictions"],
   "templating": {"list": []},
   "time": {"from": "now-7d", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
   "title": "AI Pro Sports - Predictions",
-  "uid": "loyaley-predictions",
+  "uid": "royaley-predictions",
   "version": 1
 }

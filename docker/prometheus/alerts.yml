@@ -1,20 +1,20 @@
-# LOYALEY - Prometheus Alerting Rules
+# ROYALEY - Prometheus Alerting Rules
 
 groups:
   # ============== API Health Alerts ==============
   - name: api_health
     rules:
       - alert: APIDown
-        expr: up{job="loyaley-api"} == 0
+        expr: up{job="royaley-api"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "LOYALEY API is down"
+          summary: "ROYALEY API is down"
           description: "The API has been down for more than 1 minute."
 
       - alert: HighAPILatency
-        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="loyaley-api"}[5m])) > 2
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="royaley-api"}[5m])) > 2
         for: 5m
         labels:
           severity: warning
@@ -23,7 +23,7 @@ groups:
           description: "95th percentile latency is above 2 seconds for 5 minutes."
 
       - alert: HighErrorRate
-        expr: rate(http_requests_total{job="loyaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="loyaley-api"}[5m]) > 0.05
+        expr: rate(http_requests_total{job="royaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="royaley-api"}[5m]) > 0.05
         for: 5m
         labels:
           severity: warning
@@ -32,7 +32,7 @@ groups:
           description: "Error rate is above 5% for 5 minutes."
 
       - alert: CriticalErrorRate
-        expr: rate(http_requests_total{job="loyaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="loyaley-api"}[5m]) > 0.15
+        expr: rate(http_requests_total{job="royaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="royaley-api"}[5m]) > 0.15
         for: 2m
         labels:
           severity: critical
@@ -134,7 +134,7 @@ groups:
   - name: ml_models
     rules:
       - alert: ModelAccuracyDrop
-        expr: loyaley_model_accuracy < 0.55
+        expr: royaley_model_accuracy < 0.55
         for: 1h
         labels:
           severity: warning
@@ -143,7 +143,7 @@ groups:
           description: "Model accuracy has dropped below 55% for 1 hour."
 
       - alert: PredictionGenerationFailed
-        expr: increase(loyaley_prediction_errors_total[1h]) > 10
+        expr: increase(royaley_prediction_errors_total[1h]) > 10
         for: 30m
         labels:
           severity: warning
@@ -152,7 +152,7 @@ groups:
           description: "More than 10 prediction generation errors in the last hour."
 
       - alert: NoNewPredictions
-        expr: increase(loyaley_predictions_generated_total[3h]) == 0
+        expr: increase(royaley_predictions_generated_total[3h]) == 0
         for: 3h
         labels:
           severity: warning
@@ -164,7 +164,7 @@ groups:
   - name: betting
     rules:
       - alert: NegativeCLV
-        expr: loyaley_clv_average < 0
+        expr: royaley_clv_average < 0
         for: 24h
         labels:
           severity: warning
@@ -173,7 +173,7 @@ groups:
           description: "Average CLV has been negative for 24 hours."
 
       - alert: LowTierAAccuracy
-        expr: loyaley_tier_a_accuracy < 0.60
+        expr: royaley_tier_a_accuracy < 0.60
         for: 7d
         labels:
           severity: warning
@@ -185,7 +185,7 @@ groups:
   - name: data_collection
     rules:
       - alert: OddsCollectionFailed
-        expr: increase(loyaley_odds_collection_errors_total[1h]) > 5
+        expr: increase(royaley_odds_collection_errors_total[1h]) > 5
         for: 30m
         labels:
           severity: warning
@@ -194,7 +194,7 @@ groups:
           description: "Multiple odds collection errors in the last hour."
 
       - alert: OddsAPIRateLimitNear
-        expr: loyaley_odds_api_remaining < 100
+        expr: royaley_odds_api_remaining < 100
         for: 5m
         labels:
           severity: warning
@@ -203,7 +203,7 @@ groups:
           description: "Less than 100 API calls remaining for TheOddsAPI."
 
       - alert: StaleOddsData
-        expr: time() - loyaley_last_odds_update_timestamp > 900
+        expr: time() - royaley_last_odds_update_timestamp > 900
         for: 15m
         labels:
           severity: warning

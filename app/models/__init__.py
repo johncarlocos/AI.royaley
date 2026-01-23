@@ -1,5 +1,5 @@
 """
-LOYALEY - Database Models
+ROYALEY - Database Models
 Complete SQLAlchemy 2.0 models for the enterprise sports prediction platform.
 43 tables supporting all system functionality.
 """

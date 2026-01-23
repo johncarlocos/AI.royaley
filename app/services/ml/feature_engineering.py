@@ -1,5 +1,5 @@
 """
-LOYALEY - Feature Engineering Pipeline
+ROYALEY - Feature Engineering Pipeline
 Phase 2: Comprehensive feature engineering for all 10 sports
 
 This module generates 60-85 features per sport across categories:

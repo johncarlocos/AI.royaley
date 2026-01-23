@@ -1,5 +1,5 @@
 """
-LOYALEY - Report Generator
+ROYALEY - Report Generator
 Comprehensive report generation for performance analysis
 """
 
@@ -623,7 +623,7 @@ class ReportGenerator:
         html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>LOYALEY Report</title>
+    <title>ROYALEY Report</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
         .header {{ background: #1e3a5f; color: white; padding: 20px; }}
@@ -639,7 +639,7 @@ class ReportGenerator:
 </head>
 <body>
     <div class="header">
-        <h1>LOYALEY Performance Report</h1>
+        <h1>ROYALEY Performance Report</h1>
         <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
     </div>
 """
@@ -691,7 +691,7 @@ class ReportGenerator:
     
     def _export_markdown(self, report: Any, output_path: Optional[str]) -> str:
         """Export report to Markdown"""
-        md = f"""# LOYALEY Performance Report
+        md = f"""# ROYALEY Performance Report
 
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 

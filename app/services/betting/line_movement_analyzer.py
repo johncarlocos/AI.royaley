@@ -1,5 +1,5 @@
 """
-LOYALEY - Line Movement Analyzer
+ROYALEY - Line Movement Analyzer
 Phase 2: Sharp Money Detection & Market Analysis
 
 Analyzes line movements to detect sharp action, steam moves,

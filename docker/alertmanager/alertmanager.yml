@@ -1,10 +1,10 @@
-# LOYALEY - Alertmanager Configuration
+# ROYALEY - Alertmanager Configuration
 # Version: 2.0.0
 
 global:
   # Global configuration
   smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'alerts@loyaley.com'
+  smtp_from: 'alerts@royaley.com'
   smtp_auth_username: '${SMTP_USERNAME}'
   smtp_auth_password: '${SMTP_PASSWORD}'
   smtp_require_tls: true
@@ -86,7 +86,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          🔔 <b>LOYALEY Alert</b>
+          🔔 <b>ROYALEY Alert</b>
           
           <b>Alert:</b> {{ .GroupLabels.alertname }}
           <b>Severity:</b> {{ .GroupLabels.severity }}
@@ -110,7 +110,7 @@ receivers:
       - to: '${ALERT_EMAIL}'
         send_resolved: true
         headers:
-          subject: '[LOYALEY] {{ .GroupLabels.alertname }} - {{ .Status }}'
+          subject: '[ROYALEY] {{ .GroupLabels.alertname }} - {{ .Status }}'
 
   # Critical alerts - all channels, high priority
   - name: 'critical-alerts'
@@ -119,7 +119,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          🚨 <b>CRITICAL ALERT - LOYALEY</b> 🚨
+          🚨 <b>CRITICAL ALERT - ROYALEY</b> 🚨
           
           <b>Alert:</b> {{ .GroupLabels.alertname }}
           <b>Status:</b> {{ .Status }}
@@ -143,12 +143,12 @@ receivers:
         actions:
           - type: button
             text: 'View Dashboard'
-            url: 'http://grafana:3000/d/main/loyaley'
+            url: 'http://grafana:3000/d/main/royaley'
     email_configs:
       - to: '${ALERT_EMAIL}'
         send_resolved: true
         headers:
-          subject: '🚨 [CRITICAL] LOYALEY: {{ .GroupLabels.alertname }}'
+          subject: '🚨 [CRITICAL] ROYALEY: {{ .GroupLabels.alertname }}'
           X-Priority: '1'
 
   # Warning alerts
@@ -158,7 +158,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          ⚠️ <b>Warning - LOYALEY</b>
+          ⚠️ <b>Warning - ROYALEY</b>
           
           <b>Alert:</b> {{ .GroupLabels.alertname }}
           <b>Status:</b> {{ .Status }}
@@ -180,7 +180,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          🌐 <b>API Alert - LOYALEY</b>
+          🌐 <b>API Alert - ROYALEY</b>
           
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
@@ -196,7 +196,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          🗄️ <b>Database Alert - LOYALEY</b>
+          🗄️ <b>Database Alert - ROYALEY</b>
           
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
@@ -212,7 +212,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          🤖 <b>ML Model Alert - LOYALEY</b>
+          🤖 <b>ML Model Alert - ROYALEY</b>
           
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
@@ -228,7 +228,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         parse_mode: 'HTML'
         message: |
-          💰 <b>Betting Alert - LOYALEY</b>
+          💰 <b>Betting Alert - ROYALEY</b>
           
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}

@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Data Quality Monitoring Service
+ROYALEY - Phase 4 Data Quality Monitoring Service
 Comprehensive data validation, anomaly detection, and quality scoring
 """
 

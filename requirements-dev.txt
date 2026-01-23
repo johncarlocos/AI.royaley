@@ -1,4 +1,4 @@
-# LOYALEY - Development Dependencies
+# ROYALEY - Development Dependencies
 # Version: 2.0.0
 
 # Include core requirements

@@ -1,5 +1,5 @@
 """
-LOYALEY - Admin API Routes
+ROYALEY - Admin API Routes
 System administration, user management, and configuration
 """
 

@@ -1,4 +1,4 @@
--- LOYALEY - Database Initialization Script
+-- ROYALEY - Database Initialization Script
 -- Version: 2.0.0
 -- This script runs when the PostgreSQL container is first created
 
@@ -17,8 +17,8 @@ CREATE EXTENSION IF NOT EXISTS "btree_gist";
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'loyaley_app') THEN
-        CREATE USER loyaley_app WITH PASSWORD 'app_password_change_me';
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'royaley_app') THEN
+        CREATE USER royaley_app WITH PASSWORD 'app_password_change_me';
     END IF;
 END
 $$;
@@ -29,8 +29,8 @@ $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'loyaley_readonly') THEN
-        CREATE USER loyaley_readonly WITH PASSWORD 'readonly_password_change_me';
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'royaley_readonly') THEN
+        CREATE USER royaley_readonly WITH PASSWORD 'readonly_password_change_me';
     END IF;
 END
 $$;
@@ -40,18 +40,18 @@ $$;
 -- ============================================
 
 -- Application user permissions
-GRANT CONNECT ON DATABASE loyaley TO loyaley_app;
-GRANT USAGE ON SCHEMA public TO loyaley_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO loyaley_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO loyaley_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO loyaley_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO loyaley_app;
+GRANT CONNECT ON DATABASE royaley TO royaley_app;
+GRANT USAGE ON SCHEMA public TO royaley_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO royaley_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO royaley_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO royaley_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO royaley_app;
 
 -- Read-only user permissions
-GRANT CONNECT ON DATABASE loyaley TO loyaley_readonly;
-GRANT USAGE ON SCHEMA public TO loyaley_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO loyaley_readonly;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO loyaley_readonly;
+GRANT CONNECT ON DATABASE royaley TO royaley_readonly;
+GRANT USAGE ON SCHEMA public TO royaley_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO royaley_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO royaley_readonly;
 
 -- ============================================
 -- Create Enum Types
@@ -218,16 +218,16 @@ $$ LANGUAGE plpgsql;
 -- ============================================
 
 -- Set statement timeout for long-running queries
-ALTER DATABASE loyaley SET statement_timeout = '300s';
+ALTER DATABASE royaley SET statement_timeout = '300s';
 
 -- Set work_mem for complex queries
-ALTER DATABASE loyaley SET work_mem = '256MB';
+ALTER DATABASE royaley SET work_mem = '256MB';
 
 -- Set maintenance_work_mem for maintenance operations
-ALTER DATABASE loyaley SET maintenance_work_mem = '512MB';
+ALTER DATABASE royaley SET maintenance_work_mem = '512MB';
 
 -- Enable JIT compilation
-ALTER DATABASE loyaley SET jit = on;
+ALTER DATABASE royaley SET jit = on;
 
 -- ============================================
 -- Create Partitioning Setup (for large tables)
@@ -273,6 +273,6 @@ ALTER DATABASE loyaley SET jit = on;
 -- Log successful initialization
 DO $$
 BEGIN
-    RAISE NOTICE 'LOYALEY database initialized successfully at %', CURRENT_TIMESTAMP;
+    RAISE NOTICE 'ROYALEY database initialized successfully at %', CURRENT_TIMESTAMP;
 END
 $$;

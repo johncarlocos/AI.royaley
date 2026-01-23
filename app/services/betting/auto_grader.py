@@ -1,5 +1,5 @@
 """
-LOYALEY - Auto-Grading System
+ROYALEY - Auto-Grading System
 Phase 2: Automatic Prediction Grading & Performance Tracking
 
 Automatically grades predictions after games complete and tracks

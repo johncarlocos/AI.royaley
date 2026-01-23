@@ -1,5 +1,5 @@
 """
-LOYALEY - Backtesting Engine
+ROYALEY - Backtesting Engine
 Comprehensive backtesting system for strategy evaluation
 """
 

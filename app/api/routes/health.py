@@ -1,5 +1,5 @@
 """
-LOYALEY - Health Check API Routes
+ROYALEY - Health Check API Routes
 Enterprise-grade health monitoring endpoints
 """
 

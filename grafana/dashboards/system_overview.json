@@ -468,7 +468,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "overview"],
+  "tags": ["royaley", "overview"],
   "templating": {
     "list": []
   },
@@ -479,6 +479,6 @@
   "timepicker": {},
   "timezone": "browser",
   "title": "AI Pro Sports - System Overview",
-  "uid": "loyaley-overview",
+  "uid": "royaley-overview",
   "version": 1
 }

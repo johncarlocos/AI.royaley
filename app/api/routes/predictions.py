@@ -1,5 +1,5 @@
 """
-LOYALEY - Predictions API Routes
+ROYALEY - Predictions API Routes
 Enterprise-grade predictions endpoints with filtering, pagination, and SHAP explanations
 """
 

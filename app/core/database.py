@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Database
+ROYALEY - Phase 4 Enterprise Database
 Async database connections with connection pooling and health monitoring
 """
 

@@ -106,7 +106,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "alerts", "monitoring"],
+  "tags": ["royaley", "alerts", "monitoring"],
   "templating": {"list": []},
   "time": {"from": "now-24h", "to": "now"},
   "timepicker": {},

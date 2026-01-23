@@ -1,5 +1,5 @@
 """
-LOYALEY - ML Configuration
+ROYALEY - ML Configuration
 Phase 2: ML Pipeline Configuration Settings
 """
 

@@ -1,5 +1,5 @@
 """
-LOYALEY - Database Models
+ROYALEY - Database Models
 Phase 1: Core Data Platform
 
 Complete SQLAlchemy 2.0 models for the sports prediction platform.

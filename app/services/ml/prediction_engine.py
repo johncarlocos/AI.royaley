@@ -1,5 +1,5 @@
 """
-LOYALEY - Advanced Prediction Engine
+ROYALEY - Advanced Prediction Engine
 Phase 2: Enterprise-Grade Prediction System
 
 This is the most advanced prediction engine featuring:

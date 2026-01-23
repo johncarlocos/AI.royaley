@@ -1,5 +1,5 @@
 """
-Prediction Integrity Services for LOYALEY.
+Prediction Integrity Services for ROYALEY.
 
 Includes SHA-256 prediction lock-in and SHAP explanations.
 """

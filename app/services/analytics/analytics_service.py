@@ -1,5 +1,5 @@
 """
-LOYALEY - Analytics Service
+ROYALEY - Analytics Service
 Enterprise-grade analytics and reporting service
 """
 

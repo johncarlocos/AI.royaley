@@ -1,5 +1,5 @@
 """
-LOYALEY - Games API Routes
+ROYALEY - Games API Routes
 Enterprise-grade game management endpoints
 """
 

@@ -1,5 +1,5 @@
 """
-Model Registry Module for LOYALEY
+Model Registry Module for ROYALEY
 
 Provides versioning, artifact storage, and performance tracking
 for trained ML models.

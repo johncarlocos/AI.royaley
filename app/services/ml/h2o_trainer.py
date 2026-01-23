@@ -1,5 +1,5 @@
 """
-LOYALEY - H2O AutoML Trainer
+ROYALEY - H2O AutoML Trainer
 Phase 2: Automated ML training using H2O AutoML
 
 H2O AutoML provides enterprise-grade automated machine learning with:

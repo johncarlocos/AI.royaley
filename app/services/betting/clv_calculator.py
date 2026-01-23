@@ -1,5 +1,5 @@
 """
-LOYALEY - Advanced CLV (Closing Line Value) Calculator
+ROYALEY - Advanced CLV (Closing Line Value) Calculator
 Phase 2: Enterprise-Grade Betting Analytics
 
 CLV is the most important metric for long-term betting success.

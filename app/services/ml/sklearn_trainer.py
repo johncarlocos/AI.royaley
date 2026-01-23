@@ -1,5 +1,5 @@
 """
-LOYALEY - Sklearn Ensemble Trainer
+ROYALEY - Sklearn Ensemble Trainer
 Phase 2: Custom ensemble combining XGBoost, LightGBM, CatBoost, and Random Forest
 
 This module provides a fallback training option and contributes to

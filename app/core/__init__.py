@@ -1,5 +1,5 @@
 """
-LOYALEY - Core Module
+ROYALEY - Core Module
 Enterprise-grade core infrastructure components.
 """
 

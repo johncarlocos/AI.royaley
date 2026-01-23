@@ -1,4 +1,4 @@
--- LOYALEY - Database Initialization
+-- ROYALEY - Database Initialization
 -- Phase 1: PostgreSQL Setup Script
 -- Run automatically when Docker container starts
 
@@ -9,12 +9,12 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 -- Set timezone
 SET timezone = 'UTC';
 
--- Grant privileges to the loyaley user
+-- Grant privileges to the royaley user
 DO $$
 BEGIN
     -- Grant privileges if the database exists
-    IF EXISTS (SELECT FROM pg_database WHERE datname = 'loyaley') THEN
-        RAISE NOTICE 'Database loyaley exists';
+    IF EXISTS (SELECT FROM pg_database WHERE datname = 'royaley') THEN
+        RAISE NOTICE 'Database royaley exists';
     END IF;
 END $$;
 
@@ -22,7 +22,7 @@ END $$;
 DO $$
 BEGIN
     RAISE NOTICE '================================================';
-    RAISE NOTICE 'LOYALEY database initialized successfully';
+    RAISE NOTICE 'ROYALEY database initialized successfully';
     RAISE NOTICE 'PostgreSQL version: %', version();
     RAISE NOTICE '================================================';
 END $$;

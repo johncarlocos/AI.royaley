@@ -1,5 +1,5 @@
 """
-LOYALEY - Walk-Forward Validation
+ROYALEY - Walk-Forward Validation
 Time-series aware validation to prevent data leakage
 """
 

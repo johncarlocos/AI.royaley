@@ -1,5 +1,5 @@
 """
-LOYALEY - API Routes Package
+ROYALEY - API Routes Package
 Enterprise-grade API endpoint modules
 
 Complete routing infrastructure with 12 route modules:

@@ -1,5 +1,5 @@
 """
-LOYALEY - Analytics API Routes
+ROYALEY - Analytics API Routes
 Enterprise-grade analytics and reporting endpoints
 """
 

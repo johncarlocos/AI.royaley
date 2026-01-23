@@ -1,5 +1,5 @@
 """
-LOYALEY - SHAP Explainer
+ROYALEY - SHAP Explainer
 Phase 2: Model interpretability with SHAP values
 
 Provides explanations for predictions by calculating feature

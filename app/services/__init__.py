@@ -1,5 +1,5 @@
 """
-LOYALEY - Services Module
+ROYALEY - Services Module
 Complete service layer for the enterprise sports prediction platform.
 """
 

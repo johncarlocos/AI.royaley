@@ -1,11 +1,11 @@
-# LOYALEY - Prometheus Configuration
+# ROYALEY - Prometheus Configuration
 # Metrics collection and alerting
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: 'loyaley'
+    monitor: 'royaley'
     environment: 'production'
 
 # Alertmanager configuration
@@ -27,8 +27,8 @@ scrape_configs:
       - targets: ['localhost:9090']
     metrics_path: /metrics
 
-  # LOYALEY API
-  - job_name: 'loyaley-api'
+  # ROYALEY API
+  - job_name: 'royaley-api'
     static_configs:
       - targets: ['api:8000']
     metrics_path: /api/v1/health/prometheus

@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Alerting Service
+ROYALEY - Phase 4 Enterprise Alerting Service
 Multi-channel alerting: Telegram, Slack, Email, PagerDuty, Datadog
 """
 
@@ -205,7 +205,7 @@ class SlackProvider(AlertProvider):
                 "title": f"{alert.get_emoji()} {alert.title}",
                 "text": alert.message,
                 "fields": fields,
-                "footer": "LOYALEY Alerting",
+                "footer": "ROYALEY Alerting",
                 "ts": int(alert.timestamp.timestamp())
             }]
         }
@@ -381,7 +381,7 @@ class DatadogProvider(AlertProvider):
             "title": f"[{alert.severity.value.upper()}] {alert.title}",
             "text": f"{alert.message}\n\nMetadata:\n```\n{json.dumps(alert.metadata, indent=2)}\n```",
             "alert_type": alert_type_map.get(alert.severity, "info"),
-            "source_type_name": "LOYALEY",
+            "source_type_name": "ROYALEY",
             "tags": [
                 f"source:{alert.source}",
                 f"severity:{alert.severity.value}",

@@ -116,7 +116,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "api", "performance"],
+  "tags": ["royaley", "api", "performance"],
   "templating": {"list": []},
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},

@@ -1,4 +1,4 @@
-# LOYALEY - Grafana Datasource Provisioning
+# ROYALEY - Grafana Datasource Provisioning
 
 apiVersion: 1
 
@@ -16,7 +16,7 @@ datasources:
   - name: PostgreSQL
     type: postgres
     url: db:5432
-    database: loyaley
+    database: royaley
     user: ${DB_USER}
     secureJsonData:
       password: ${DB_PASSWORD}

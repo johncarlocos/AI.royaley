@@ -987,7 +987,7 @@
   ],
   "schemaVersion": 30,
   "style": "dark",
-  "tags": ["ml", "models", "performance", "loyaley"],
+  "tags": ["ml", "models", "performance", "royaley"],
   "templating": {
     "list": [
       {
@@ -1029,7 +1029,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "LOYALEY - ML Model Performance",
+  "title": "ROYALEY - ML Model Performance",
   "uid": "aips-ml-performance",
   "version": 1
 }

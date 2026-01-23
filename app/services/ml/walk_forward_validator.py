@@ -1,5 +1,5 @@
 """
-LOYALEY - Walk-Forward Validation Framework
+ROYALEY - Walk-Forward Validation Framework
 Phase 2: Time-series aware validation to prevent data leakage
 
 Walk-forward validation ensures that training data always precedes

@@ -1,5 +1,5 @@
 """
-LOYALEY - Player Props API Routes
+ROYALEY - Player Props API Routes
 Enterprise-grade player props predictions endpoints
 """
 

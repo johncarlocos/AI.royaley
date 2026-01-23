@@ -1,5 +1,5 @@
 """
-LOYALEY - Odds API Routes
+ROYALEY - Odds API Routes
 Enterprise-grade odds management with multi-sportsbook support
 """
 

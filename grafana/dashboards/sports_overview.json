@@ -35,7 +35,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"NFL\"}", "legendFormat": "NFL", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"NFL\"}", "legendFormat": "NFL", "refId": "A"}],
       "title": "NFL Accuracy",
       "type": "stat"
     },
@@ -45,7 +45,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
       "id": 2,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"NBA\"}", "legendFormat": "NBA", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"NBA\"}", "legendFormat": "NBA", "refId": "A"}],
       "title": "NBA Accuracy",
       "type": "stat"
     },
@@ -55,7 +55,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
       "id": 3,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"MLB\"}", "legendFormat": "MLB", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"MLB\"}", "legendFormat": "MLB", "refId": "A"}],
       "title": "MLB Accuracy",
       "type": "stat"
     },
@@ -65,7 +65,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
       "id": 4,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"NHL\"}", "legendFormat": "NHL", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"NHL\"}", "legendFormat": "NHL", "refId": "A"}],
       "title": "NHL Accuracy",
       "type": "stat"
     },
@@ -75,7 +75,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
       "id": 5,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"NCAAF\"}", "legendFormat": "NCAAF", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"NCAAF\"}", "legendFormat": "NCAAF", "refId": "A"}],
       "title": "NCAAF Accuracy",
       "type": "stat"
     },
@@ -85,7 +85,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
       "id": 6,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"NCAAB\"}", "legendFormat": "NCAAB", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"NCAAB\"}", "legendFormat": "NCAAB", "refId": "A"}],
       "title": "NCAAB Accuracy",
       "type": "stat"
     },
@@ -95,7 +95,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 0, "y": 4},
       "id": 7,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"WNBA\"}", "legendFormat": "WNBA", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"WNBA\"}", "legendFormat": "WNBA", "refId": "A"}],
       "title": "WNBA Accuracy",
       "type": "stat"
     },
@@ -105,7 +105,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 4, "y": 4},
       "id": 8,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"CFL\"}", "legendFormat": "CFL", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"CFL\"}", "legendFormat": "CFL", "refId": "A"}],
       "title": "CFL Accuracy",
       "type": "stat"
     },
@@ -115,7 +115,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 8, "y": 4},
       "id": 9,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"ATP\"}", "legendFormat": "ATP", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"ATP\"}", "legendFormat": "ATP", "refId": "A"}],
       "title": "ATP Accuracy",
       "type": "stat"
     },
@@ -125,7 +125,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 4},
       "id": 10,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=\"WTA\"}", "legendFormat": "WTA", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=\"WTA\"}", "legendFormat": "WTA", "refId": "A"}],
       "title": "WTA Accuracy",
       "type": "stat"
     },
@@ -135,7 +135,7 @@
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
       "id": 11,
       "options": {"legend": {"calcs": ["mean", "last"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=~\"NFL|NBA|MLB|NHL\"}", "legendFormat": "{{sport}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=~\"NFL|NBA|MLB|NHL\"}", "legendFormat": "{{sport}}", "refId": "A"}],
       "title": "Major Sports Accuracy Trend",
       "type": "timeseries"
     },
@@ -145,7 +145,7 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
       "id": 12,
       "options": {"legend": {"calcs": ["mean", "last"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy{sport=~\"NCAAF|NCAAB|WNBA|CFL|ATP|WTA\"}", "legendFormat": "{{sport}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy{sport=~\"NCAAF|NCAAB|WNBA|CFL|ATP|WTA\"}", "legendFormat": "{{sport}}", "refId": "A"}],
       "title": "Other Sports Accuracy Trend",
       "type": "timeseries"
     },
@@ -155,7 +155,7 @@
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
       "id": 13,
       "options": {"legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"]}, "pieType": "donut", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(loyaley_predictions_total) by (sport)", "legendFormat": "{{sport}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(royaley_predictions_total) by (sport)", "legendFormat": "{{sport}}", "refId": "A"}],
       "title": "Predictions by Sport",
       "type": "piechart"
     },
@@ -165,7 +165,7 @@
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
       "id": 14,
       "options": {"legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"]}, "pieType": "donut", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(loyaley_predictions_total{tier=\"A\"}) by (sport)", "legendFormat": "{{sport}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(royaley_predictions_total{tier=\"A\"}) by (sport)", "legendFormat": "{{sport}}", "refId": "A"}],
       "title": "Tier A Predictions by Sport",
       "type": "piechart"
     },
@@ -175,7 +175,7 @@
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
       "id": 15,
       "options": {"footer": {"fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Accuracy"}]},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "loyaley_accuracy", "format": "table", "legendFormat": "", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "royaley_accuracy", "format": "table", "legendFormat": "", "refId": "A"}],
       "title": "All Sports Performance Table",
       "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true}, "indexByName": {}, "renameByName": {"Value": "Accuracy", "sport": "Sport", "tier": "Tier"}}}],
       "type": "table"
@@ -184,7 +184,7 @@
   "refresh": "1m",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "sports", "overview"],
+  "tags": ["royaley", "sports", "overview"],
   "templating": {"list": []},
   "time": {"from": "now-30d", "to": "now"},
   "timepicker": {},

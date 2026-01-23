@@ -96,7 +96,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "loyaley_clv_percentage{sport=~\"$sport\"}",
+          "expr": "royaley_clv_percentage{sport=~\"$sport\"}",
           "legendFormat": "{{sport}} - {{tier}}",
           "refId": "A"
         }
@@ -169,7 +169,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "avg(loyaley_clv_percentage{tier=\"A\"})",
+          "expr": "avg(royaley_clv_percentage{tier=\"A\"})",
           "legendFormat": "",
           "refId": "A"
         }
@@ -238,7 +238,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "avg(loyaley_clv_percentage{tier=\"B\"})",
+          "expr": "avg(royaley_clv_percentage{tier=\"B\"})",
           "legendFormat": "",
           "refId": "A"
         }
@@ -303,7 +303,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "avg(loyaley_clv_percentage)",
+          "expr": "avg(royaley_clv_percentage)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -410,7 +410,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "loyaley_clv_tier_classification",
+          "expr": "royaley_clv_tier_classification",
           "legendFormat": "",
           "refId": "A"
         }
@@ -470,7 +470,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(loyaley_clv_bets_count) by (sport)",
+          "expr": "sum(royaley_clv_bets_count) by (sport)",
           "legendFormat": "{{sport}}",
           "refId": "A"
         }
@@ -557,7 +557,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "loyaley_clv_percentage",
+          "expr": "royaley_clv_percentage",
           "legendFormat": "{{sport}} {{bet_type}}",
           "refId": "A"
         }
@@ -653,7 +653,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(20, loyaley_clv_percentage)",
+          "expr": "topk(20, royaley_clv_percentage)",
           "format": "table",
           "legendFormat": "",
           "refId": "A"
@@ -684,7 +684,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "clv", "betting"],
+  "tags": ["royaley", "clv", "betting"],
   "templating": {
     "list": [
       {
@@ -697,7 +697,7 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(loyaley_clv_percentage, sport)",
+        "definition": "label_values(royaley_clv_percentage, sport)",
         "hide": 0,
         "includeAll": true,
         "label": "Sport",
@@ -705,7 +705,7 @@
         "name": "sport",
         "options": [],
         "query": {
-          "query": "label_values(loyaley_clv_percentage, sport)",
+          "query": "label_values(royaley_clv_percentage, sport)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

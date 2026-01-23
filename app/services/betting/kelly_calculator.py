@@ -1,5 +1,5 @@
 """
-LOYALEY - Advanced Kelly Criterion Calculator
+ROYALEY - Advanced Kelly Criterion Calculator
 Phase 2: Enterprise-Grade Bet Sizing System
 
 Implements Kelly Criterion with multiple strategies:

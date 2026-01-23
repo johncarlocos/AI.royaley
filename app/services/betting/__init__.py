@@ -1,5 +1,5 @@
 """
-LOYALEY - Betting Services Module
+ROYALEY - Betting Services Module
 Phase 2: Enterprise-Grade Betting System
 
 This module provides comprehensive betting services including:

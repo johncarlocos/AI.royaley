@@ -1,5 +1,5 @@
 """
-LOYALEY - API Dependencies
+ROYALEY - API Dependencies
 Phase 1: FastAPI Dependency Injection
 """
 

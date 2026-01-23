@@ -1,5 +1,5 @@
 """
-LOYALEY - CLI Package
+ROYALEY - CLI Package
 Command-line interface tools
 """
 

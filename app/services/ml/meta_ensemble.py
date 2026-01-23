@@ -1,5 +1,5 @@
 """
-Meta-Ensemble Module for LOYALEY
+Meta-Ensemble Module for ROYALEY
 
 Combines predictions from multiple ML frameworks using optimized weights:
 - H2O AutoML

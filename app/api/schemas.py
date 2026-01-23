@@ -1,5 +1,5 @@
 """
-LOYALEY - API Schemas
+ROYALEY - API Schemas
 Phase 1: Pydantic Request/Response Models
 """
 

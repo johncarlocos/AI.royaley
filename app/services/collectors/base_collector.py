@@ -1,5 +1,5 @@
 """
-LOYALEY - Base Collector Framework
+ROYALEY - Base Collector Framework
 Phase 1: Data Collection Services
 
 Abstract base class for all data collectors with rate limiting and retry logic.

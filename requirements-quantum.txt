@@ -1,4 +1,4 @@
-# LOYALEY - Quantum ML Dependencies
+# ROYALEY - Quantum ML Dependencies
 # Optional quantum computing frameworks for advanced predictions
 # Install with: pip install -r requirements-quantum.txt
 

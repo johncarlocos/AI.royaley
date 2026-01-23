@@ -1,5 +1,5 @@
 """
-LOYALEY - Machine Learning Services
+ROYALEY - Machine Learning Services
 Phase 2: ML Pipeline and Advanced Predictions
 
 This module contains all ML-related services including:

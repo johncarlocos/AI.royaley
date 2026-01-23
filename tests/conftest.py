@@ -1,5 +1,5 @@
 """
-LOYALEY - Test Configuration
+ROYALEY - Test Configuration
 Pytest fixtures and configuration for the test suite.
 """
 

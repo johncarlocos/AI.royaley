@@ -1,5 +1,5 @@
 """
-LOYALEY - ML Models API Routes
+ROYALEY - ML Models API Routes
 Model management, training, and performance tracking
 """
 

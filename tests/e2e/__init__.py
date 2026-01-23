@@ -1,1 +1,1 @@
-"""LOYALEY - End-to-End Tests"""
+"""ROYALEY - End-to-End Tests"""

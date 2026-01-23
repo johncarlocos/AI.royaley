@@ -1,1 +1,1 @@
-"""LOYALEY - Integration Tests"""
+"""ROYALEY - Integration Tests"""

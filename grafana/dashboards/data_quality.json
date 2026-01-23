@@ -920,7 +920,7 @@
   ],
   "schemaVersion": 30,
   "style": "dark",
-  "tags": ["data-quality", "monitoring", "loyaley"],
+  "tags": ["data-quality", "monitoring", "royaley"],
   "templating": {
     "list": [
       {
@@ -962,7 +962,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "LOYALEY - Data Quality",
+  "title": "ROYALEY - Data Quality",
   "uid": "aips-data-quality",
   "version": 1
 }

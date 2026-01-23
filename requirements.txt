@@ -1,4 +1,4 @@
-# LOYALEY - Complete Dependencies
+# ROYALEY - Complete Dependencies
 # Enterprise-Grade Sports Prediction Platform
 # Version 2.0.0
 

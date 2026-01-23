@@ -1,5 +1,5 @@
 """
-LOYALEY - Ultimate Prediction System
+ROYALEY - Ultimate Prediction System
 Phase 2: Master Orchestrator
 
 This is the highest-level prediction system that integrates:

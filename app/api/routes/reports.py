@@ -1,5 +1,5 @@
 """
-LOYALEY - Reports API Routes
+ROYALEY - Reports API Routes
 Report endpoints for dashboard and analytics
 """
 

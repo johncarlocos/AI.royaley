@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Configuration
+ROYALEY - Phase 4 Enterprise Configuration
 Complete configuration management with validation and secrets handling
 """
 
@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     """Enterprise-grade configuration settings"""
     
     # Application Settings
-    APP_NAME: str = "Loyaley"
+    APP_NAME: str = "Royaley"
     APP_VERSION: str = "2.0.0"
     ENVIRONMENT: str = Field(default="development", pattern="^(development|staging|production)$")
     DEBUG: bool = False
@@ -74,11 +74,11 @@ class Settings(BaseSettings):
     
     # Two-Factor Authentication
     TOTP_ENABLED: bool = True
-    TOTP_ISSUER: str = "Loyaley"
+    TOTP_ISSUER: str = "Royaley"
     TOTP_TIME_STEP: int = 30
     
     # Database Settings
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/loyaley"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/royaley"
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 10
     DATABASE_POOL_TIMEOUT: int = 30

@@ -1,5 +1,5 @@
 """
-LOYALEY - Betting API Routes
+ROYALEY - Betting API Routes
 Enterprise-grade betting management with Kelly Criterion and CLV tracking
 """
 

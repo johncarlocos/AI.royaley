@@ -1,5 +1,5 @@
 """
-LOYALEY - AutoGluon Trainer
+ROYALEY - AutoGluon Trainer
 Phase 2: Multi-layer stack ensembling with AutoGluon
 
 AutoGluon provides superior ensemble stacking that can improve

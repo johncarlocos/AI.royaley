@@ -1,5 +1,5 @@
 """
-LOYALEY - Player Props Prediction Service
+ROYALEY - Player Props Prediction Service
 Enterprise-grade player performance predictions for props betting.
 """
 

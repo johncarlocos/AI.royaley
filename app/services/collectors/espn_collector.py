@@ -1,5 +1,5 @@
 """
-LOYALEY - ESPN Data Collector
+ROYALEY - ESPN Data Collector
 Phase 1: Data Collection Services
 
 Collects game schedules, scores, and team information from ESPN public API.

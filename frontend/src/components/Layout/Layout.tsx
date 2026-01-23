@@ -57,7 +57,7 @@ const Layout: React.FC = () => {
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2, display: 'flex', alignItems: 'center' }}>
         <Typography variant="h6" sx={{ fontWeight: 700, background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-          LOYALEY
+          ROYALEY
         </Typography>
       </Box>
       <Divider />

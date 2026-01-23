@@ -1,5 +1,5 @@
 """
-LOYALEY - Monitoring API Routes
+ROYALEY - Monitoring API Routes
 Enterprise-grade system monitoring and metrics endpoints
 """
 
@@ -651,7 +651,7 @@ async def get_recent_logs(
     """
     import os
     
-    log_file = os.getenv("LOG_FILE", "/var/log/loyaley/app.log")
+    log_file = os.getenv("LOG_FILE", "/var/log/royaley/app.log")
     
     logs = []
     try:

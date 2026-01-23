@@ -1,5 +1,5 @@
 """
-LOYALEY - Main FastAPI Application
+ROYALEY - Main FastAPI Application
 Phase 4: Enterprise Features
 
 Enterprise-grade FastAPI application with:
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events.
     """
     logger.info("=" * 60)
-    logger.info("LOYALEY - Phase 4 Enterprise Platform")
+    logger.info("ROYALEY - Phase 4 Enterprise Platform")
     logger.info("=" * 60)
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug Mode: {settings.debug}")
@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
         # Send startup notification
         await alerting_service.info(
             "System Startup",
-            f"Loyaley Phase 4 started successfully in {settings.environment} mode"
+            f"Royaley Phase 4 started successfully in {settings.environment} mode"
         )
         
         logger.info("=" * 60)
@@ -156,7 +156,7 @@ async def lifespan(app: FastAPI):
         alerting_service = get_alerting_service()
         await alerting_service.info(
             "System Shutdown",
-            "Loyaley Phase 4 shutting down gracefully"
+            "Royaley Phase 4 shutting down gracefully"
         )
         
     except Exception as e:

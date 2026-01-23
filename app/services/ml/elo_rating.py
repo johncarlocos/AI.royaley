@@ -1,5 +1,5 @@
 """
-LOYALEY - ELO Rating System
+ROYALEY - ELO Rating System
 Phase 2: Custom ELO implementation with sport-specific parameters
 """
 

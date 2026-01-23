@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Cache
+ROYALEY - Phase 4 Enterprise Cache
 Redis caching with distributed locking, pub/sub, and circuit breaker
 """
 

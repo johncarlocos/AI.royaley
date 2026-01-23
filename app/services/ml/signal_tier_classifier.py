@@ -1,5 +1,5 @@
 """
-LOYALEY - Signal Tier Classifier
+ROYALEY - Signal Tier Classifier
 Phase 2: Classification of predictions into confidence tiers
 
 Signal tiers help categorize predictions by confidence level:

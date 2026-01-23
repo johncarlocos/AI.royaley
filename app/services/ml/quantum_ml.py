@@ -1,5 +1,5 @@
 """
-LOYALEY - Quantum Machine Learning Module
+ROYALEY - Quantum Machine Learning Module
 Hybrid Quantum-Classical ML for Sports Prediction
 
 Implements:

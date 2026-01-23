@@ -1,5 +1,5 @@
 """
-LOYALEY - Security Unit Tests
+ROYALEY - Security Unit Tests
 Phase 1: Test Security Components
 """
 

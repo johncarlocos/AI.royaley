@@ -1,5 +1,5 @@
 """
-Probability Calibration Module for LOYALEY
+Probability Calibration Module for ROYALEY
 
 Implements multiple calibration methods to ensure accurate probability estimates
 for Kelly Criterion calculations.

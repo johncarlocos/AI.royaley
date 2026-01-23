@@ -39,7 +39,7 @@ const Login: React.FC = () => {
         <CardContent sx={{ p: 4 }}>
           <Box textAlign="center" mb={4}>
             <Typography variant="h4" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
-              LOYALEY
+              ROYALEY
             </Typography>
             <Typography color="textSecondary">Enterprise Sports Prediction Platform</Typography>
           </Box>

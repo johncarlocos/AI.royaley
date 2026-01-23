@@ -1,5 +1,5 @@
 """
-SHA-256 Prediction Lock-In for LOYALEY.
+SHA-256 Prediction Lock-In for ROYALEY.
 
 Cryptographically hashes predictions at creation time to verify
 integrity and prevent tampering.

@@ -1,4 +1,4 @@
-# LOYALEY - Frontend Dockerfile
+# ROYALEY - Frontend Dockerfile
 # React + Vite Application
 
 FROM node:22-alpine

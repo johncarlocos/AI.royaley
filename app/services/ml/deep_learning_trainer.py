@@ -1,5 +1,5 @@
 """
-LOYALEY - Deep Learning Trainer
+ROYALEY - Deep Learning Trainer
 TensorFlow and LSTM Models for Time-Series Sports Prediction
 
 Implements:

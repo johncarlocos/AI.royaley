@@ -1,5 +1,5 @@
 """
-LOYALEY - Betting Simulator
+ROYALEY - Betting Simulator
 Monte Carlo simulation and scenario analysis
 """
 

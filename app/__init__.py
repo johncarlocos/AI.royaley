@@ -1,9 +1,9 @@
 """
-LOYALEY - Enterprise-Grade Sports Prediction Platform
+ROYALEY - Enterprise-Grade Sports Prediction Platform
 Phase 4: Enterprise Features
 
 This module contains the complete enterprise infrastructure for the
-LOYALEY platform including:
+ROYALEY platform including:
 - Advanced monitoring and metrics collection
 - Multi-channel alerting system
 - Self-healing infrastructure
@@ -13,7 +13,7 @@ LOYALEY platform including:
 """
 
 __version__ = "4.0.0"
-__author__ = "LOYALEY Team"
+__author__ = "ROYALEY Team"
 __description__ = "Enterprise-Grade Sports Prediction Platform - Phase 4"
 
 from typing import Dict, Any

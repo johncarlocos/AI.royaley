@@ -1,4 +1,4 @@
-# LOYALEY - Unit Tests
+# ROYALEY - Unit Tests
 """
 Unit tests for individual components.
 """

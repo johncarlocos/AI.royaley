@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Self-Healing Service
+ROYALEY - Phase 4 Self-Healing Service
 Automatic failure detection, recovery, and system resilience
 """
 

@@ -1,4 +1,4 @@
-# LOYALEY - AutoGluon Dependencies
+# ROYALEY - AutoGluon Dependencies
 # ============================================
 # AutoGluon is optional but recommended for best ML accuracy
 # Install with: pip install -r requirements-autogluon.txt

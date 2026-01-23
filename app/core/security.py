@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Security
+ROYALEY - Phase 4 Enterprise Security
 Complete security implementation: JWT, 2FA, AES-256 encryption, rate limiting
 """
 

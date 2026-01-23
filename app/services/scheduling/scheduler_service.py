@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Scheduling Service
+ROYALEY - Phase 4 Enterprise Scheduling Service
 Background task scheduling with APScheduler
 """
 

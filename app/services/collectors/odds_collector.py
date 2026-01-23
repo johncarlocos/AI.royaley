@@ -1,5 +1,5 @@
 """
-LOYALEY - TheOddsAPI Collector
+ROYALEY - TheOddsAPI Collector
 Phase 1: Data Collection Services
 
 Collects real-time odds from 40+ sportsbooks via TheOddsAPI.

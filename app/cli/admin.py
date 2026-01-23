@@ -1,5 +1,5 @@
 """
-LOYALEY - CLI Admin Commands
+ROYALEY - CLI Admin Commands
 Command-line interface for system administration
 
 Fixed Issues:
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 @click.group()
 def cli():
-    """LOYALEY - Enterprise Sports Prediction Platform"""
+    """ROYALEY - Enterprise Sports Prediction Platform"""
     pass
 
 
@@ -52,7 +52,7 @@ def worker(no_scheduler: bool):
     settings = get_settings()
     
     console.print(Panel.fit(
-        "[bold green]LOYALEY[/bold green]\n"
+        "[bold green]ROYALEY[/bold green]\n"
         "Background Worker Service",
         title="Worker Starting"
     ))
@@ -106,7 +106,7 @@ def worker(no_scheduler: bool):
                 # Send startup notification
                 await alerting_service.info(
                     "Worker Started",
-                    f"Loyaley worker started in {settings.environment} mode"
+                    f"Royaley worker started in {settings.environment} mode"
                 )
             
             console.print("\n[bold green]Worker is running![/bold green]")
@@ -676,7 +676,7 @@ def system():
 def status():
     """Show system status"""
     console.print(Panel.fit(
-        "[bold green]LOYALEY[/bold green]\n"
+        "[bold green]ROYALEY[/bold green]\n"
         "Enterprise Sports Prediction Platform",
         title="System Status"
     ))
@@ -815,7 +815,7 @@ def version():
     
     settings = get_settings()
     
-    console.print(f"[bold]LOYALEY[/bold]")
+    console.print(f"[bold]ROYALEY[/bold]")
     console.print(f"Version: {settings.app_version}")
     console.print(f"Environment: {settings.environment}")
 
@@ -883,7 +883,7 @@ def serve(host: str, port: int, reload: bool, workers: int):
     import uvicorn
     
     console.print(Panel.fit(
-        "[bold green]LOYALEY[/bold green]\n"
+        "[bold green]ROYALEY[/bold green]\n"
         f"Starting API server on {host}:{port}",
         title="Server"
     ))

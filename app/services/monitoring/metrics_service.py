@@ -1,5 +1,5 @@
 """
-LOYALEY - Phase 4 Enterprise Monitoring Service
+ROYALEY - Phase 4 Enterprise Monitoring Service
 Comprehensive system monitoring with Prometheus metrics and health checks
 """
 
@@ -68,14 +68,14 @@ class ComponentHealth:
 
 
 class MetricsRegistry:
-    """Prometheus metrics registry for LOYALEY"""
+    """Prometheus metrics registry for ROYALEY"""
     
     def __init__(self):
         self.registry = CollectorRegistry()
         
         # Application Info
         self.app_info = Info(
-            'loyaley_app',
+            'royaley_app',
             'Application information',
             registry=self.registry
         )
@@ -87,14 +87,14 @@ class MetricsRegistry:
         
         # HTTP Request Metrics
         self.http_requests_total = Counter(
-            'loyaley_http_requests_total',
+            'royaley_http_requests_total',
             'Total HTTP requests',
             ['method', 'endpoint', 'status'],
             registry=self.registry
         )
         
         self.http_request_duration = Histogram(
-            'loyaley_http_request_duration_seconds',
+            'royaley_http_request_duration_seconds',
             'HTTP request duration in seconds',
             ['method', 'endpoint'],
             buckets=[.005, .01, .025, .05, .075, .1, .25, .5, .75, 1.0, 2.5, 5.0, 7.5, 10.0],
@@ -103,28 +103,28 @@ class MetricsRegistry:
         
         # Prediction Metrics
         self.predictions_generated = Counter(
-            'loyaley_predictions_generated_total',
+            'royaley_predictions_generated_total',
             'Total predictions generated',
             ['sport', 'bet_type', 'tier'],
             registry=self.registry
         )
         
         self.predictions_graded = Counter(
-            'loyaley_predictions_graded_total',
+            'royaley_predictions_graded_total',
             'Total predictions graded',
             ['sport', 'result'],
             registry=self.registry
         )
         
         self.prediction_accuracy = Gauge(
-            'loyaley_prediction_accuracy',
+            'royaley_prediction_accuracy',
             'Prediction accuracy by sport and tier',
             ['sport', 'tier'],
             registry=self.registry
         )
         
         self.prediction_edge = Gauge(
-            'loyaley_prediction_edge',
+            'royaley_prediction_edge',
             'Average prediction edge',
             ['sport', 'tier'],
             registry=self.registry
@@ -132,14 +132,14 @@ class MetricsRegistry:
         
         # CLV Metrics
         self.clv_total = Gauge(
-            'loyaley_clv_total',
+            'royaley_clv_total',
             'Total CLV by sport',
             ['sport'],
             registry=self.registry
         )
         
         self.clv_average = Gauge(
-            'loyaley_clv_average',
+            'royaley_clv_average',
             'Average CLV by sport',
             ['sport'],
             registry=self.registry
@@ -147,7 +147,7 @@ class MetricsRegistry:
         
         # Model Metrics
         self.model_training_duration = Histogram(
-            'loyaley_model_training_duration_seconds',
+            'royaley_model_training_duration_seconds',
             'Model training duration',
             ['sport', 'model_type'],
             buckets=[60, 300, 600, 1200, 1800, 3600, 7200],
@@ -155,7 +155,7 @@ class MetricsRegistry:
         )
         
         self.model_inference_duration = Histogram(
-            'loyaley_model_inference_duration_seconds',
+            'royaley_model_inference_duration_seconds',
             'Model inference duration',
             ['sport', 'model_type'],
             buckets=[.01, .025, .05, .1, .25, .5, 1.0],
@@ -163,7 +163,7 @@ class MetricsRegistry:
         )
         
         self.model_auc = Gauge(
-            'loyaley_model_auc',
+            'royaley_model_auc',
             'Model AUC score',
             ['sport', 'model_type'],
             registry=self.registry
@@ -171,21 +171,21 @@ class MetricsRegistry:
         
         # Betting Metrics
         self.bets_placed = Counter(
-            'loyaley_bets_placed_total',
+            'royaley_bets_placed_total',
             'Total bets placed',
             ['sport', 'bet_type'],
             registry=self.registry
         )
         
         self.bankroll_value = Gauge(
-            'loyaley_bankroll_value',
+            'royaley_bankroll_value',
             'Current bankroll value',
             ['user_id'],
             registry=self.registry
         )
         
         self.roi = Gauge(
-            'loyaley_roi',
+            'royaley_roi',
             'Return on investment',
             ['sport', 'period'],
             registry=self.registry
@@ -193,21 +193,21 @@ class MetricsRegistry:
         
         # Data Collection Metrics
         self.data_collection_runs = Counter(
-            'loyaley_data_collection_runs_total',
+            'royaley_data_collection_runs_total',
             'Total data collection runs',
             ['source', 'status'],
             registry=self.registry
         )
         
         self.odds_collected = Counter(
-            'loyaley_odds_collected_total',
+            'royaley_odds_collected_total',
             'Total odds records collected',
             ['sport', 'sportsbook'],
             registry=self.registry
         )
         
         self.api_rate_limit_remaining = Gauge(
-            'loyaley_api_rate_limit_remaining',
+            'royaley_api_rate_limit_remaining',
             'API rate limit remaining',
             ['api'],
             registry=self.registry
@@ -215,34 +215,34 @@ class MetricsRegistry:
         
         # System Metrics
         self.cpu_usage = Gauge(
-            'loyaley_cpu_usage_percent',
+            'royaley_cpu_usage_percent',
             'CPU usage percentage',
             registry=self.registry
         )
         
         self.memory_usage = Gauge(
-            'loyaley_memory_usage_bytes',
+            'royaley_memory_usage_bytes',
             'Memory usage in bytes',
             ['type'],
             registry=self.registry
         )
         
         self.disk_usage = Gauge(
-            'loyaley_disk_usage_bytes',
+            'royaley_disk_usage_bytes',
             'Disk usage in bytes',
             ['mount', 'type'],
             registry=self.registry
         )
         
         self.gpu_usage = Gauge(
-            'loyaley_gpu_usage_percent',
+            'royaley_gpu_usage_percent',
             'GPU usage percentage',
             ['gpu_id'],
             registry=self.registry
         )
         
         self.gpu_memory = Gauge(
-            'loyaley_gpu_memory_bytes',
+            'royaley_gpu_memory_bytes',
             'GPU memory in bytes',
             ['gpu_id', 'type'],
             registry=self.registry
@@ -250,14 +250,14 @@ class MetricsRegistry:
         
         # Database Metrics
         self.db_connections = Gauge(
-            'loyaley_db_connections',
+            'royaley_db_connections',
             'Database connections',
             ['state'],
             registry=self.registry
         )
         
         self.db_query_duration = Histogram(
-            'loyaley_db_query_duration_seconds',
+            'royaley_db_query_duration_seconds',
             'Database query duration',
             ['operation'],
             buckets=[.001, .005, .01, .025, .05, .1, .25, .5, 1.0],
@@ -266,20 +266,20 @@ class MetricsRegistry:
         
         # Cache Metrics
         self.cache_hits = Counter(
-            'loyaley_cache_hits_total',
+            'royaley_cache_hits_total',
             'Total cache hits',
             registry=self.registry
         )
         
         self.cache_misses = Counter(
-            'loyaley_cache_misses_total',
+            'royaley_cache_misses_total',
             'Total cache misses',
             registry=self.registry
         )
         
         # Error Metrics
         self.errors = Counter(
-            'loyaley_errors_total',
+            'royaley_errors_total',
             'Total errors',
             ['type', 'component'],
             registry=self.registry
@@ -287,7 +287,7 @@ class MetricsRegistry:
         
         # Alert Metrics
         self.alerts_sent = Counter(
-            'loyaley_alerts_sent_total',
+            'royaley_alerts_sent_total',
             'Total alerts sent',
             ['channel', 'severity'],
             registry=self.registry

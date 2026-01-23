@@ -1,5 +1,5 @@
 """
-LOYALEY - API Module
+ROYALEY - API Module
 FastAPI routes and schemas for the enterprise sports prediction platform.
 """
 

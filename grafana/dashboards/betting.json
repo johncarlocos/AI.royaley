@@ -212,12 +212,12 @@
   "refresh": "1m",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["loyaley", "betting"],
+  "tags": ["royaley", "betting"],
   "templating": {"list": []},
   "time": {"from": "now-30d", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
   "title": "AI Pro Sports - Betting Performance",
-  "uid": "loyaley-betting",
+  "uid": "royaley-betting",
   "version": 1
 }

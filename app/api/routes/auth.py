@@ -1,5 +1,5 @@
 """
-LOYALEY - Authentication API Routes
+ROYALEY - Authentication API Routes
 Phase 4: Enterprise Features
 
 Authentication endpoints including:

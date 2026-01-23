@@ -1,5 +1,5 @@
 """
-LOYALEY - Alembic Environment Configuration
+ROYALEY - Alembic Environment Configuration
 Phase 1: Database Migrations
 """
 

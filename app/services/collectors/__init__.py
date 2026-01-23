@@ -1,5 +1,5 @@
 """
-LOYALEY - Data Collectors Package
+ROYALEY - Data Collectors Package
 Phase 1: Data Collection Services
 """
 

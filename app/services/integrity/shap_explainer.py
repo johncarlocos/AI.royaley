@@ -1,5 +1,5 @@
 """
-SHAP Explanations Service for LOYALEY.
+SHAP Explanations Service for ROYALEY.
 
 Provides model interpretability through SHAP (SHapley Additive
 exPlanations) values for prediction explanations.

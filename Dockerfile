@@ -1,4 +1,4 @@
-# LOYALEY - Production Dockerfile
+# ROYALEY - Production Dockerfile
 # Enterprise-Grade Sports Prediction Platform
 # Multi-stage build for optimal image size
 

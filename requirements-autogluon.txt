@@ -1,0 +1,17 @@
+# LOYALEY - AutoGluon Dependencies
+# ============================================
+# AutoGluon is optional but recommended for best ML accuracy
+# Install with: pip install -r requirements-autogluon.txt
+# Note: Adds ~2GB to installation
+# ============================================
+
+# AutoGluon Tabular (main package for structured data)
+autogluon.tabular>=1.0.0
+
+# Note: autogluon.tabular includes:
+# - XGBoost
+# - LightGBM
+# - CatBoost
+# - Neural Networks (PyTorch)
+# - FastAI
+# - Multi-layer stack ensembling

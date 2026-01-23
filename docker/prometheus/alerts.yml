@@ -1,0 +1,212 @@
+# LOYALEY - Prometheus Alerting Rules
+
+groups:
+  # ============== API Health Alerts ==============
+  - name: api_health
+    rules:
+      - alert: APIDown
+        expr: up{job="loyaley-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LOYALEY API is down"
+          description: "The API has been down for more than 1 minute."
+
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="loyaley-api"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "95th percentile latency is above 2 seconds for 5 minutes."
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{job="loyaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="loyaley-api"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5% for 5 minutes."
+
+      - alert: CriticalErrorRate
+        expr: rate(http_requests_total{job="loyaley-api",status=~"5.."}[5m]) / rate(http_requests_total{job="loyaley-api"}[5m]) > 0.15
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical error rate detected"
+          description: "Error rate is above 15% for 2 minutes."
+
+  # ============== Database Alerts ==============
+  - name: database
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database has been down for more than 1 minute."
+
+      - alert: HighDatabaseConnections
+        expr: pg_stat_activity_count > 150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connection count"
+          description: "Database has more than 150 active connections."
+
+      - alert: SlowQueries
+        expr: rate(pg_stat_statements_seconds_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database queries detected"
+          description: "Average query time is above 1 second."
+
+  # ============== Redis Alerts ==============
+  - name: redis
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache has been down for more than 1 minute."
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis is using more than 90% of available memory."
+
+  # ============== System Alerts ==============
+  - name: system
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 85% for 10 minutes."
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 90% for 5 minutes."
+
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining."
+
+      - alert: DiskSpaceCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical disk space"
+          description: "Less than 5% disk space remaining."
+
+  # ============== ML Model Alerts ==============
+  - name: ml_models
+    rules:
+      - alert: ModelAccuracyDrop
+        expr: loyaley_model_accuracy < 0.55
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model accuracy dropped"
+          description: "Model accuracy has dropped below 55% for 1 hour."
+
+      - alert: PredictionGenerationFailed
+        expr: increase(loyaley_prediction_errors_total[1h]) > 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prediction generation errors"
+          description: "More than 10 prediction generation errors in the last hour."
+
+      - alert: NoNewPredictions
+        expr: increase(loyaley_predictions_generated_total[3h]) == 0
+        for: 3h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new predictions generated"
+          description: "No predictions have been generated in the last 3 hours."
+
+  # ============== Betting Alerts ==============
+  - name: betting
+    rules:
+      - alert: NegativeCLV
+        expr: loyaley_clv_average < 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Negative CLV detected"
+          description: "Average CLV has been negative for 24 hours."
+
+      - alert: LowTierAAccuracy
+        expr: loyaley_tier_a_accuracy < 0.60
+        for: 7d
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tier A accuracy below target"
+          description: "Tier A prediction accuracy is below 60% for 7 days."
+
+  # ============== Data Collection Alerts ==============
+  - name: data_collection
+    rules:
+      - alert: OddsCollectionFailed
+        expr: increase(loyaley_odds_collection_errors_total[1h]) > 5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Odds collection errors"
+          description: "Multiple odds collection errors in the last hour."
+
+      - alert: OddsAPIRateLimitNear
+        expr: loyaley_odds_api_remaining < 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Odds API rate limit approaching"
+          description: "Less than 100 API calls remaining for TheOddsAPI."
+
+      - alert: StaleOddsData
+        expr: time() - loyaley_last_odds_update_timestamp > 900
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale odds data"
+          description: "Odds data has not been updated for more than 15 minutes."

@@ -1,0 +1,202 @@
+# ============================================
+# ROYALEY - Git Ignore Configuration
+# ============================================
+
+# ============================================
+# Environment & Secrets (CRITICAL - Never commit!)
+# ============================================
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+pytestdebug.log
+
+# ============================================
+# Virtual Environments
+# ============================================
+venv/
+ENV/
+env/
+.venv/
+.conda/
+
+# ============================================
+# Node.js / Frontend
+# ============================================
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+
+# ============================================
+# Docker Data Volumes (Large/Generated Data)
+# ============================================
+postgres_data/
+redis_data/
+grafana_data/
+prometheus_data/
+data/
+logs/
+
+# ============================================
+# ML Models (Large Files)
+# ============================================
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+models/*.pth
+models/*.onnx
+models/h2o_*
+models/autogluon_*
+models/checkpoints/
+!models/.gitkeep
+
+# ============================================
+# IDE & Editors
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+
+# ============================================
+# OS Files
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================
+# Logs
+# ============================================
+*.log
+logs/
+*.log.*
+log/
+
+# ============================================
+# Temporary Files
+# ============================================
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# ============================================
+# Jupyter Notebooks (if used)
+# ============================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ============================================
+# Testing
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage/
+test-results/
+junit.xml
+
+# ============================================
+# Build Artifacts
+# ============================================
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ============================================
+# Alembic (keep migration files, ignore temp)
+# ============================================
+migrations/versions/__pycache__/
+
+# ============================================
+# SSL Certificates (keep placeholder)
+# ============================================
+docker/ssl/*.crt
+docker/ssl/*.key
+docker/ssl/*.pem
+!docker/ssl/.gitkeep
+
+# ============================================
+# Backups
+# ============================================
+backups/
+*.sql.gz
+*.sql.bak
+*.dump
+
+# ============================================
+# Cache
+# ============================================
+.cache/
+*.cache
+redis_dump.rdb
+
+# ============================================
+# End of .gitignore
+# ============================================

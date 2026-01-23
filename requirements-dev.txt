@@ -1,0 +1,70 @@
+# LOYALEY - Development Dependencies
+# Version: 2.0.0
+
+# Include core requirements
+-r requirements.txt
+
+# Testing Framework
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-xdist==3.5.0
+pytest-timeout==2.2.0
+pytest-randomly==3.15.0
+pytest-benchmark==4.0.0
+
+# Test Utilities
+factory-boy==3.3.0
+faker==22.2.0
+freezegun==1.4.0
+responses==0.24.1
+aioresponses==0.7.6
+httpx-mock==0.5.0
+
+# Code Quality
+black==23.12.1
+isort==5.13.2
+flake8==7.0.0
+flake8-docstrings==1.7.0
+flake8-bugbear==24.1.17
+pylint==3.0.3
+mypy==1.8.0
+
+# Type Stubs
+types-redis==4.6.0.11
+types-requests==2.31.0.20240106
+types-python-dateutil==2.8.19.14
+types-PyYAML==6.0.12.12
+
+# Documentation
+mkdocs==1.5.3
+mkdocs-material==9.5.3
+mkdocstrings[python]==0.24.0
+
+# Development Tools
+ipython==8.20.0
+ipdb==0.13.13
+jupyter==1.0.0
+pre-commit==3.6.0
+
+# Profiling & Debugging
+py-spy==0.3.14
+memory-profiler==0.61.0
+line-profiler==4.1.2
+snakeviz==2.2.0
+
+# Security Scanning
+bandit==1.7.7
+safety==2.3.5
+
+# Database Tools
+sqlalchemy-utils==0.41.1
+alembic==1.13.1
+
+# API Documentation
+openapi-spec-validator==0.7.1
+
+# Debugging
+debugpy==1.8.0
+watchdog==3.0.0

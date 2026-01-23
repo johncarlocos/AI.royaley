@@ -1,0 +1,15 @@
+# LOYALEY - Grafana Dashboard Provisioning
+
+apiVersion: 1
+
+providers:
+  - name: 'AI Pro Sports Dashboards'
+    orgId: 1
+    folder: 'AI Pro Sports'
+    folderUid: 'loyaley'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

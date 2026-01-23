@@ -1,0 +1,263 @@
+# LOYALEY - Prometheus Alert Rules
+# Critical and warning alerts for system monitoring
+
+groups:
+  # ===========================================
+  # System Health Alerts
+  # ===========================================
+  - name: system_health
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 90% for more than 5 minutes"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 90% for more than 5 minutes"
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining"
+
+      - alert: HighGPUMemoryUsage
+        expr: nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU memory usage"
+          description: "GPU memory usage is above 90%"
+
+  # ===========================================
+  # Application Health Alerts
+  # ===========================================
+  - name: application_health
+    rules:
+      - alert: APIServerDown
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API server is down"
+          description: "The API server has been unreachable for more than 1 minute"
+
+      - alert: WorkerDown
+        expr: up{job="worker"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Background worker is down"
+          description: "The background worker has been unreachable for more than 5 minutes"
+
+      - alert: MLWorkerDown
+        expr: up{job="ml_worker"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML worker is down"
+          description: "The ML worker has been unreachable for more than 5 minutes"
+
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="api"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "P95 API latency is above 1 second"
+
+      - alert: HighAPIErrorRate
+        expr: rate(http_requests_total{job="api",status=~"5.."}[5m]) / rate(http_requests_total{job="api"}[5m]) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate"
+          description: "More than 5% of API requests are failing"
+
+  # ===========================================
+  # Database Alerts
+  # ===========================================
+  - name: database_health
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database is unreachable"
+
+      - alert: HighDatabaseConnections
+        expr: pg_stat_activity_count / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connection count"
+          description: "Database connections are above 80% of max"
+
+      - alert: SlowDatabaseQueries
+        expr: pg_stat_activity_max_tx_duration > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database queries detected"
+          description: "Queries running for more than 60 seconds"
+
+  # ===========================================
+  # Redis Alerts
+  # ===========================================
+  - name: redis_health
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is unreachable"
+
+      - alert: HighRedisMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Redis memory usage"
+          description: "Redis memory usage is above 90%"
+
+      - alert: LowRedisHitRate
+        expr: redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total) * 100 < 80
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low Redis cache hit rate"
+          description: "Redis hit rate is below 80%"
+
+  # ===========================================
+  # ML Model Alerts
+  # ===========================================
+  - name: ml_model_health
+    rules:
+      - alert: ModelAccuracyDrop
+        expr: ml_model_accuracy < 0.55
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model accuracy drop detected"
+          description: "ML model accuracy has dropped below 55%"
+
+      - alert: TierAAccuracyLow
+        expr: ml_tier_a_accuracy < 0.65
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tier A accuracy below target"
+          description: "Tier A prediction accuracy is below 65% target"
+
+      - alert: NegativeCLV
+        expr: ml_average_clv < 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Negative CLV detected"
+          description: "Average CLV has been negative for 24 hours"
+
+      - alert: HighModelInferenceLatency
+        expr: histogram_quantile(0.95, rate(ml_inference_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High model inference latency"
+          description: "P95 model inference time is above 500ms"
+
+  # ===========================================
+  # Data Collection Alerts
+  # ===========================================
+  - name: data_collection_health
+    rules:
+      - alert: OddsCollectionFailed
+        expr: time() - data_odds_last_collection_timestamp > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Odds collection stale"
+          description: "No odds collected in the last 5 minutes"
+
+      - alert: APIRateLimitNear
+        expr: data_api_requests_remaining < 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API rate limit approaching"
+          description: "Less than 50 API requests remaining"
+
+      - alert: DataQualityIssue
+        expr: data_quality_score < 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data quality degradation"
+          description: "Data quality score has dropped below 90%"
+
+  # ===========================================
+  # Betting System Alerts
+  # ===========================================
+  - name: betting_health
+    rules:
+      - alert: HighDrawdown
+        expr: betting_current_drawdown_percent > 10
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "High drawdown detected"
+          description: "Bankroll drawdown exceeds 10%"
+
+      - alert: ConsecutiveLosses
+        expr: betting_consecutive_losses > 5
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Consecutive losses"
+          description: "5 or more consecutive losing predictions"
+
+      - alert: DailyLossLimit
+        expr: betting_daily_pnl < -500
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Daily loss limit approaching"
+          description: "Daily P&L is significantly negative"

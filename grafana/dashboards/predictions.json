@@ -1,0 +1,245 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 55},
+            {"color": "green", "value": 60}
+          ]},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "title": "Overall Accuracy",
+      "type": "gauge",
+      "targets": [{"expr": "ml_model_accuracy * 100", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 60},
+            {"color": "green", "value": 65}
+          ]},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "title": "Tier A Accuracy",
+      "type": "gauge",
+      "targets": [{"expr": "ml_tier_a_accuracy * 100", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 55},
+            {"color": "green", "value": 60}
+          ]},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "title": "Tier B Accuracy",
+      "type": "gauge",
+      "targets": [{"expr": "ml_tier_b_accuracy * 100", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 50},
+            {"color": "green", "value": 55}
+          ]},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "title": "Tier C Accuracy",
+      "type": "gauge",
+      "targets": [{"expr": "ml_tier_c_accuracy * 100", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 20, "lineWidth": 2},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "id": 5,
+      "title": "Accuracy by Sport",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "ml_sport_accuracy{sport=\"NFL\"} * 100", "legendFormat": "NFL", "refId": "A"},
+        {"expr": "ml_sport_accuracy{sport=\"NBA\"} * 100", "legendFormat": "NBA", "refId": "B"},
+        {"expr": "ml_sport_accuracy{sport=\"NHL\"} * 100", "legendFormat": "NHL", "refId": "C"},
+        {"expr": "ml_sport_accuracy{sport=\"MLB\"} * 100", "legendFormat": "MLB", "refId": "D"},
+        {"expr": "ml_sport_accuracy{sport=\"NCAAF\"} * 100", "legendFormat": "NCAAF", "refId": "E"},
+        {"expr": "ml_sport_accuracy{sport=\"NCAAB\"} * 100", "legendFormat": "NCAAB", "refId": "F"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 20, "lineWidth": 2},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "id": 6,
+      "title": "Accuracy by Bet Type",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "ml_bettype_accuracy{type=\"spread\"} * 100", "legendFormat": "Spread", "refId": "A"},
+        {"expr": "ml_bettype_accuracy{type=\"moneyline\"} * 100", "legendFormat": "Moneyline", "refId": "B"},
+        {"expr": "ml_bettype_accuracy{type=\"total\"} * 100", "legendFormat": "Total", "refId": "C"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "bars", "fillOpacity": 80},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "id": 7,
+      "title": "Daily Predictions",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "increase(predictions_generated_total[1d])", "legendFormat": "Generated", "refId": "A"},
+        {"expr": "increase(predictions_graded_total{result=\"win\"}[1d])", "legendFormat": "Wins", "refId": "B"},
+        {"expr": "increase(predictions_graded_total{result=\"loss\"}[1d])", "legendFormat": "Losses", "refId": "C"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2},
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "id": 8,
+      "title": "Rolling 7-Day Win Rate",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(increase(predictions_graded_total{result=\"win\"}[7d])) / sum(increase(predictions_graded_total[7d])) * 100", "legendFormat": "7-Day Win Rate", "refId": "A"},
+        {"expr": "65", "legendFormat": "Tier A Target", "refId": "B"},
+        {"expr": "60", "legendFormat": "Overall Target", "refId": "C"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null}
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 22},
+      "id": 9,
+      "title": "Total Predictions",
+      "type": "stat",
+      "targets": [{"expr": "sum(predictions_generated_total)", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null}
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 22},
+      "id": 10,
+      "title": "Graded",
+      "type": "stat",
+      "targets": [{"expr": "sum(predictions_graded_total)", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null}
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 22},
+      "id": 11,
+      "title": "Pending",
+      "type": "stat",
+      "targets": [{"expr": "predictions_pending_total", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null}
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 22},
+      "id": 12,
+      "title": "Tier A Today",
+      "type": "stat",
+      "targets": [{"expr": "increase(predictions_generated_total{tier=\"A\"}[1d])", "refId": "A"}]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["loyaley", "predictions"],
+  "templating": {"list": []},
+  "time": {"from": "now-7d", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI Pro Sports - Predictions",
+  "uid": "loyaley-predictions",
+  "version": 1
+}

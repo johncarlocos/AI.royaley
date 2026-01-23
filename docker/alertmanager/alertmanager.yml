@@ -1,0 +1,254 @@
+# LOYALEY - Alertmanager Configuration
+# Version: 2.0.0
+
+global:
+  # Global configuration
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@loyaley.com'
+  smtp_auth_username: '${SMTP_USERNAME}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+  
+  # Slack configuration
+  slack_api_url: '${SLACK_WEBHOOK_URL}'
+  
+  # Resolve timeout
+  resolve_timeout: 5m
+
+# Templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route tree
+route:
+  # Default receiver
+  receiver: 'default-receiver'
+  
+  # Group alerts by these labels
+  group_by: ['alertname', 'severity', 'service']
+  
+  # Wait before sending first notification
+  group_wait: 30s
+  
+  # Wait before sending subsequent notifications
+  group_interval: 5m
+  
+  # Wait before resending notification
+  repeat_interval: 4h
+  
+  # Child routes
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: true
+    
+    # Warning alerts
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 6h
+    
+    # API alerts
+    - match:
+        service: api
+      receiver: 'api-alerts'
+      continue: true
+    
+    # Database alerts
+    - match:
+        service: database
+      receiver: 'database-alerts'
+      continue: true
+    
+    # ML model alerts
+    - match:
+        service: ml
+      receiver: 'ml-alerts'
+    
+    # Betting alerts
+    - match:
+        service: betting
+      receiver: 'betting-alerts'
+
+# Receivers
+receivers:
+  # Default receiver - all channels
+  - name: 'default-receiver'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🔔 <b>LOYALEY Alert</b>
+          
+          <b>Alert:</b> {{ .GroupLabels.alertname }}
+          <b>Severity:</b> {{ .GroupLabels.severity }}
+          <b>Status:</b> {{ .Status }}
+          
+          {{ range .Alerts }}
+          <b>Summary:</b> {{ .Annotations.summary }}
+          <b>Description:</b> {{ .Annotations.description }}
+          {{ end }}
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          {{ end }}
+    email_configs:
+      - to: '${ALERT_EMAIL}'
+        send_resolved: true
+        headers:
+          subject: '[LOYALEY] {{ .GroupLabels.alertname }} - {{ .Status }}'
+
+  # Critical alerts - all channels, high priority
+  - name: 'critical-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🚨 <b>CRITICAL ALERT - LOYALEY</b> 🚨
+          
+          <b>Alert:</b> {{ .GroupLabels.alertname }}
+          <b>Status:</b> {{ .Status }}
+          
+          {{ range .Alerts }}
+          <b>Summary:</b> {{ .Annotations.summary }}
+          <b>Description:</b> {{ .Annotations.description }}
+          {{ end }}
+          
+          ⚠️ <b>Immediate action required!</b>
+    slack_configs:
+      - channel: '#alerts-critical'
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        actions:
+          - type: button
+            text: 'View Dashboard'
+            url: 'http://grafana:3000/d/main/loyaley'
+    email_configs:
+      - to: '${ALERT_EMAIL}'
+        send_resolved: true
+        headers:
+          subject: '🚨 [CRITICAL] LOYALEY: {{ .GroupLabels.alertname }}'
+          X-Priority: '1'
+
+  # Warning alerts
+  - name: 'warning-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          ⚠️ <b>Warning - LOYALEY</b>
+          
+          <b>Alert:</b> {{ .GroupLabels.alertname }}
+          <b>Status:</b> {{ .Status }}
+          
+          {{ range .Alerts }}
+          <b>Summary:</b> {{ .Annotations.summary }}
+          {{ end }}
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        color: 'warning'
+        title: '⚠️ Warning: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+
+  # API-specific alerts
+  - name: 'api-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🌐 <b>API Alert - LOYALEY</b>
+          
+          {{ range .Alerts }}
+          <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
+          {{ end }}
+    slack_configs:
+      - channel: '#api-alerts'
+        send_resolved: true
+
+  # Database alerts
+  - name: 'database-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🗄️ <b>Database Alert - LOYALEY</b>
+          
+          {{ range .Alerts }}
+          <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
+          {{ end }}
+    slack_configs:
+      - channel: '#database-alerts'
+        send_resolved: true
+
+  # ML alerts
+  - name: 'ml-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🤖 <b>ML Model Alert - LOYALEY</b>
+          
+          {{ range .Alerts }}
+          <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
+          {{ end }}
+    slack_configs:
+      - channel: '#ml-alerts'
+        send_resolved: true
+
+  # Betting alerts
+  - name: 'betting-alerts'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          💰 <b>Betting Alert - LOYALEY</b>
+          
+          {{ range .Alerts }}
+          <b>{{ .Labels.alertname }}:</b> {{ .Annotations.summary }}
+          {{ end }}
+    slack_configs:
+      - channel: '#betting-alerts'
+        send_resolved: true
+
+# Inhibition rules
+inhibit_rules:
+  # Inhibit warning if critical is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service']
+  
+  # Inhibit all alerts if system is down
+  - source_match:
+      alertname: 'APIDown'
+    target_match_re:
+      alertname: '.+'
+    equal: ['service']

@@ -1,0 +1,39 @@
+# LOYALEY - Quantum ML Dependencies
+# Optional quantum computing frameworks for advanced predictions
+# Install with: pip install -r requirements-quantum.txt
+
+# =============================================================================
+# PennyLane - Hybrid Quantum-Classical ML
+# =============================================================================
+# Primary quantum ML framework with gradient support
+pennylane>=0.34.0
+pennylane-lightning>=0.34.0  # High-performance simulator
+
+# =============================================================================
+# Qiskit - IBM Quantum Integration
+# =============================================================================
+# For VQC and real quantum hardware access
+qiskit>=1.0.0
+qiskit-aer>=0.13.0
+qiskit-machine-learning>=0.7.0
+qiskit-algorithms>=0.3.0
+
+# =============================================================================
+# D-Wave Ocean SDK - Quantum Annealing
+# =============================================================================
+# For QUBO optimization and feature selection
+dwave-ocean-sdk>=6.5.0
+dimod>=0.12.0
+
+# =============================================================================
+# sQUlearn - Automated Quantum ML (Experimental)
+# =============================================================================
+# Automated quantum ML pipeline creation
+# squlearn>=0.6.0  # Uncomment when stable
+
+# =============================================================================
+# Supporting Libraries
+# =============================================================================
+# Required for quantum integrations
+scipy>=1.11.0
+sympy>=1.12

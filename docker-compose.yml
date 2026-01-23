@@ -1,0 +1,429 @@
+# ============================================================================
+# LOYALEY - Docker Compose Production Configuration
+# Domain: royaley.com | Server IP: 69.197.159.130
+# GPU: 4x RTX A6000 (192GB VRAM Total)
+# ============================================================================
+# STORAGE LAYOUT:
+#   /nvme0n1-disk (1.8TB) - Project, Database, Active Models (FAST)
+#   /nvme1n1-disk (1.7TB) - ML Training, Features, Datasets (FAST)
+#   /sda-disk (16.4TB)    - Backups, Archives, Raw Data (LARGE)
+# ============================================================================
+
+services:
+  # =============================================================================
+  # Main API Application (GPU 2 - Inference)
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyaley_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Loyaley
+      - DATABASE_URL=postgresql+asyncpg://loyaley:${POSTGRES_PASSWORD}@postgres:5432/loyaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - AES_KEY=${AES_KEY}
+      - ODDS_API_KEY=${ODDS_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=2
+      - NVIDIA_VISIBLE_DEVICES=2
+    volumes:
+      # NVMe 0 - Fast storage (active operations)
+      - /nvme0n1-disk/loyaley/models:/app/models
+      - /nvme0n1-disk/loyaley/logs:/app/logs
+      - /nvme0n1-disk/loyaley/data:/app/data
+      # NVMe 1 - ML workspace (training)
+      - /nvme1n1-disk/ml-training:/app/ml-training
+      - /nvme1n1-disk/features:/app/features
+      - /nvme1n1-disk/datasets:/app/datasets
+      # HDD - Large storage (backups)
+      - /sda-disk/backups:/app/backups
+      - /sda-disk/raw-data:/app/raw-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
+          devices:
+            - driver: nvidia
+              device_ids: ['2']
+              capabilities: [gpu]
+
+  # =============================================================================
+  # Background Worker (GPU 0 - Primary ML Training)
+  # =============================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyaley_worker
+    restart: unless-stopped
+    command: python -m app.cli.admin worker
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Loyaley
+      - DATABASE_URL=postgresql+asyncpg://loyaley:${POSTGRES_PASSWORD}@postgres:5432/loyaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ODDS_API_KEY=${ODDS_API_KEY}
+      - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=0
+      - H2O_MAX_MEM_SIZE=96g
+      - H2O_MAX_MODELS=100
+      - AUTOGLUON_PRESETS=best_quality
+    volumes:
+      # NVMe 0 - Fast storage (active operations)
+      - /nvme0n1-disk/loyaley/models:/app/models
+      - /nvme0n1-disk/loyaley/logs:/app/logs
+      - /nvme0n1-disk/loyaley/data:/app/data
+      # NVMe 1 - ML workspace (training) - PRIMARY USE
+      - /nvme1n1-disk/ml-training:/app/ml-training
+      - /nvme1n1-disk/features:/app/features
+      - /nvme1n1-disk/datasets:/app/datasets
+      - /nvme1n1-disk/checkpoints:/app/checkpoints
+      # HDD - Large storage (backups)
+      - /sda-disk/backups:/app/backups
+      - /sda-disk/raw-data:/app/raw-data
+    depends_on:
+      - api
+      - postgres
+      - redis
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 128G
+        reservations:
+          cpus: '8'
+          memory: 64G
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+
+  # =============================================================================
+  # ML Training Worker (GPU 1 - AutoGluon)
+  # =============================================================================
+  ml_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyaley_ml_worker
+    restart: unless-stopped
+    command: python -m app.cli.admin worker --no-scheduler
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Loyaley
+      - DATABASE_URL=postgresql+asyncpg://loyaley:${POSTGRES_PASSWORD}@postgres:5432/loyaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=1
+      - NVIDIA_VISIBLE_DEVICES=1
+      - AUTOGLUON_PRESETS=best_quality
+      - AUTOGLUON_TIME_LIMIT=7200
+    volumes:
+      # NVMe 0 - Fast storage (active operations)
+      - /nvme0n1-disk/loyaley/models:/app/models
+      - /nvme0n1-disk/loyaley/logs:/app/logs
+      - /nvme0n1-disk/loyaley/data:/app/data
+      # NVMe 1 - ML workspace (training) - PRIMARY USE
+      - /nvme1n1-disk/ml-training:/app/ml-training
+      - /nvme1n1-disk/features:/app/features
+      - /nvme1n1-disk/datasets:/app/datasets
+      - /nvme1n1-disk/checkpoints:/app/checkpoints
+      # HDD - Large storage
+      - /sda-disk/backups:/app/backups
+      - /sda-disk/raw-data:/app/raw-data
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 64G
+        reservations:
+          cpus: '8'
+          memory: 32G
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+
+  # =============================================================================
+  # Ensemble/Backup Worker (GPU 3)
+  # =============================================================================
+  ensemble_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyaley_ensemble_worker
+    restart: unless-stopped
+    command: python -m app.cli.admin worker --no-scheduler
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Loyaley
+      - DATABASE_URL=postgresql+asyncpg://loyaley:${POSTGRES_PASSWORD}@postgres:5432/loyaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=3
+      - NVIDIA_VISIBLE_DEVICES=3
+    volumes:
+      # NVMe 0 - Fast storage (active operations)
+      - /nvme0n1-disk/loyaley/models:/app/models
+      - /nvme0n1-disk/loyaley/logs:/app/logs
+      - /nvme0n1-disk/loyaley/data:/app/data
+      # NVMe 1 - ML workspace
+      - /nvme1n1-disk/ml-training:/app/ml-training
+      - /nvme1n1-disk/features:/app/features
+      - /nvme1n1-disk/datasets:/app/datasets
+      # HDD - Large storage
+      - /sda-disk/backups:/app/backups
+      - /sda-disk/archives:/app/archives
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 32G
+        reservations:
+          cpus: '4'
+          memory: 16G
+          devices:
+            - driver: nvidia
+              device_ids: ['3']
+              capabilities: [gpu]
+
+  # =============================================================================
+  # PostgreSQL Database (NVMe 0 - Fast Storage)
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: loyaley_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=loyaley
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=loyaley
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      # Database on NVMe for fast I/O
+      - /nvme0n1-disk/loyaley/postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+      # Database backups on HDD
+      - /sda-disk/backups/database:/backups
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loyaley -d loyaley"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
+      -c maintenance_work_mem=512MB
+      -c work_mem=64MB
+      -c max_connections=200
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+
+  # =============================================================================
+  # Redis Cache (NVMe 0 - Fast Storage)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: loyaley_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 4gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /nvme0n1-disk/loyaley/redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - loyaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # =============================================================================
+  # Nginx Reverse Proxy
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: loyaley_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+      - /nvme0n1-disk/loyaley/logs/nginx:/var/log/nginx
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - loyaley_network
+
+  # =============================================================================
+  # Frontend Application
+  # =============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: loyaley_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=https://royaley.com/api/v1
+      - VITE_APP_NAME=Loyaley
+    networks:
+      - loyaley_network
+
+  # =============================================================================
+  # Prometheus Monitoring (NVMe 0)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: loyaley_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /nvme0n1-disk/loyaley/prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=90d'
+      - '--web.enable-lifecycle'
+    networks:
+      - loyaley_network
+
+  # =============================================================================
+  # Grafana Dashboards (NVMe 0)
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: loyaley_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://royaley.com/grafana
+    volumes:
+      - /nvme0n1-disk/loyaley/grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - loyaley_network
+
+  # =============================================================================
+  # NVIDIA GPU Monitoring
+  # =============================================================================
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.1.7-3.1.4-ubuntu20.04
+    container_name: loyaley_dcgm_exporter
+    restart: unless-stopped
+    environment:
+      - DCGM_EXPORTER_LISTEN=:9400
+    ports:
+      - "9400:9400"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - loyaley_network
+
+  # =============================================================================
+  # Node Exporter (System Metrics)
+  # =============================================================================
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: loyaley_node_exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - loyaley_network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  loyaley_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

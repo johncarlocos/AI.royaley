@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, Typography, TextField, Button, Alert,
-  Checkbox, FormControlLabel, Divider, CircularProgress
+  Checkbox, FormControlLabel, CircularProgress
 } from '@mui/material';
 import { Login as LoginIcon } from '@mui/icons-material';
 import { api } from '../../api/client';
@@ -33,18 +33,13 @@ const Login: React.FC = () => {
     }
   };
 
-  const handleDemoLogin = () => {
-    login({ id: 'demo', email: 'demo@example.com', role: 'admin' }, 'demo-token');
-    navigate('/');
-  };
-
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'background.default', p: 2 }}>
       <Card sx={{ maxWidth: 440, width: '100%' }}>
         <CardContent sx={{ p: 4 }}>
           <Box textAlign="center" mb={4}>
             <Typography variant="h4" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
-              AI PRO SPORTS
+              LOYALEY
             </Typography>
             <Typography color="textSecondary">Enterprise Sports Prediction Platform</Typography>
           </Box>
@@ -89,16 +84,6 @@ const Login: React.FC = () => {
               {loading ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
-
-          <Divider sx={{ my: 3 }}>or</Divider>
-
-          <Button fullWidth variant="outlined" size="large" onClick={handleDemoLogin} sx={{ height: 48 }}>
-            Try Demo Mode
-          </Button>
-
-          <Typography variant="caption" color="textSecondary" display="block" textAlign="center" mt={3}>
-            Demo mode provides full access with sample data
-          </Typography>
         </CardContent>
       </Card>
     </Box>

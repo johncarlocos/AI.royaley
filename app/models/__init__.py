@@ -1,7 +1,7 @@
 """
 ROYALEY - Database Models
 Complete SQLAlchemy 2.0 models for the enterprise sports prediction platform.
-43 tables supporting all system functionality.
+45 tables supporting all system functionality including injuries.
 """
 
 from app.models.models import (
@@ -80,6 +80,12 @@ from app.models.models import (
     WeatherData,
 )
 
+# Import injury models (44-45)
+from app.models.injury_models import (
+    Injury,
+    GameInjury,
+)
+
 __all__ = [
     # Base
     "Base",
@@ -154,4 +160,8 @@ __all__ = [
     "Notification",
     "RateLimitLog",
     "WeatherData",
+    
+    # Injury Tables (44-45)
+    "Injury",
+    "GameInjury",
 ]

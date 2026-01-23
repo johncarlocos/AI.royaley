@@ -237,6 +237,7 @@ class Team(Base):
     home_games: Mapped[List["Game"]] = relationship(back_populates="home_team", foreign_keys="Game.home_team_id")
     away_games: Mapped[List["Game"]] = relationship(back_populates="away_team", foreign_keys="Game.away_team_id")
     stats: Mapped[List["TeamStats"]] = relationship(back_populates="team")
+    injuries: Mapped[List["Injury"]] = relationship("Injury", back_populates="team")
     
     __table_args__ = (
         UniqueConstraint("sport_id", "external_id", name="uq_teams_sport_external"),
@@ -264,6 +265,7 @@ class Player(Base):
     team: Mapped[Optional["Team"]] = relationship(back_populates="players")
     stats: Mapped[List["PlayerStats"]] = relationship(back_populates="player")
     props: Mapped[List["PlayerProp"]] = relationship(back_populates="player")
+    injuries: Mapped[List["Injury"]] = relationship("Injury", back_populates="player")
 
 
 class Venue(Base):
@@ -345,6 +347,7 @@ class Game(Base):
     odds: Mapped[List["Odds"]] = relationship(back_populates="game", cascade="all, delete-orphan")
     predictions: Mapped[List["Prediction"]] = relationship(back_populates="game")
     features: Mapped[Optional["GameFeature"]] = relationship(back_populates="game", uselist=False)
+    game_injuries: Mapped[List["GameInjury"]] = relationship("GameInjury", back_populates="game")
     
     __table_args__ = (
         UniqueConstraint("sport_id", "external_id", name="uq_games_sport_external"),

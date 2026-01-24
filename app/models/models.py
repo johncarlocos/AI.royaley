@@ -312,14 +312,14 @@ class Game(Base):
     __tablename__ = "games"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    sport_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sports.id"))
-    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    home_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    away_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    venue_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id"), nullable=True)
-    season_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("seasons.id"), nullable=True)
+    sport_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sports.id", ondelete="CASCADE"), nullable=False)
+    season_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("seasons.id", ondelete="SET NULL"), nullable=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True)
+    home_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    away_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    venue_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="SET NULL"), nullable=True)
     
-    game_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     status: Mapped[GameStatus] = mapped_column(
         Enum(GameStatus, values_callable=lambda obj: [e.value for e in obj]),
         default=GameStatus.SCHEDULED
@@ -328,14 +328,17 @@ class Game(Base):
     # Scores
     home_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    is_overtime: Mapped[bool] = mapped_column(Boolean, default=False)
     
-    # Period scores (JSONB for flexibility)
-    period_scores: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Rotation numbers
+    home_rotation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_rotation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
-    # Metadata
-    broadcast: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    attendance: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Live game info
+    period: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    clock: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    
+    # Weather data (JSONB)
+    weather: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -348,12 +351,6 @@ class Game(Base):
     predictions: Mapped[List["Prediction"]] = relationship(back_populates="game")
     features: Mapped[Optional["GameFeature"]] = relationship(back_populates="game", uselist=False)
     game_injuries: Mapped[List["GameInjury"]] = relationship("GameInjury", back_populates="game")
-    
-    __table_args__ = (
-        UniqueConstraint("sport_id", "external_id", name="uq_games_sport_external"),
-        Index("ix_games_game_date", "game_date"),
-        Index("ix_games_status", "status"),
-    )
 
 
 class GameFeature(Base):

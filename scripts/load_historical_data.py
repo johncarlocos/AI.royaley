@@ -438,6 +438,9 @@ class ESPNHistoricalLoader:
             from sqlalchemy import select
             
             await db_manager.initialize()
+            
+            # PHASE 1: Save teams first (separate transaction)
+            team_db_cache = {}
             async with db_manager.session() as session:
                 # Get or create sport
                 result = await session.execute(
@@ -455,12 +458,13 @@ class ESPNHistoricalLoader:
                     session.add(sport)
                     await session.flush()
                 
+                sport_id = sport.id
+                
                 # Create teams
-                team_db_cache = {}
                 for team_id, team_data in teams_cache.items():
                     result = await session.execute(
                         select(Team).where(
-                            Team.sport_id == sport.id,
+                            Team.sport_id == sport_id,
                             Team.external_id == team_id
                         )
                     )
@@ -469,7 +473,7 @@ class ESPNHistoricalLoader:
                     if not team:
                         team = Team(
                             id=uuid4(),
-                            sport_id=sport.id,
+                            sport_id=sport_id,
                             external_id=team_id,
                             name=team_data.get("name", "Unknown"),
                             abbreviation=team_data.get("abbreviation", "UNK"),
@@ -482,15 +486,19 @@ class ESPNHistoricalLoader:
                         await session.flush()
                         stats.teams_created += 1
                     
-                    team_db_cache[team_id] = team
+                    team_db_cache[team_id] = team.id  # Store ID, not object
                 
-                # Create games
+                await session.commit()
+                logger.info(f"Teams saved: {stats.teams_created}")
+            
+            # PHASE 2: Save games (separate transaction, batch by batch)
+            async with db_manager.session() as session:
                 for game_data in games:
                     try:
-                        home_team = team_db_cache.get(game_data["home_team"]["id"])
-                        away_team = team_db_cache.get(game_data["away_team"]["id"])
+                        home_team_id = team_db_cache.get(game_data["home_team"]["id"])
+                        away_team_id = team_db_cache.get(game_data["away_team"]["id"])
                         
-                        if not home_team or not away_team:
+                        if not home_team_id or not away_team_id:
                             continue
                         
                         # Check if exists
@@ -505,15 +513,15 @@ class ESPNHistoricalLoader:
                         
                         game = Game(
                             id=uuid4(),
-                            sport_id=sport.id,
+                            sport_id=sport_id,
                             external_id=game_data["external_id"],
-                            home_team_id=home_team.id,
-                            away_team_id=away_team.id,
+                            home_team_id=home_team_id,
+                            away_team_id=away_team_id,
                             game_date=game_data["game_date"],
                             home_score=game_data.get("home_score"),
                             away_score=game_data.get("away_score"),
                             status=status,
-                            broadcast=game_data.get("broadcast")
+                            broadcast=game_data.get("broadcast"),
                         )
                         session.add(game)
                         stats.games_saved += 1
@@ -522,6 +530,7 @@ class ESPNHistoricalLoader:
                         logger.debug(f"Error saving game: {e}")
                 
                 await session.commit()
+                logger.info(f"Games saved: {stats.games_saved}")
                 
         except ImportError:
             logger.warning("Database modules not available - skipping database save")

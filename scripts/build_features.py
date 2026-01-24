@@ -721,13 +721,14 @@ class FeatureBuilder:
     ) -> List[Dict[str, Any]]:
         """Get game history from database."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models import Game, Sport
             from sqlalchemy import select
             
             games = []
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 query = (
                     select(Game)
                     .join(Sport, Game.sport_id == Sport.id)
@@ -759,13 +760,14 @@ class FeatureBuilder:
     async def _get_games_with_weather(self, sport_code: str) -> List[Dict[str, Any]]:
         """Get games with weather data."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models import Game, Sport, WeatherData
             from sqlalchemy import select
             
             games = []
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 query = (
                     select(Game, WeatherData)
                     .join(Sport, Game.sport_id == Sport.id)

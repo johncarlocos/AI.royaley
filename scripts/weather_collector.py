@@ -267,7 +267,7 @@ class WeatherCollector:
     ) -> List[Dict[str, Any]]:
         """Get upcoming games from database."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models import Game, Sport, Team, Venue
             from app.models.models import GameStatus
             from sqlalchemy import select, and_
@@ -276,7 +276,8 @@ class WeatherCollector:
             now = datetime.utcnow()
             end_date = now + timedelta(days=days_ahead)
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 query = (
                     select(Game, Sport, Team, Venue)
                     .join(Sport, Game.sport_id == Sport.id)
@@ -481,11 +482,12 @@ class WeatherCollector:
     async def _save_weather(self, weather: WeatherResult):
         """Save weather to database."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models.models import WeatherData
             from sqlalchemy import select
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 # Check if exists
                 result = await session.execute(
                     select(WeatherData).where(

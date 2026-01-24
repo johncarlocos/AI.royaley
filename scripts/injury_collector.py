@@ -435,12 +435,13 @@ class InjuryCollector:
     async def _save_injury_to_db(self, injury: InjuryData) -> bool:
         """Save injury to database."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models.injury_models import Injury
             from app.models import Team
             from sqlalchemy import select, and_
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 # Find team
                 result = await session.execute(
                     select(Team).where(Team.external_id == injury.team_id)

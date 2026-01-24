@@ -432,12 +432,13 @@ class ESPNHistoricalLoader:
     ):
         """Save games to PostgreSQL."""
         try:
-            from app.core.database import get_async_session
+            from app.core.database import db_manager
             from app.models import Sport, Team, Game
             from app.models.models import GameStatus
             from sqlalchemy import select
             
-            async with get_async_session() as session:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
                 # Get or create sport
                 result = await session.execute(
                     select(Sport).where(Sport.code == sport_code)

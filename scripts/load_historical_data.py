@@ -517,11 +517,10 @@ class ESPNHistoricalLoader:
                             external_id=game_data["external_id"],
                             home_team_id=home_team_id,
                             away_team_id=away_team_id,
-                            game_date=game_data["game_date"],
+                            scheduled_at=game_data["game_date"],
                             home_score=game_data.get("home_score"),
                             away_score=game_data.get("away_score"),
                             status=status,
-                            broadcast=game_data.get("broadcast"),
                         )
                         session.add(game)
                         stats.games_saved += 1

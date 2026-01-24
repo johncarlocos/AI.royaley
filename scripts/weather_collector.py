@@ -286,8 +286,8 @@ class WeatherCollector:
                     .where(
                         and_(
                             Sport.code.in_(sports),
-                            Game.game_date >= now,
-                            Game.game_date <= end_date,
+                            Game.scheduled_at >= now,
+                            Game.scheduled_at <= end_date,
                             Game.status == GameStatus.SCHEDULED,
                         )
                     )
@@ -299,8 +299,8 @@ class WeatherCollector:
                     games.append({
                         "id": str(game.id),
                         "sport_code": sport.code,
-                        "game_date": game.game_date,
-                        "venue_name": venue.name if venue else game.venue_name,
+                        "game_date": game.scheduled_at,
+                        "venue_name": venue.name if venue else None,
                         "city": venue.city if venue else team.city,
                         "state": venue.state if venue else None,
                         "is_dome": venue.is_dome if venue else False,

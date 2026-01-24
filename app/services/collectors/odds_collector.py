@@ -261,6 +261,9 @@ class OddsCollector(BaseCollector):
         """
         Save collected odds to database.
         
+        The new Odds schema stores one row per (game, sportsbook, bet_type) with
+        all lines and odds combined. This method groups the parsed records accordingly.
+        
         Args:
             odds_data: List of parsed odds records
             session: Database session
@@ -271,8 +274,54 @@ class OddsCollector(BaseCollector):
         saved_count = 0
         sportsbook_cache: Dict[str, UUID] = {}
         
+        # Group records by (external_id, sportsbook_key, market_type)
+        grouped: Dict[tuple, Dict[str, Any]] = {}
+        
         for record in odds_data:
-            # Use savepoint to isolate each record so one failure doesn't abort the entire transaction
+            key = (record["external_id"], record["sportsbook_key"], record["market_type"])
+            
+            if key not in grouped:
+                grouped[key] = {
+                    "sport_code": record.get("sport_code"),
+                    "external_id": record["external_id"],
+                    "home_team": record.get("home_team"),
+                    "away_team": record.get("away_team"),
+                    "commence_time": record.get("commence_time"),
+                    "sportsbook_key": record["sportsbook_key"],
+                    "sportsbook_name": record.get("sportsbook_name"),
+                    "bet_type": record["market_type"],
+                    "home_line": None,
+                    "away_line": None,
+                    "home_odds": None,
+                    "away_odds": None,
+                    "total": None,
+                    "over_odds": None,
+                    "under_odds": None,
+                }
+            
+            selection = record.get("selection")
+            price = record.get("price")
+            line = record.get("line")
+            
+            if selection == "home":
+                grouped[key]["home_odds"] = price
+                if line is not None:
+                    grouped[key]["home_line"] = line
+            elif selection == "away":
+                grouped[key]["away_odds"] = price
+                if line is not None:
+                    grouped[key]["away_line"] = line
+            elif selection == "over":
+                grouped[key]["over_odds"] = price
+                if line is not None:
+                    grouped[key]["total"] = line
+            elif selection == "under":
+                grouped[key]["under_odds"] = price
+                if line is not None and grouped[key]["total"] is None:
+                    grouped[key]["total"] = line
+        
+        # Now save each grouped record
+        for record in grouped.values():
             savepoint = await session.begin_nested()
             try:
                 book_key = record["sportsbook_key"]
@@ -286,12 +335,12 @@ class OddsCollector(BaseCollector):
                 
                 sportsbook_id = sportsbook_cache[book_key]
                 
+                # Find or create game
                 game_result = await session.execute(
                     select(Game).where(Game.external_id == record["external_id"])
                 )
                 game = game_result.scalar_one_or_none()
                 
-                # Create game if it doesn't exist
                 if not game:
                     game = await self._create_game_from_odds_record(
                         session,
@@ -303,60 +352,20 @@ class OddsCollector(BaseCollector):
                         await savepoint.rollback()
                         continue
                 
-                existing_odds = await session.execute(
-                    select(Odds).where(
-                        Odds.game_id == game.id,
-                        Odds.sportsbook_id == sportsbook_id,
-                        Odds.market_type == record["market_type"],
-                        Odds.selection == record["selection"],
-                        Odds.is_current == True,
-                    )
-                )
-                existing = existing_odds.scalar_one_or_none()
-                
-                # If existing odds exist and data hasn't changed, skip saving
-                if existing:
-                    # Compare price and line (handle None values)
-                    new_line = record.get("line")
-                    new_price = record.get("price")
-                    
-                    # Check if data has changed
-                    line_changed = (
-                        (existing.line is None) != (new_line is None) or
-                        (existing.line is not None and new_line is not None and existing.line != new_line)
-                    )
-                    price_changed = existing.price != new_price
-                    
-                    if not line_changed and not price_changed:
-                        # Data hasn't changed, skip saving
-                        await savepoint.rollback()
-                        continue
-                    
-                    # Data has changed, create movement record and mark old as not current
-                    movement = OddsMovement(
-                        game_id=game.id,
-                        sportsbook_id=sportsbook_id,
-                        market_type=record["market_type"],
-                        old_line=existing.line,
-                        new_line=new_line,
-                        old_price=existing.price,
-                        new_price=new_price,
-                        movement_size=self._calculate_movement_size(
-                            existing.line, new_line
-                        ),
-                    )
-                    session.add(movement)
-                    existing.is_current = False
-                
-                # Create new odds record (either new or changed)
+                # Create new odds record
                 new_odds = Odds(
                     game_id=game.id,
                     sportsbook_id=sportsbook_id,
-                    market_type=record["market_type"],
-                    selection=record["selection"],
-                    price=record["price"],
-                    line=record.get("line"),
-                    is_current=True,
+                    sportsbook_key=book_key,
+                    bet_type=record["bet_type"],
+                    home_line=record.get("home_line"),
+                    away_line=record.get("away_line"),
+                    home_odds=record.get("home_odds"),
+                    away_odds=record.get("away_odds"),
+                    total=record.get("total"),
+                    over_odds=record.get("over_odds"),
+                    under_odds=record.get("under_odds"),
+                    is_opening=False,
                 )
                 session.add(new_odds)
                 await savepoint.commit()
@@ -459,7 +468,7 @@ class OddsCollector(BaseCollector):
                 external_id=record["external_id"],
                 home_team_id=home_team.id,
                 away_team_id=away_team.id,
-                game_date=game_date,
+                scheduled_at=game_date,
                 status=GameStatus.SCHEDULED,
             )
             session.add(game)
@@ -550,7 +559,7 @@ class OddsCollector(BaseCollector):
     ) -> Sportsbook:
         """Get or create sportsbook record."""
         result = await session.execute(
-            select(Sportsbook).where(Sportsbook.api_key == key)
+            select(Sportsbook).where(Sportsbook.key == key)
         )
         sportsbook = result.scalar_one_or_none()
         
@@ -560,7 +569,7 @@ class OddsCollector(BaseCollector):
             
             sportsbook = Sportsbook(
                 name=name,
-                api_key=key,
+                key=key,
                 is_sharp=is_sharp,
             )
             session.add(sportsbook)

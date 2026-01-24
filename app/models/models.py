@@ -313,14 +313,13 @@ class Game(Base):
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     sport_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sports.id"))
-    external_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
     home_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"))
     away_team_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"))
     venue_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id"), nullable=True)
     season_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("seasons.id"), nullable=True)
     
-    # Schedule - matches database column name
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    game_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     status: Mapped[GameStatus] = mapped_column(
         Enum(GameStatus, values_callable=lambda obj: [e.value for e in obj]),
         default=GameStatus.SCHEDULED
@@ -329,17 +328,14 @@ class Game(Base):
     # Scores
     home_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_overtime: Mapped[bool] = mapped_column(Boolean, default=False)
     
-    # Rotation numbers (for betting reference)
-    home_rotation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    away_rotation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Period scores (JSONB for flexibility)
+    period_scores: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     
-    # Live game state
-    period: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    clock: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    
-    # Weather data (JSONB)
-    weather: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Metadata
+    broadcast: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    attendance: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -354,8 +350,8 @@ class Game(Base):
     game_injuries: Mapped[List["GameInjury"]] = relationship("GameInjury", back_populates="game")
     
     __table_args__ = (
-        Index("ix_games_sport_id", "sport_id"),
-        Index("ix_games_scheduled_at", "scheduled_at"),
+        UniqueConstraint("sport_id", "external_id", name="uq_games_sport_external"),
+        Index("ix_games_game_date", "game_date"),
         Index("ix_games_status", "status"),
     )
 
@@ -414,11 +410,11 @@ class Sportsbook(Base):
     __tablename__ = "sportsbooks"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    api_key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     is_sharp: Mapped[bool] = mapped_column(Boolean, default=False)
-    vig_estimate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     odds: Mapped[List["Odds"]] = relationship(back_populates="sportsbook")
@@ -429,23 +425,22 @@ class Odds(Base):
     __tablename__ = "odds"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"))
-    sportsbook_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sportsbooks.id"))
-    market_type: Mapped[str] = mapped_column(String(20), nullable=False)  # spread, moneyline, total
-    selection: Mapped[str] = mapped_column(String(20), nullable=False)  # home, away, over, under
-    price: Mapped[int] = mapped_column(Integer, nullable=False)  # American odds
-    line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Spread/total line
-    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
+    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    sportsbook_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("sportsbooks.id", ondelete="CASCADE"), nullable=True)
+    sportsbook_key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    bet_type: Mapped[str] = mapped_column(String(50), nullable=False)  # spread, moneyline, total
+    home_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    over_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    under_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_opening: Mapped[bool] = mapped_column(Boolean, default=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     game: Mapped["Game"] = relationship(back_populates="odds")
-    sportsbook: Mapped["Sportsbook"] = relationship(back_populates="odds")
-    
-    __table_args__ = (
-        Index("ix_odds_game_market", "game_id", "market_type", "selection"),
-        Index("ix_odds_current", "is_current"),
-        CheckConstraint("market_type IN ('spread', 'moneyline', 'total')", name="ck_odds_market_type"),
-    )
+    sportsbook: Mapped[Optional["Sportsbook"]] = relationship(back_populates="odds")
 
 
 class OddsMovement(Base):
@@ -453,17 +448,14 @@ class OddsMovement(Base):
     __tablename__ = "odds_movements"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"))
-    sportsbook_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sportsbooks.id"))
-    market_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    old_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    new_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    old_price: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    new_price: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    movement_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    bet_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    previous_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    current_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    movement: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_steam: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_reverse: Mapped[bool] = mapped_column(Boolean, default=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    
-    __table_args__ = (Index("ix_odds_movements_game", "game_id", "detected_at"),)
 
 
 class ClosingLine(Base):
@@ -471,17 +463,14 @@ class ClosingLine(Base):
     __tablename__ = "closing_lines"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"))
-    sportsbook_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sportsbooks.id"))
-    market_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    selection: Mapped[str] = mapped_column(String(20), nullable=False)
-    closing_price: Mapped[int] = mapped_column(Integer, nullable=False)
-    closing_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=False, unique=True)
+    spread_home: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    spread_away: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    moneyline_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    moneyline_away: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(50), default='pinnacle')
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    
-    __table_args__ = (
-        UniqueConstraint("game_id", "sportsbook_id", "market_type", "selection", name="uq_closing_lines"),
-    )
 
 
 class ConsensusLine(Base):
@@ -489,13 +478,13 @@ class ConsensusLine(Base):
     __tablename__ = "consensus_lines"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"))
-    market_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    game_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    bet_type: Mapped[str] = mapped_column(String(50), nullable=False)
     consensus_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    consensus_price_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    consensus_price_away: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    books_count: Mapped[int] = mapped_column(Integer, default=0)
-    computed_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    public_bet_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_money_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharp_action: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
 # =============================================================================

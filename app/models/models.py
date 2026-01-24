@@ -273,17 +273,16 @@ class Venue(Base):
     __tablename__ = "venues"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    external_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    state: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     country: Mapped[str] = mapped_column(String(100), default="USA")
-    capacity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    surface_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    timezone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_dome: Mapped[bool] = mapped_column(Boolean, default=False)
+    surface: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    capacity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    timezone: Mapped[str] = mapped_column(String(50), default="America/New_York")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     games: Mapped[List["Game"]] = relationship(back_populates="venue")
@@ -967,24 +966,25 @@ class WeatherData(Base):
     """Weather data for outdoor sports predictions"""
     __tablename__ = "weather_data"
     
-    id = Column(Integer, primary_key=True, index=True)
-    game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
-    temperature_f = Column(Float)
-    feels_like_f = Column(Float)
-    humidity_pct = Column(Float)
-    wind_speed_mph = Column(Float)
-    wind_direction = Column(String(10))
-    precipitation_pct = Column(Float)
-    conditions = Column(String(100))
-    is_dome = Column(Boolean, default=False)
-    recorded_at = Column(DateTime(timezone=True), server_default=func.now())
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=True)
+    venue_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=True)
+    temperature_f: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    feels_like_f: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    humidity_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    wind_speed_mph: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    wind_direction: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    precipitation_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    conditions: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    is_dome: Mapped[bool] = mapped_column(Boolean, default=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     # Relationships
-    game = relationship("Game", back_populates="weather")
+    game = relationship("Game", back_populates="weather_data")
 
 
 # Add relationships to User model
 User.notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
 
-# Add relationship to Game model
-Game.weather = relationship("WeatherData", back_populates="game", uselist=False)
+# Add relationship to Game model for WeatherData table
+Game.weather_data = relationship("WeatherData", back_populates="game", uselist=False)

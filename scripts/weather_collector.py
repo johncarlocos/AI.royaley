@@ -164,12 +164,12 @@ class WeatherCollector:
     
     Saves to:
     - Database: weather_data table
-    - Archive: /sda-disk/raw-data/weather/
+    - Archive: /app/raw-data/weather/
     """
     
     OPENWEATHERMAP_URL = "https://api.openweathermap.org/data/2.5/weather"
     GEOCODE_URL = "http://api.openweathermap.org/geo/1.0/direct"
-    RAW_DATA_PATH = "/sda-disk/raw-data/weather"
+    RAW_DATA_PATH = "/app/raw-data/weather"
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.environ.get("WEATHER_API_KEY", "")

@@ -5,7 +5,7 @@ Loads historical game data from ESPN API and saves to database.
 
 Features:
 - Loads 10 years of historical data
-- Saves raw JSON to HDD (/sda-disk/raw-data/espn/)
+- Saves raw JSON to HDD (/app/raw-data/espn/)
 - Processes and saves to PostgreSQL
 - Rate limiting and error handling
 - Progress tracking
@@ -85,7 +85,7 @@ SEASON_DATES = {
     "WTA": {"start_month": 1, "end_month": 11, "crosses_year": False},
 }
 
-RAW_DATA_PATH = "/sda-disk/raw-data/espn"
+RAW_DATA_PATH = "/app/raw-data/espn"
 
 
 @dataclass

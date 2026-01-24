@@ -8,7 +8,7 @@ Automated backup system for:
 - ML model files
 - Configuration files
 
-Storage: /sda-disk/backups/
+Storage: /app/backups/
 
 Usage:
     # Full backup

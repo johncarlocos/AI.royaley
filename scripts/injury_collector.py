@@ -148,7 +148,7 @@ class InjuryCollector:
     """
     
     BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
-    RAW_DATA_PATH = "/sda-disk/raw-data/injuries"
+    RAW_DATA_PATH = "/app/raw-data/injuries"
     
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None

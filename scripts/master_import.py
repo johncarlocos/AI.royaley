@@ -24,8 +24,7 @@ from datetime import datetime
 from typing import List
 from dataclasses import dataclass, field
 
-from app.services import data
-
+# MUST come before app imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
@@ -62,7 +61,7 @@ class ImportResult:
 # =============================================================================
 
 async def import_espn(sports: List[str] = None) -> ImportResult:
-    """Import injuries/lineups from ESPN."""
+    """Import games/scores from ESPN."""
     result = ImportResult(source="espn", success=False)
     try:
         from app.services.collectors import espn_collector
@@ -76,6 +75,7 @@ async def import_espn(sports: List[str] = None) -> ImportResult:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
+                        # ESPN returns {games: [], scores: [], teams: []}
                         if data.data.get("games"):
                             await espn_collector.save_games_to_database(data.data["games"], session)
                         if data.data.get("scores"):
@@ -118,7 +118,7 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
 
 
 async def import_pinnacle(sports: List[str] = None) -> ImportResult:
-    """Import sharp odds from Pinnacle."""
+    """Import CLV lines from Pinnacle."""
     result = ImportResult(source="pinnacle", success=False)
     try:
         from app.services.collectors import pinnacle_collector
@@ -178,19 +178,16 @@ async def import_pinnacle_history(sports: List[str] = None, pages: int = 50) -> 
 
 
 async def import_weather(sports: List[str] = None) -> ImportResult:
-    """Import weather for outdoor games."""
+    """Import weather data for outdoor games."""
     result = ImportResult(source="weather", success=False)
     try:
-        from app.services.collectors import WeatherCollector
+        from app.services.collectors.collector_05_weather import WeatherCollector
         
         sports = sports or ["NFL", "MLB"]
         for sport in sports:
             try:
                 async with WeatherCollector() as collector:
-                    stats = await collector.collect_for_upcoming_games(
-                        sport_code=sport, 
-                        days_ahead=7
-                    )
+                    stats = await collector.collect_for_upcoming_games(sport_code=sport, days_ahead=7)
                     result.records += stats.weather_fetched
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
@@ -218,11 +215,11 @@ ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 
 
 # =============================================================================
-# MAIN FUNCTIONS
+# MAIN IMPORT RUNNER
 # =============================================================================
 
 async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50):
-    """Run imports from specified sources."""
+    """Run data import for specified sources."""
     console.print(f"\n[bold blue]{'='*60}[/bold blue]")
     console.print(f"[bold]ROYALEY DATA IMPORT[/bold]")
     console.print(f"[bold blue]{'='*60}[/bold blue]")
@@ -235,9 +232,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
     
     for source in sources:
         if shutdown_flag:
-            console.print("[yellow]Cancelled[/yellow]")
             break
-        
+            
         console.print(f"[cyan]📊 {source}...[/cyan]", end=" ")
         
         func = IMPORT_MAP.get(source)
@@ -257,8 +253,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             if result.success:
                 console.print(f"[green]✅ {result.records} records[/green]")
             else:
-                err_msg = result.errors[0] if result.errors else "failed"
-                console.print(f"[red]❌ {err_msg}[/red]")
+                console.print(f"[red]❌ {result.errors[0] if result.errors else 'failed'}[/red]")
         except Exception as e:
             console.print(f"[red]❌ {str(e)[:50]}[/red]")
             total_errors += 1
@@ -268,13 +263,13 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
 
 
 async def daemon_mode(interval: int, sources: List[str], sports: List[str]):
-    """Run imports continuously."""
+    """Run imports continuously at specified interval."""
     global shutdown_flag
+    
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     console.print(f"\n[bold green]🚀 Daemon Mode - Every {interval} min[/bold green]")
-    console.print("Press Ctrl+C to stop\n")
     
     run_count = 0
     while not shutdown_flag:
@@ -288,7 +283,7 @@ async def daemon_mode(interval: int, sources: List[str], sports: List[str]):
         
         if shutdown_flag:
             break
-        
+            
         console.print(f"\n[dim]Next in {interval} min...[/dim]")
         for _ in range(interval * 60):
             if shutdown_flag:
@@ -299,18 +294,19 @@ async def daemon_mode(interval: int, sources: List[str], sports: List[str]):
 
 
 def show_status():
-    """Show collector status."""
+    """Show status of all data collectors."""
     console.print("\n[bold]ROYALEY DATA COLLECTORS[/bold]")
     console.print("=" * 50)
     console.print("\n[green]✅ IMPLEMENTED:[/green]")
-    console.print("  collector_01_espn.py      - Injuries (FREE)")
-    console.print("  collector_02_odds_api.py  - 40+ books ($59/mo)")
-    console.print("  collector_03_pinnacle.py  - CLV lines ($10/mo)")
-    console.print("  collector_04_tennis.py    - Tennis stats")
-    console.print("  collector_05_weather.py   - Weather (FREE)")
+    console.print("  • ESPN          - Games/scores (FREE)")
+    console.print("  • OddsAPI       - 40+ books ($59/mo)")
+    console.print("  • Pinnacle      - CLV lines ($10/mo)")
+    console.print("  • Weather       - OpenWeatherMap (FREE)")
     console.print("\n[yellow]⏳ PENDING:[/yellow]")
-    console.print("  nflfastR, cfbfastR, baseballr, hockeyR")
-    console.print("  TheSportsDB, BallDontLie, Google Distance")
+    console.print("  • nflfastR      - NFL play-by-play")
+    console.print("  • Basketball-Ref - NBA stats")
+    console.print("  • Hockey-Ref    - NHL stats")
+    console.print("  • Statcast      - MLB pitch data")
 
 
 def main():
@@ -327,7 +323,7 @@ def main():
     parser.add_argument("--sport", help="Specific sport")
     parser.add_argument("--sports", help="Comma-separated sports")
     parser.add_argument("--pages", "-p", type=int, default=50, help="History pages")
-    parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval")
+    parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval (min)")
     
     args = parser.parse_args()
     
@@ -352,6 +348,7 @@ def main():
     elif args.sports:
         sports = [s.strip().upper() for s in args.sports.split(",")]
     
+    # Run
     if args.daemon:
         asyncio.run(daemon_mode(args.interval, sources, sports))
     else:

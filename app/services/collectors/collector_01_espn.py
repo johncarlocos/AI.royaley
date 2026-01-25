@@ -614,7 +614,7 @@ class ESPNCollector(BaseCollector):
         all_games = []
         endpoint = f"/{sport_path['sport']}/{sport_path['league']}/scoreboard"
         
-        console.print(f"[ESPN Historical] Fetching {sport_code} games for past {days_back} days...")
+        logger.info(f"[ESPN Historical] Fetching {sport_code} games for past {days_back} days...")
         
         for day_offset in range(1, days_back + 1):
             target_date = datetime.utcnow() - timedelta(days=day_offset)
@@ -631,7 +631,7 @@ class ESPNCollector(BaseCollector):
                 
                 # Progress logging every 30 days
                 if day_offset % 30 == 0:
-                    console.print(f"  [ESPN] {sport_code}: {day_offset}/{days_back} days, {len(all_games)} games found")
+                    logger.info(f"[ESPN Historical] {sport_code}: {day_offset}/{days_back} days, {len(all_games)} games found")
                 
                 # Rate limiting
                 await asyncio.sleep(0.1)

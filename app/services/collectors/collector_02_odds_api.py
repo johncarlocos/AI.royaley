@@ -709,7 +709,7 @@ class OddsCollector(BaseCollector):
                 # Historical endpoint
                 endpoint = f"/historical/sports/{api_sport_key}/odds"
                 
-                console.print(f"[OddsAPI Historical] Fetching {sport_code} odds for {target_date.strftime('%Y-%m-%d')}")
+                logger.info(f"[OddsAPI Historical] Fetching {sport_code} odds for {target_date.strftime('%Y-%m-%d')}")
                 
                 data = await self.get(endpoint, params=params)
                 

@@ -17,6 +17,7 @@ Endpoints:
 - /kit/v1/archive?sport_id=X&page_num=1 - Historical events
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -791,8 +792,210 @@ class PinnacleCollector(BaseCollector):
         
         return datetime.utcnow()
 
+    # =========================================================================
+    # HISTORICAL DATA COLLECTION
+    # =========================================================================
+    
+    async def collect_historical(
+        self,
+        sport_code: str = None,
+        max_pages: int = 50,
+    ) -> CollectorResult:
+        """
+        Collect historical game results from Pinnacle archive.
+        
+        This provides OUTCOME labels (who won, scores, margins) for ML training.
+        Note: Archive has results but NOT historical odds.
+        
+        Args:
+            sport_code: Specific sport (NFL, NBA, etc.) or None for all
+            max_pages: Maximum pages to fetch per sport (100 events/page)
+            
+        Returns:
+            CollectorResult with historical game results
+        """
+        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        all_results = []
+        errors = []
+        
+        for sport in sports:
+            try:
+                events = await self._fetch_archive(sport, max_pages)
+                results = [self._parse_historical_event(e) for e in events]
+                results = [r for r in results if r is not None]
+                all_results.extend(results)
+                logger.info(f"Pinnacle history: {sport} - {len(results)} games")
+            except Exception as e:
+                errors.append(f"{sport}: {str(e)}")
+                logger.error(f"Error collecting {sport} history: {e}")
+        
+        return CollectorResult(
+            success=len(all_results) > 0,
+            data=all_results,
+            records_count=len(all_results),
+            error="; ".join(errors) if errors else None,
+            metadata={"type": "historical", "sports": sports}
+        )
+    
+    async def _fetch_archive(self, sport_code: str, max_pages: int) -> List[Dict[str, Any]]:
+        """Fetch archive pages for a sport."""
+        sport_id = PINNACLE_SPORT_IDS.get(sport_code)
+        if not sport_id:
+            return []
+        
+        league_filters = PINNACLE_LEAGUE_NAMES.get(sport_code, [])
+        all_events = []
+        
+        await self._ensure_client()
+        
+        for page in range(1, max_pages + 1):
+            try:
+                response = await self.client.get(
+                    f"{self.base_url}/kit/v1/archive",
+                    params={"sport_id": sport_id, "page_num": page},
+                    headers=self._get_headers(),
+                    timeout=30,
+                )
+                
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                events = data.get("events", [])
+                
+                if not events:
+                    break
+                
+                # Filter by league
+                if league_filters:
+                    filtered = [
+                        e for e in events
+                        if any(lf.lower() in e.get("league_name", "").lower() for lf in league_filters)
+                    ]
+                    all_events.extend(filtered)
+                else:
+                    all_events.extend(events)
+                
+                await asyncio.sleep(0.2)  # Rate limit
+                
+            except Exception as e:
+                logger.error(f"Archive page {page} error: {e}")
+                break
+        
+        return all_events
+    
+    def _parse_historical_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse archive event into normalized result."""
+        event_id = event.get("event_id")
+        home_team = event.get("home", "")
+        away_team = event.get("away", "")
+        starts = event.get("starts", "")
+        
+        if not all([event_id, home_team, away_team, starts]):
+            return None
+        
+        # Skip prop bets
+        invalid_patterns = [
+            "(Hits+Runs+Errors)", "(Total Runs)", "(Total Hits)",
+            "Home Runs (", "Away Runs (", "G1 ", "G2 ", "G3 ",
+        ]
+        for pattern in invalid_patterns:
+            if pattern in home_team or pattern in away_team:
+                return None
+        
+        # Get full game result (period number=0)
+        period_results = event.get("period_results", [])
+        full_game = None
+        for pr in period_results:
+            if pr.get("number") == 0 and pr.get("status") == 1:
+                full_game = pr
+                break
+        
+        if not full_game:
+            return None
+        
+        home_score = full_game.get("team_1_score")
+        away_score = full_game.get("team_2_score")
+        
+        if home_score is None or away_score is None:
+            return None
+        
+        return {
+            "external_id": str(event_id),
+            "home_team": home_team.strip(),
+            "away_team": away_team.strip(),
+            "starts": starts,
+            "league_name": event.get("league_name", ""),
+            "home_score": home_score,
+            "away_score": away_score,
+            "winner": "home" if home_score > away_score else ("away" if away_score > home_score else "draw"),
+        }
+    
+    async def save_historical_to_database(
+        self,
+        results: List[Dict[str, Any]],
+        sport_code: str,
+        session: AsyncSession,
+    ) -> tuple:
+        """Save historical results to database."""
+        saved = 0
+        updated = 0
+        
+        # Get or create sport
+        sport_result = await session.execute(
+            select(Sport).where(Sport.code == sport_code)
+        )
+        sport = sport_result.scalar_one_or_none()
+        
+        if not sport:
+            sport = Sport(code=sport_code, name=sport_code, is_active=True)
+            session.add(sport)
+            await session.flush()
+        
+        for result in results:
+            try:
+                home_team = await self._get_or_create_team(session, sport.id, result["home_team"])
+                away_team = await self._get_or_create_team(session, sport.id, result["away_team"])
+                
+                game_date = self._parse_datetime(result["starts"])
+                
+                existing = await session.execute(
+                    select(Game).where(Game.external_id == result["external_id"])
+                )
+                game = existing.scalar_one_or_none()
+                
+                if game:
+                    game.home_score = result["home_score"]
+                    game.away_score = result["away_score"]
+                    game.status = GameStatus.FINAL
+                    updated += 1
+                else:
+                    game = Game(
+                        sport_id=sport.id,
+                        external_id=result["external_id"],
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        scheduled_at=game_date,
+                        home_score=result["home_score"],
+                        away_score=result["away_score"],
+                        status=GameStatus.FINAL,
+                    )
+                    session.add(game)
+                    saved += 1
+                
+                if (saved + updated) % 50 == 0:
+                    await session.commit()
+                    
+            except Exception as e:
+                logger.debug(f"Skip: {e}")
+                continue
+        
+        await session.commit()
+        return saved, updated
+
 
 # Create and register collector instance
 pinnacle_collector = PinnacleCollector()
 collector_manager.register(pinnacle_collector)
+
 

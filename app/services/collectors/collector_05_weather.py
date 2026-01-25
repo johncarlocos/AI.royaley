@@ -597,5 +597,9 @@ async def main():
         )
 
 
+# Create singleton instance for import
+weather_collector = WeatherCollector()
+
+
 if __name__ == "__main__":
     asyncio.run(main())

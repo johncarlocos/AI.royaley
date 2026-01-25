@@ -24,6 +24,8 @@ from datetime import datetime
 from typing import List
 from dataclasses import dataclass, field
 
+from app.services import data
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
@@ -74,7 +76,10 @@ async def import_espn(sports: List[str] = None) -> ImportResult:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
-                        await espn_collector.save_to_database(data.data, session)
+                        if data.data.get("games"):
+                            await espn_collector.save_games_to_database(data.data["games"], session)
+                        if data.data.get("scores"):
+                            await espn_collector.save_scores_to_database(data.data["scores"], session)
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0

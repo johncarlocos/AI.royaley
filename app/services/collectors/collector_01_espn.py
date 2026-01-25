@@ -431,7 +431,7 @@ class ESPNCollector(BaseCollector):
                         external_id=game_data["external_id"],
                         home_team_id=home_team.id,
                         away_team_id=away_team.id,
-                        game_date=datetime.fromisoformat(
+                        scheduled_at=datetime.fromisoformat(
                             game_data["game_date"].replace("Z", "+00:00")
                         ),
                         status=GameStatus(game_data["status"]),
@@ -442,6 +442,7 @@ class ESPNCollector(BaseCollector):
                     
             except Exception as e:
                 logger.error(f"Error saving game: {e}")
+                await session.rollback()  # Reset transaction state
                 continue
         
         await session.commit()
@@ -483,35 +484,58 @@ class ESPNCollector(BaseCollector):
     ) -> Team:
         """Get or create team record."""
         external_id = team_data.get("id")
+        team_name = team_data.get("name")
+        abbreviation = team_data.get("abbreviation")
         
-        result = await session.execute(
-            select(Team).where(
-                Team.sport_id == sport_id,
-                Team.external_id == external_id,
-            )
-        )
-        team = result.scalar_one_or_none()
-        
-        if not team:
-            # Try by abbreviation
+        # First try by name (this is the unique constraint)
+        if team_name:
             result = await session.execute(
                 select(Team).where(
                     Team.sport_id == sport_id,
-                    Team.abbreviation == team_data.get("abbreviation"),
+                    Team.name == team_name,
                 )
             )
             team = result.scalar_one_or_none()
+            if team:
+                # Update external_id if different
+                if external_id and team.external_id != external_id:
+                    team.external_id = external_id
+                return team
         
-        if not team:
-            team = Team(
-                sport_id=sport_id,
-                external_id=external_id or team_data.get("abbreviation"),
-                name=team_data.get("name"),
-                abbreviation=team_data.get("abbreviation"),
-                elo_rating=1500.0,
+        # Try by external_id
+        if external_id:
+            result = await session.execute(
+                select(Team).where(
+                    Team.sport_id == sport_id,
+                    Team.external_id == external_id,
+                )
             )
-            session.add(team)
-            await session.flush()
+            team = result.scalar_one_or_none()
+            if team:
+                return team
+        
+        # Try by abbreviation
+        if abbreviation:
+            result = await session.execute(
+                select(Team).where(
+                    Team.sport_id == sport_id,
+                    Team.abbreviation == abbreviation,
+                )
+            )
+            team = result.scalar_one_or_none()
+            if team:
+                return team
+        
+        # Create new team
+        team = Team(
+            sport_id=sport_id,
+            external_id=external_id or abbreviation,
+            name=team_name,
+            abbreviation=abbreviation,
+            elo_rating=1500.0,
+        )
+        session.add(team)
+        await session.flush()
         
         return team
     

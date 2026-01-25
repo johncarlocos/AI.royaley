@@ -426,14 +426,19 @@ class ESPNCollector(BaseCollector):
                     game.status = GameStatus(game_data["status"])
                 else:
                     # Create new
+                    scheduled_dt = datetime.fromisoformat(
+                        game_data["game_date"].replace("Z", "+00:00")
+                    )
+                    # Convert to naive datetime (remove timezone info)
+                    if scheduled_dt.tzinfo is not None:
+                        scheduled_dt = scheduled_dt.replace(tzinfo=None)
+                    
                     game = Game(
                         sport_id=sport.id,
                         external_id=game_data["external_id"],
                         home_team_id=home_team.id,
                         away_team_id=away_team.id,
-                        scheduled_at=datetime.fromisoformat(
-                            game_data["game_date"].replace("Z", "+00:00")
-                        ),
+                        scheduled_at=scheduled_dt,
                         status=GameStatus(game_data["status"]),
                     )
                     session.add(game)

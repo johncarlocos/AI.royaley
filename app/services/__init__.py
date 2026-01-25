@@ -26,7 +26,7 @@ from app.services.betting.line_movement_analyzer import LineMovementAnalyzer
 # Data Collection Services
 from app.services.collectors.collector_02_odds_api import OddsCollector
 from app.services.collectors.collector_01_espn import ESPNCollector
-from app.services.collectors.tennis_collector import TennisCollector
+from app.services.collectors.collector_04_tennis import TennisCollector
 
 # Enterprise Services
 from app.services.self_healing.self_healing_service import SelfHealingService, self_healing_service

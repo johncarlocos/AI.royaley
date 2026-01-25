@@ -7,7 +7,8 @@ Collects real-time odds from 40+ sportsbooks via TheOddsAPI.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 from uuid import UUID
 
 from sqlalchemy import select
@@ -631,6 +632,192 @@ class OddsCollector(BaseCollector):
         
         params = {"apiKey": self.api_key}
         return await self.get(f"/sports/{api_sport_key}/events", params=params)
+    
+    async def collect_historical(
+        self,
+        sport_code: str = None,
+        days_back: int = 30,
+        markets: List[str] = None,
+    ) -> CollectorResult:
+        """
+        Collect historical odds data from TheOddsAPI.
+        
+        This provides HISTORICAL ODDS for ML training - critical for CLV analysis.
+        Requires paid OddsAPI subscription ($119+/month).
+        
+        Args:
+            sport_code: Specific sport (NFL, NBA, etc.) or None for all
+            days_back: Number of days to fetch (default 30)
+            markets: Markets to fetch (default: spreads, h2h, totals)
+            
+        Returns:
+            CollectorResult with historical odds records
+        """
+        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        markets = markets or ["spreads", "h2h", "totals"]
+        all_odds = []
+        errors = []
+        
+        for sport in sports:
+            api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
+            if not api_sport_key:
+                continue
+                
+            try:
+                odds = await self._fetch_historical_odds(
+                    api_sport_key, sport, days_back, markets
+                )
+                all_odds.extend(odds)
+                logger.info(f"[OddsAPI Historical] {sport}: {len(odds)} odds records")
+            except Exception as e:
+                errors.append(f"{sport}: {str(e)}")
+                logger.error(f"[OddsAPI Historical] Error collecting {sport}: {e}")
+        
+        return CollectorResult(
+            success=len(all_odds) > 0,
+            data=all_odds,
+            records_count=len(all_odds),
+            error="; ".join(errors) if errors else None,
+            metadata={"type": "historical_odds", "sports": sports, "days_back": days_back}
+        )
+    
+    async def _fetch_historical_odds(
+        self,
+        api_sport_key: str,
+        sport_code: str,
+        days_back: int,
+        markets: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Fetch historical odds for a specific sport."""
+        from datetime import datetime, timedelta
+        
+        all_odds = []
+        
+        for day_offset in range(days_back):
+            target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
+            date_str = target_date.strftime("%Y-%m-%dT12:00:00Z")
+            
+            try:
+                params = {
+                    "apiKey": self.api_key,
+                    "regions": "us",
+                    "markets": ",".join(markets),
+                    "oddsFormat": "american",
+                    "date": date_str,
+                }
+                
+                # Historical endpoint
+                endpoint = f"/historical/sports/{api_sport_key}/odds"
+                
+                console.print(f"[OddsAPI Historical] Fetching {sport_code} odds for {target_date.strftime('%Y-%m-%d')}")
+                
+                data = await self.get(endpoint, params=params)
+                
+                if data and isinstance(data, dict):
+                    events = data.get("data", [])
+                    timestamp = data.get("timestamp")
+                    
+                    for event in events:
+                        parsed = self._parse_historical_event(event, sport_code, timestamp)
+                        all_odds.extend(parsed)
+                
+                # Rate limiting - be gentle with historical API
+                await asyncio.sleep(0.5)
+                
+            except Exception as e:
+                logger.warning(f"[OddsAPI Historical] Failed for {target_date.strftime('%Y-%m-%d')}: {e}")
+                continue
+        
+        return all_odds
+    
+    def _parse_historical_event(
+        self, 
+        event: Dict[str, Any], 
+        sport_code: str,
+        snapshot_time: str = None
+    ) -> List[Dict[str, Any]]:
+        """Parse a historical event into odds records."""
+        odds_records = []
+        
+        event_id = event.get("id")
+        home_team = event.get("home_team")
+        away_team = event.get("away_team")
+        commence_time = event.get("commence_time")
+        
+        for bookmaker in event.get("bookmakers", []):
+            book_key = bookmaker.get("key")
+            book_title = bookmaker.get("title")
+            last_update = bookmaker.get("last_update")
+            
+            for market in bookmaker.get("markets", []):
+                market_key = market.get("key")
+                
+                for outcome in market.get("outcomes", []):
+                    record = {
+                        "sport_code": sport_code,
+                        "event_id": event_id,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "snapshot_time": snapshot_time,
+                        "sportsbook": book_key,
+                        "sportsbook_title": book_title,
+                        "market": market_key,
+                        "selection": outcome.get("name"),
+                        "odds": outcome.get("price"),
+                        "point": outcome.get("point"),
+                        "last_update": last_update,
+                        "is_historical": True,
+                    }
+                    odds_records.append(record)
+        
+        return odds_records
+    
+    async def save_historical_to_database(
+        self,
+        odds_data: List[Dict[str, Any]],
+        session,
+    ) -> Tuple[int, int]:
+        """Save historical odds to database."""
+        from app.models.models import Odds, Sportsbook
+        
+        saved = 0
+        updated = 0
+        
+        for record in odds_data:
+            try:
+                # Get or create sportsbook
+                sportsbook = await self._get_or_create_sportsbook(
+                    session,
+                    record["sportsbook"],
+                    record.get("sportsbook_title", record["sportsbook"])
+                )
+                
+                # Create odds record
+                odds = Odds(
+                    sportsbook_id=sportsbook.id,
+                    external_id=f"{record['event_id']}_{record['sportsbook']}_{record['market']}_{record['selection']}",
+                    market_type=record["market"],
+                    selection=record["selection"],
+                    odds_value=float(record["odds"]) if record["odds"] else None,
+                    point=float(record["point"]) if record.get("point") else None,
+                    is_live=False,
+                    recorded_at=datetime.fromisoformat(record["last_update"].replace("Z", "+00:00")).replace(tzinfo=None) if record.get("last_update") else datetime.utcnow(),
+                )
+                session.add(odds)
+                saved += 1
+                
+                # Commit every 100 records
+                if saved % 100 == 0:
+                    await session.commit()
+                    
+            except Exception as e:
+                logger.debug(f"Skipping duplicate/error: {e}")
+                await session.rollback()
+                continue
+        
+        await session.commit()
+        return saved, updated
 
 
 # Create and register collector instance

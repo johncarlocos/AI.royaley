@@ -177,6 +177,70 @@ async def import_pinnacle_history(sports: List[str] = None, pages: int = 50) -> 
     return result
 
 
+async def import_espn_history(sports: List[str] = None, days: int = 365) -> ImportResult:
+    """Import historical games from ESPN."""
+    result = ImportResult(source="espn_history", success=False)
+    try:
+        from app.services.collectors import espn_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        for sport in sports:
+            try:
+                data = await espn_collector.collect_historical(sport_code=sport, days_back=days)
+                if data.success and data.data:
+                    games = data.data.get("games", [])
+                    if games:
+                        await db_manager.initialize()
+                        async with db_manager.session() as session:
+                            saved, updated = await espn_collector.save_historical_to_database(
+                                games, sport, session
+                            )
+                            result.records += saved + updated
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await espn_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> ImportResult:
+    """Import historical odds from OddsAPI (requires paid subscription)."""
+    result = ImportResult(source="odds_api_history", success=False)
+    try:
+        from app.services.collectors import odds_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        for sport in sports:
+            try:
+                data = await odds_collector.collect_historical(sport_code=sport, days_back=days)
+                if data.success and data.data:
+                    await db_manager.initialize()
+                    async with db_manager.session() as session:
+                        saved, updated = await odds_collector.save_historical_to_database(
+                            data.data, session
+                        )
+                        result.records += saved + updated
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await odds_collector.close()
+        except:
+            pass
+    return result
+
+
 async def import_weather(sports: List[str] = None) -> ImportResult:
     """Import weather data for outdoor games."""
     result = ImportResult(source="weather", success=False)
@@ -206,11 +270,13 @@ IMPORT_MAP = {
     "odds_api": import_odds_api,
     "pinnacle": import_pinnacle,
     "pinnacle_history": import_pinnacle_history,
+    "espn_history": import_espn_history,
+    "odds_api_history": import_odds_api_history,
     "weather": import_weather,
 }
 
 CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather"]
-HISTORICAL_SOURCES = ["pinnacle_history"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history"]
 ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 
 
@@ -218,7 +284,7 @@ ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 # MAIN IMPORT RUNNER
 # =============================================================================
 
-async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50):
+async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50, days: int = 30):
     """Run data import for specified sources."""
     console.print(f"\n[bold blue]{'='*60}[/bold blue]")
     console.print(f"[bold]ROYALEY DATA IMPORT[/bold]")
@@ -244,6 +310,10 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
         try:
             if source == "pinnacle_history":
                 result = await func(sports=sports, pages=pages)
+            elif source == "espn_history":
+                result = await func(sports=sports, days=days)
+            elif source == "odds_api_history":
+                result = await func(sports=sports, days=days)
             else:
                 result = await func(sports=sports)
             
@@ -297,11 +367,15 @@ def show_status():
     """Show status of all data collectors."""
     console.print("\n[bold]ROYALEY DATA COLLECTORS[/bold]")
     console.print("=" * 50)
-    console.print("\n[green]✅ IMPLEMENTED:[/green]")
+    console.print("\n[green]✅ CURRENT DATA:[/green]")
     console.print("  • ESPN          - Games/scores (FREE)")
     console.print("  • OddsAPI       - 40+ books ($59/mo)")
     console.print("  • Pinnacle      - CLV lines ($10/mo)")
     console.print("  • Weather       - OpenWeatherMap (FREE)")
+    console.print("\n[green]✅ HISTORICAL DATA:[/green]")
+    console.print("  • pinnacle_history  - Game results (~100/page)")
+    console.print("  • espn_history      - Historical games (FREE)")
+    console.print("  • odds_api_history  - Historical odds ($119/mo)")
     console.print("\n[yellow]⏳ PENDING:[/yellow]")
     console.print("  • nflfastR      - NFL play-by-play")
     console.print("  • Basketball-Ref - NBA stats")
@@ -322,7 +396,8 @@ def main():
     parser.add_argument("--source", "-s", help="Specific source")
     parser.add_argument("--sport", help="Specific sport")
     parser.add_argument("--sports", help="Comma-separated sports")
-    parser.add_argument("--pages", "-p", type=int, default=50, help="History pages")
+    parser.add_argument("--pages", "-p", type=int, default=50, help="Pinnacle history pages (100 events/page)")
+    parser.add_argument("--days", "-d", type=int, default=30, help="Days back for ESPN/OddsAPI history")
     parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval (min)")
     
     args = parser.parse_args()
@@ -352,7 +427,7 @@ def main():
     if args.daemon:
         asyncio.run(daemon_mode(args.interval, sources, sports))
     else:
-        asyncio.run(run_import(sources, sports, args.pages))
+        asyncio.run(run_import(sources, sports, args.pages, args.days))
 
 
 if __name__ == "__main__":

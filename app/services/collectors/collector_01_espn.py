@@ -7,7 +7,8 @@ Collects game schedules, scores, and team information from ESPN public API.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 from uuid import UUID
 
 from sqlalchemy import select
@@ -557,6 +558,177 @@ class ESPNCollector(BaseCollector):
         except Exception as e:
             logger.error(f"Failed to get standings for {sport_code}: {e}")
             return []
+    
+    async def collect_historical(
+        self,
+        sport_code: str = None,
+        days_back: int = 365,
+        batch_size: int = 7,
+    ) -> CollectorResult:
+        """
+        Collect historical game data from ESPN.
+        
+        Fetches past game schedules, scores, and results for ML training.
+        ESPN API allows fetching any past date via the scoreboard endpoint.
+        
+        Args:
+            sport_code: Specific sport (NFL, NBA, etc.) or None for all
+            days_back: Number of days to fetch (default 365)
+            batch_size: Days per batch for progress logging
+            
+        Returns:
+            CollectorResult with historical games
+        """
+        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        all_games = []
+        errors = []
+        
+        for sport in sports:
+            sport_path = ESPN_SPORT_PATHS.get(sport)
+            if not sport_path:
+                continue
+                
+            try:
+                games = await self._fetch_historical_games(sport, sport_path, days_back)
+                all_games.extend(games)
+                logger.info(f"[ESPN Historical] {sport}: {len(games)} games")
+            except Exception as e:
+                errors.append(f"{sport}: {str(e)}")
+                logger.error(f"[ESPN Historical] Error collecting {sport}: {e}")
+        
+        return CollectorResult(
+            success=len(all_games) > 0,
+            data={"games": all_games, "teams": [], "scores": []},
+            records_count=len(all_games),
+            error="; ".join(errors) if errors else None,
+            metadata={"type": "historical_games", "sports": sports, "days_back": days_back}
+        )
+    
+    async def _fetch_historical_games(
+        self,
+        sport_code: str,
+        sport_path: Dict[str, str],
+        days_back: int,
+    ) -> List[Dict[str, Any]]:
+        """Fetch historical games for a specific sport."""
+        all_games = []
+        endpoint = f"/{sport_path['sport']}/{sport_path['league']}/scoreboard"
+        
+        console.print(f"[ESPN Historical] Fetching {sport_code} games for past {days_back} days...")
+        
+        for day_offset in range(1, days_back + 1):
+            target_date = datetime.utcnow() - timedelta(days=day_offset)
+            date_str = target_date.strftime("%Y%m%d")
+            
+            try:
+                data = await self.get(endpoint, params={"dates": date_str})
+                
+                events = data.get("events", [])
+                for event in events:
+                    parsed = self._parse_event(event, sport_code)
+                    if parsed:
+                        all_games.append(parsed)
+                
+                # Progress logging every 30 days
+                if day_offset % 30 == 0:
+                    console.print(f"  [ESPN] {sport_code}: {day_offset}/{days_back} days, {len(all_games)} games found")
+                
+                # Rate limiting
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                logger.debug(f"[ESPN Historical] No data for {date_str}: {e}")
+                continue
+        
+        return all_games
+    
+    async def save_historical_to_database(
+        self,
+        games_data: List[Dict[str, Any]],
+        sport_code: str,
+        session,
+    ) -> Tuple[int, int]:
+        """Save historical games to database."""
+        from app.models.models import Game, Team, Sport, GameStatus
+        from sqlalchemy import select
+        
+        # Get sport
+        result = await session.execute(
+            select(Sport).where(Sport.code == sport_code)
+        )
+        sport = result.scalar_one_or_none()
+        if not sport:
+            logger.error(f"Sport {sport_code} not found in database")
+            return 0, 0
+        
+        saved = 0
+        updated = 0
+        
+        for game_data in games_data:
+            try:
+                # Check if game exists
+                result = await session.execute(
+                    select(Game).where(
+                        Game.external_id == game_data["external_id"],
+                        Game.sport_id == sport.id
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                
+                if existing:
+                    # Update scores if available
+                    if game_data.get("home_score") is not None:
+                        existing.home_score = game_data["home_score"]
+                        existing.away_score = game_data["away_score"]
+                        existing.status = GameStatus(game_data["status"])
+                        updated += 1
+                else:
+                    # Get or create teams
+                    home_team = await self._get_or_create_team(
+                        session, sport.id,
+                        {"id": game_data.get("home_team_id"), 
+                         "name": game_data["home_team"],
+                         "abbreviation": game_data.get("home_abbreviation")}
+                    )
+                    away_team = await self._get_or_create_team(
+                        session, sport.id,
+                        {"id": game_data.get("away_team_id"),
+                         "name": game_data["away_team"],
+                         "abbreviation": game_data.get("away_abbreviation")}
+                    )
+                    
+                    # Parse datetime
+                    scheduled_dt = datetime.fromisoformat(
+                        game_data["game_date"].replace("Z", "+00:00")
+                    )
+                    if scheduled_dt.tzinfo is not None:
+                        scheduled_dt = scheduled_dt.replace(tzinfo=None)
+                    
+                    # Create game
+                    game = Game(
+                        sport_id=sport.id,
+                        external_id=game_data["external_id"],
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        scheduled_at=scheduled_dt,
+                        status=GameStatus(game_data["status"]),
+                        home_score=game_data.get("home_score"),
+                        away_score=game_data.get("away_score"),
+                    )
+                    session.add(game)
+                    saved += 1
+                
+                # Commit every 100 records
+                if (saved + updated) % 100 == 0:
+                    await session.commit()
+                    
+            except Exception as e:
+                logger.debug(f"Skipping game {game_data.get('external_id')}: {e}")
+                await session.rollback()
+                continue
+        
+        await session.commit()
+        return saved, updated
 
 
 # Create and register collector instance

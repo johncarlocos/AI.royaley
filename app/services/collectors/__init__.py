@@ -22,7 +22,7 @@ from app.services.collectors.base_collector import (
 from app.services.collectors.collector_01_espn import ESPNCollector, espn_collector
 from app.services.collectors.collector_02_odds_api import OddsCollector, odds_collector
 from app.services.collectors.collector_03_pinnacle import PinnacleCollector, pinnacle_collector
-from app.services.collectors.collector_04_tennis import TennisCollector, tennis_collector
+from app.services.collectors.collector_04_tennis import TennisCollector
 from app.services.collectors.collector_05_weather import WeatherCollector, weather_collector
 
 __all__ = [

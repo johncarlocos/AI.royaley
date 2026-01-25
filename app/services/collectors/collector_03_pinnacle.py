@@ -846,11 +846,12 @@ class PinnacleCollector(BaseCollector):
         league_filters = PINNACLE_LEAGUE_NAMES.get(sport_code, [])
         all_events = []
         
-        await self._ensure_client()
+        # Get HTTP client from base collector
+        client = await self.get_client()
         
         for page in range(1, max_pages + 1):
             try:
-                response = await self.client.get(
+                response = await client.get(
                     f"{self.base_url}/kit/v1/archive",
                     params={"sport_id": sport_id, "page_num": page},
                     headers=self._get_headers(),

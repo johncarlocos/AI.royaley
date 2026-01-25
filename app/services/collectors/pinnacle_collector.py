@@ -241,162 +241,137 @@ class PinnacleCollector(BaseCollector):
         """Parse a single event into odds records."""
         records = []
         
-        # Extract event info - handle different field names
+        # Extract event info
         event_id = str(event.get("event_id", event.get("id", "")))
-        
-        # Teams can be in different formats
-        home_team = (
-            event.get("home", "") or 
-            event.get("home_team", "") or 
-            event.get("teams", {}).get("home", {}).get("name", "") or
-            event.get("participants", [{}])[0].get("name", "") if event.get("participants") else ""
-        )
-        away_team = (
-            event.get("away", "") or 
-            event.get("away_team", "") or 
-            event.get("teams", {}).get("away", {}).get("name", "") or
-            event.get("participants", [{}])[1].get("name", "") if len(event.get("participants", [])) > 1 else ""
-        )
-        
-        # Start time
-        start_time = event.get("starts", event.get("start_time", event.get("commence_time", "")))
-        
-        # League info for filtering
-        league_name = event.get("league_name", event.get("league", {}).get("name", ""))
+        home_team = event.get("home", "") or event.get("home_team", "")
+        away_team = event.get("away", "") or event.get("away_team", "")
+        start_time = event.get("starts", event.get("start_time", ""))
+        league_name = event.get("league_name", "")
         
         if not event_id or not home_team or not away_team:
+            return records
+        
+        # Skip if no odds available
+        if not event.get("is_have_odds", True):
             return records
         
         # Filter by league if needed
         target_leagues = PINNACLE_LEAGUE_NAMES.get(sport_code, [])
         if target_leagues and league_name:
             if not any(tl.lower() in league_name.lower() for tl in target_leagues):
-                # Skip events from other leagues
                 return records
         
-        # Parse odds from periods
-        periods = event.get("periods", event.get("odds", []))
+        # Get periods data - structure is {"num_0": {...}, "num_1": {...}}
+        periods = event.get("periods", {})
         
-        if isinstance(periods, dict):
-            periods = [periods]
+        # Get full game period (num_0)
+        period_data = periods.get("num_0", {})
+        if not period_data:
+            return records
         
-        for period in periods:
-            # Only get full game odds (period 0 or period_number 0)
-            period_num = period.get("period_number", period.get("number", period.get("period", 0)))
-            if period_num != 0:
-                continue
+        # Parse moneyline - structure: {"home": 2.69, "draw": None, "away": 1.364}
+        money_line = period_data.get("money_line")
+        if money_line and isinstance(money_line, dict):
+            home_ml = money_line.get("home")
+            away_ml = money_line.get("away")
             
-            # Moneyline
-            moneyline = period.get("moneyline", period.get("money_line", {}))
-            if moneyline:
-                home_ml = moneyline.get("home", moneyline.get("homePrice"))
-                away_ml = moneyline.get("away", moneyline.get("awayPrice"))
-                
-                if home_ml is not None or away_ml is not None:
-                    records.append({
-                        "sport_code": sport_code,
-                        "external_id": event_id,
-                        "home_team": home_team,
-                        "away_team": away_team,
-                        "commence_time": start_time,
-                        "league_name": league_name,
-                        "sportsbook_key": "pinnacle",
-                        "sportsbook_name": "Pinnacle",
-                        "bet_type": "moneyline",
-                        "home_odds": self._convert_to_american(home_ml),
-                        "away_odds": self._convert_to_american(away_ml),
-                        "home_line": None,
-                        "away_line": None,
-                        "total": None,
-                        "over_odds": None,
-                        "under_odds": None,
-                        "is_pinnacle": True,
-                        "recorded_at": datetime.utcnow().isoformat(),
-                    })
-            
-            # Spread
-            spread = period.get("spread", period.get("spreads", period.get("handicap", {})))
-            if isinstance(spread, list) and spread:
-                spread = spread[0]
-            
-            if spread:
-                hdp = spread.get("hdp", spread.get("handicap", spread.get("home_spread")))
-                home_price = spread.get("home", spread.get("homePrice"))
-                away_price = spread.get("away", spread.get("awayPrice"))
-                
-                if hdp is not None:
-                    records.append({
-                        "sport_code": sport_code,
-                        "external_id": event_id,
-                        "home_team": home_team,
-                        "away_team": away_team,
-                        "commence_time": start_time,
-                        "league_name": league_name,
-                        "sportsbook_key": "pinnacle",
-                        "sportsbook_name": "Pinnacle",
-                        "bet_type": "spread",
-                        "home_odds": self._convert_to_american(home_price),
-                        "away_odds": self._convert_to_american(away_price),
-                        "home_line": float(hdp) if hdp is not None else None,
-                        "away_line": -float(hdp) if hdp is not None else None,
-                        "total": None,
-                        "over_odds": None,
-                        "under_odds": None,
-                        "is_pinnacle": True,
-                        "recorded_at": datetime.utcnow().isoformat(),
-                    })
-            
-            # Total
-            total = period.get("total", period.get("totals", period.get("over_under", {})))
-            if isinstance(total, list) and total:
-                total = total[0]
-            
-            if total:
-                points = total.get("points", total.get("hdp", total.get("line")))
-                over_price = total.get("over", total.get("overPrice"))
-                under_price = total.get("under", total.get("underPrice"))
-                
-                if points is not None:
-                    records.append({
-                        "sport_code": sport_code,
-                        "external_id": event_id,
-                        "home_team": home_team,
-                        "away_team": away_team,
-                        "commence_time": start_time,
-                        "league_name": league_name,
-                        "sportsbook_key": "pinnacle",
-                        "sportsbook_name": "Pinnacle",
-                        "bet_type": "total",
-                        "home_odds": None,
-                        "away_odds": None,
-                        "home_line": None,
-                        "away_line": None,
-                        "total": float(points) if points is not None else None,
-                        "over_odds": self._convert_to_american(over_price),
-                        "under_odds": self._convert_to_american(under_price),
-                        "is_pinnacle": True,
-                        "recorded_at": datetime.utcnow().isoformat(),
-                    })
+            if home_ml is not None or away_ml is not None:
+                records.append({
+                    "sport_code": sport_code,
+                    "external_id": event_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "commence_time": start_time,
+                    "league_name": league_name,
+                    "sportsbook_key": "pinnacle",
+                    "sportsbook_name": "Pinnacle",
+                    "bet_type": "moneyline",
+                    "home_odds": self._convert_to_american(home_ml),
+                    "away_odds": self._convert_to_american(away_ml),
+                    "home_line": None,
+                    "away_line": None,
+                    "total": None,
+                    "over_odds": None,
+                    "under_odds": None,
+                    "is_pinnacle": True,
+                    "recorded_at": datetime.utcnow().isoformat(),
+                })
         
-        # Also check for direct odds fields (alternative structure)
-        if not records:
-            # Try parsing direct odds fields
-            for bet_type, fields in [
-                ("moneyline", ["moneyline", "ml", "money_line"]),
-                ("spread", ["spread", "spreads", "handicap"]),
-                ("total", ["total", "totals", "over_under"]),
-            ]:
-                for field in fields:
-                    if field in event and event[field]:
-                        odds_data = event[field]
-                        record = self._create_odds_record(
-                            odds_data, bet_type, event_id, 
-                            home_team, away_team, start_time, 
-                            league_name, sport_code
-                        )
-                        if record:
-                            records.append(record)
-                        break
+        # Parse spreads - structure: {"7.5": {"hdp": 7.5, "home": 1.515, "away": 2.26, "alt_line_id": 1}, ...}
+        spreads = period_data.get("spreads")
+        if spreads and isinstance(spreads, dict):
+            # Find main line (alt_line_id is None) or use first line
+            main_spread = None
+            for key, spread_data in spreads.items():
+                if isinstance(spread_data, dict) and spread_data.get("alt_line_id") is None:
+                    main_spread = spread_data
+                    break
+            
+            # If no main line found, use first spread
+            if not main_spread and spreads:
+                first_key = list(spreads.keys())[0]
+                main_spread = spreads[first_key]
+            
+            if main_spread and isinstance(main_spread, dict) and main_spread.get("hdp") is not None:
+                hdp = float(main_spread.get("hdp", 0))
+                records.append({
+                    "sport_code": sport_code,
+                    "external_id": event_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "commence_time": start_time,
+                    "league_name": league_name,
+                    "sportsbook_key": "pinnacle",
+                    "sportsbook_name": "Pinnacle",
+                    "bet_type": "spread",
+                    "home_odds": self._convert_to_american(main_spread.get("home")),
+                    "away_odds": self._convert_to_american(main_spread.get("away")),
+                    "home_line": hdp,
+                    "away_line": -hdp,
+                    "total": None,
+                    "over_odds": None,
+                    "under_odds": None,
+                    "is_pinnacle": True,
+                    "recorded_at": datetime.utcnow().isoformat(),
+                })
+        
+        # Parse totals - structure: {"187.5": {"points": 187.5, "over": 1.645, "under": 2.06, "alt_line_id": 1}, ...}
+        totals = period_data.get("totals")
+        if totals and isinstance(totals, dict):
+            # Find main line (alt_line_id is None) or use first line
+            main_total = None
+            for key, total_data in totals.items():
+                if isinstance(total_data, dict) and total_data.get("alt_line_id") is None:
+                    main_total = total_data
+                    break
+            
+            # If no main line found, use first total
+            if not main_total and totals:
+                first_key = list(totals.keys())[0]
+                main_total = totals[first_key]
+            
+            if main_total and isinstance(main_total, dict) and main_total.get("points") is not None:
+                points = float(main_total.get("points", 0))
+                records.append({
+                    "sport_code": sport_code,
+                    "external_id": event_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "commence_time": start_time,
+                    "league_name": league_name,
+                    "sportsbook_key": "pinnacle",
+                    "sportsbook_name": "Pinnacle",
+                    "bet_type": "total",
+                    "home_odds": None,
+                    "away_odds": None,
+                    "home_line": None,
+                    "away_line": None,
+                    "total": points,
+                    "over_odds": self._convert_to_american(main_total.get("over")),
+                    "under_odds": self._convert_to_american(main_total.get("under")),
+                    "is_pinnacle": True,
+                    "recorded_at": datetime.utcnow().isoformat(),
+                })
         
         return records
     

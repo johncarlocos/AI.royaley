@@ -1004,22 +1004,8 @@ class OddsCollector(BaseCollector):
             home_normalized = self._normalize_team_name(home_team_name)
             away_normalized = self._normalize_team_name(away_team_name)
             
-            # Find matching game using ILIKE for flexible matching
-            result = await session.execute(
-                select(Game.id)
-                .join(Team, Game.home_team_id == Team.id, isouter=True)
-                .join(Team, Game.away_team_id == Team.id, isouter=True)
-                .where(
-                    and_(
-                        Game.sport_id == sport_id,
-                        Game.scheduled_at >= time_start,
-                        Game.scheduled_at <= time_end,
-                    )
-                )
-            )
-            
-            # Get all games in the time window
-            games_in_window = await session.execute(
+            # Get all games in the time window - use .all() to properly fetch results
+            games_result = await session.execute(
                 select(Game.id, Game.home_team_id, Game.away_team_id)
                 .where(
                     and_(
@@ -1029,6 +1015,7 @@ class OddsCollector(BaseCollector):
                     )
                 )
             )
+            games_in_window = games_result.all()
             
             for game_row in games_in_window:
                 game_id, home_team_id, away_team_id = game_row

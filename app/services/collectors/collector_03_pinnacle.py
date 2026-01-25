@@ -645,7 +645,7 @@ class PinnacleCollector(BaseCollector):
         result = await session.execute(
             select(Game).where(Game.external_id == external_id)
         )
-        game = result.scalar_one_or_none()
+        game = result.scalars().first()  # Use first() to handle duplicates gracefully
         
         if game:
             return game
@@ -701,9 +701,9 @@ class PinnacleCollector(BaseCollector):
                     Game.scheduled_at >= date_start,
                     Game.scheduled_at <= date_end,
                 )
-            )
+            ).order_by(Game.created_at.desc())  # Get most recent if duplicates exist
         )
-        game = result.scalar_one_or_none()
+        game = result.scalars().first()  # Use first() to handle duplicates gracefully
         
         if game:
             if not game.external_id:
@@ -963,7 +963,7 @@ class PinnacleCollector(BaseCollector):
                 existing = await session.execute(
                     select(Game).where(Game.external_id == result["external_id"])
                 )
-                game = existing.scalar_one_or_none()
+                game = existing.scalars().first()  # Use first() to handle duplicates gracefully
                 
                 if game:
                     game.home_score = result["home_score"]
@@ -998,5 +998,3 @@ class PinnacleCollector(BaseCollector):
 # Create and register collector instance
 pinnacle_collector = PinnacleCollector()
 collector_manager.register(pinnacle_collector)
-
-

@@ -153,23 +153,23 @@ async def test_raw_api_call():
     from app.core.config import settings
     
     console.print("\n[cyan]🔧 Testing raw API endpoints...[/cyan]")
+    console.print(f"[dim]API Key: {settings.RAPIDAPI_KEY[:20]}...[/dim]")
     
     headers = {
         "X-RapidAPI-Key": settings.RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "pinnacle-odds-api.p.rapidapi.com",
+        "X-RapidAPI-Host": "pinnacle-odds.p.rapidapi.com",
     }
     
-    # Try different endpoints
+    # Correct endpoints from documentation
     endpoints = [
-        "/sports",
-        "/v1/sports",
         "/kit/v1/sports",
-        "/odds",
-        "/v1/odds?sport_id=4",
-        "/kit/v1/markets?sport_id=4&is_have_odds=true",
+        "/kit/v1/betting-status",
+        "/kit/v1/leagues?sport_id=4",  # Basketball
+        "/kit/v1/markets?sport_id=4&is_have_odds=true&event_type=prematch",  # NBA odds
+        "/kit/v1/markets?sport_id=15&is_have_odds=true&event_type=prematch",  # NFL odds
     ]
     
-    async with httpx.AsyncClient(base_url="https://pinnacle-odds-api.p.rapidapi.com", timeout=30) as client:
+    async with httpx.AsyncClient(base_url="https://pinnacle-odds.p.rapidapi.com", timeout=30) as client:
         for endpoint in endpoints:
             try:
                 console.print(f"\n[dim]Testing: {endpoint}[/dim]")
@@ -183,10 +183,14 @@ async def test_raw_api_call():
                     if isinstance(data, list):
                         console.print(f"[green]  Response: List with {len(data)} items[/green]")
                         if data:
-                            console.print(f"[dim]  Sample: {str(data[0])[:200]}...[/dim]")
+                            console.print(f"[dim]  Sample: {str(data[0])[:300]}...[/dim]")
                     elif isinstance(data, dict):
-                        console.print(f"[green]  Response: Dict with keys: {list(data.keys())[:5]}[/green]")
-                    break  # Found working endpoint
+                        console.print(f"[green]  Response: Dict with keys: {list(data.keys())[:10]}[/green]")
+                        # Show events count if present
+                        if "events" in data:
+                            console.print(f"[green]  Events: {len(data['events'])} events found[/green]")
+                            if data["events"]:
+                                console.print(f"[dim]  First event: {str(data['events'][0])[:300]}...[/dim]")
                 else:
                     console.print(f"[dim]  Response: {response.text[:200]}[/dim]")
                     

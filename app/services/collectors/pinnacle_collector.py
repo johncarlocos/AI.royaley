@@ -255,6 +255,18 @@ class PinnacleCollector(BaseCollector):
         if not event.get("is_have_odds", True):
             return records
         
+        # Skip prop bets and specials (not real games)
+        invalid_patterns = [
+            "(Hits+Runs+Errors)", "(Total Runs)", "(Total Hits)",
+            "Home Runs (", "Away Runs (", 
+            "G1 ", "G2 ", "G3 ",  # Doubleheader markers
+            " Runs (", " Hits (",
+            "Over/Under", "Total Points",
+        ]
+        for pattern in invalid_patterns:
+            if pattern in home_team or pattern in away_team:
+                return records
+        
         # Filter by league if needed
         target_leagues = PINNACLE_LEAGUE_NAMES.get(sport_code, [])
         if target_leagues and league_name:
@@ -719,6 +731,9 @@ class PinnacleCollector(BaseCollector):
         team_name: str,
     ) -> Team:
         """Get or create team record."""
+        # Clean team name
+        team_name = team_name.strip()
+        
         result = await session.execute(
             select(Team).where(
                 and_(
@@ -730,10 +745,14 @@ class PinnacleCollector(BaseCollector):
         team = result.scalar_one_or_none()
         
         if not team:
+            # Truncate external_id to 50 chars max (database limit)
+            raw_external_id = f"pinnacle_{team_name.lower().replace(' ', '_')}"
+            external_id = raw_external_id[:50]
+            
             abbreviation = team_name[:3].upper() if len(team_name) >= 3 else team_name.upper()
             team = Team(
                 sport_id=sport_id,
-                external_id=f"pinnacle_{team_name.lower().replace(' ', '_')}",
+                external_id=external_id,
                 name=team_name,
                 abbreviation=abbreviation,
                 is_active=True,

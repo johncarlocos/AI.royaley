@@ -206,6 +206,7 @@ class PinnacleHistoryImporter:
         
         saved = 0
         updated = 0
+        skipped = 0
         
         await db_manager.initialize()
         
@@ -239,12 +240,34 @@ class PinnacleHistoryImporter:
             
             for result in results:
                 try:
+                    # Skip prop bets and invalid events
+                    home_name = result["home_team"]
+                    away_name = result["away_team"]
+                    
+                    # Check for invalid patterns
+                    invalid_patterns = [
+                        "(Hits+Runs+Errors)", "(Total Runs)", "(Total Hits)",
+                        "Home Runs (", "Away Runs (", 
+                        "G1 ", "G2 ", "G3 ",  # Doubleheader markers
+                        " Runs (", " Hits (",
+                    ]
+                    
+                    skip = False
+                    for pattern in invalid_patterns:
+                        if pattern in home_name or pattern in away_name:
+                            skip = True
+                            break
+                    
+                    if skip:
+                        skipped += 1
+                        continue
+                    
                     # Get or create teams
                     home_team = await self._get_or_create_team(
-                        session, sport.id, result["home_team"]
+                        session, sport.id, home_name
                     )
                     away_team = await self._get_or_create_team(
-                        session, sport.id, result["away_team"]
+                        session, sport.id, away_name
                     )
                     
                     # Parse date
@@ -281,14 +304,28 @@ class PinnacleHistoryImporter:
                         session.add(game)
                         saved += 1
                     
-                    if (saved + updated) % 100 == 0:
-                        await session.flush()
+                    # Commit every 50 records to avoid large transactions
+                    if (saved + updated) % 50 == 0:
+                        await session.commit()
                         
+                except ValueError as e:
+                    # Expected for prop bets
+                    skipped += 1
+                    continue
                 except Exception as e:
-                    console.print(f"[dim]Error saving {result['home_team']} vs {result['away_team']}: {e}[/dim]")
+                    console.print(f"[dim]Error saving {result.get('home_team', '?')} vs {result.get('away_team', '?')}: {e}[/dim]")
+                    await session.rollback()
                     continue
             
-            await session.commit()
+            # Final commit
+            try:
+                await session.commit()
+            except Exception as e:
+                console.print(f"[red]Final commit error: {e}[/red]")
+                await session.rollback()
+        
+        if skipped > 0:
+            console.print(f"[dim]Skipped {skipped} prop bets/specials[/dim]")
         
         return saved, updated
     
@@ -296,6 +333,21 @@ class PinnacleHistoryImporter:
         """Get or create team record."""
         from app.models import Team
         from sqlalchemy import select, and_
+        
+        # Skip invalid team names (prop bets, specials, etc.)
+        invalid_patterns = [
+            "(Hits+Runs+Errors)",
+            "(Total Runs)",
+            "Home Runs (",
+            "Away Runs (",
+            "G1 ", "G2 ", "G3 ",  # Doubleheader game markers
+        ]
+        for pattern in invalid_patterns:
+            if pattern in team_name:
+                raise ValueError(f"Invalid team name (prop bet): {team_name}")
+        
+        # Clean team name
+        team_name = team_name.strip()
         
         result = await session.execute(
             select(Team).where(
@@ -308,10 +360,14 @@ class PinnacleHistoryImporter:
         team = result.scalar_one_or_none()
         
         if not team:
+            # Create external_id - truncate to 50 chars max
+            raw_external_id = f"pinnacle_{team_name.lower().replace(' ', '_')}"
+            external_id = raw_external_id[:50]
+            
             abbreviation = team_name[:3].upper() if len(team_name) >= 3 else team_name.upper()
             team = Team(
                 sport_id=sport_id,
-                external_id=f"pinnacle_{team_name.lower().replace(' ', '_')}",
+                external_id=external_id,
                 name=team_name,
                 abbreviation=abbreviation,
                 is_active=True,

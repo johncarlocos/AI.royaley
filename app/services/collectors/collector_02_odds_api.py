@@ -778,33 +778,170 @@ class OddsCollector(BaseCollector):
         odds_data: List[Dict[str, Any]],
         session,
     ) -> Tuple[int, int]:
-        """Save historical odds to database."""
-        from app.models.models import Odds, Sportsbook
+        """
+        Save historical odds to database.
+        
+        The Odds table requires:
+        - game_id (FK to games)
+        - bet_type (spread, moneyline, total)
+        - home_line/away_line, home_odds/away_odds, total/over_odds/under_odds
+        
+        We need to:
+        1. Group raw data by event+sportsbook+market
+        2. Find matching game by team names and time
+        3. Create properly structured Odds records
+        """
+        from app.models.models import Odds, Sportsbook, Game, Team, Sport
+        from sqlalchemy import and_, func
+        from collections import defaultdict
         
         saved = 0
         updated = 0
+        skipped = 0
+        
+        # Step 1: Group odds by event_id + sportsbook + market
+        # This combines home/away/over/under into single records
+        grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
         
         for record in odds_data:
+            event_id = record.get("event_id")
+            sportsbook_key = record.get("sportsbook")
+            market = record.get("market")  # h2h, spreads, totals
+            selection = record.get("selection")  # team name or Over/Under
+            home_team = record.get("home_team")
+            away_team = record.get("away_team")
+            
+            # Store metadata on the group
+            key = (event_id, sportsbook_key, market)
+            grouped[key]["meta"] = {
+                "sport_code": record.get("sport_code"),
+                "home_team": home_team,
+                "away_team": away_team,
+                "commence_time": record.get("commence_time"),
+                "sportsbook": sportsbook_key,
+                "sportsbook_title": record.get("sportsbook_title"),
+                "last_update": record.get("last_update"),
+                "market": market,
+            }
+            
+            # Determine selection type
+            if selection == home_team:
+                grouped[key]["home"] = {
+                    "odds": record.get("odds"),
+                    "point": record.get("point"),
+                }
+            elif selection == away_team:
+                grouped[key]["away"] = {
+                    "odds": record.get("odds"),
+                    "point": record.get("point"),
+                }
+            elif selection and selection.lower() == "over":
+                grouped[key]["over"] = {
+                    "odds": record.get("odds"),
+                    "point": record.get("point"),
+                }
+            elif selection and selection.lower() == "under":
+                grouped[key]["under"] = {
+                    "odds": record.get("odds"),
+                    "point": record.get("point"),
+                }
+        
+        # Step 2: Process each grouped record
+        # Cache for game lookups
+        game_cache = {}
+        sportsbook_cache = {}
+        
+        for key, data in grouped.items():
             try:
-                # Get or create sportsbook
-                sportsbook = await self._get_or_create_sportsbook(
-                    session,
-                    record["sportsbook"],
-                    record.get("sportsbook_title", record["sportsbook"])
-                )
+                meta = data.get("meta", {})
+                if not meta:
+                    skipped += 1
+                    continue
                 
-                # Create odds record
-                odds = Odds(
-                    sportsbook_id=sportsbook.id,
-                    external_id=f"{record['event_id']}_{record['sportsbook']}_{record['market']}_{record['selection']}",
-                    market_type=record["market"],
-                    selection=record["selection"],
-                    odds_value=float(record["odds"]) if record["odds"] else None,
-                    point=float(record["point"]) if record.get("point") else None,
-                    is_live=False,
-                    recorded_at=datetime.fromisoformat(record["last_update"].replace("Z", "+00:00")).replace(tzinfo=None) if record.get("last_update") else datetime.utcnow(),
-                )
-                session.add(odds)
+                home_team_name = meta.get("home_team")
+                away_team_name = meta.get("away_team")
+                sport_code = meta.get("sport_code")
+                commence_time_str = meta.get("commence_time")
+                sportsbook_key = meta.get("sportsbook")
+                market = meta.get("market")
+                
+                if not all([home_team_name, away_team_name, sport_code]):
+                    skipped += 1
+                    continue
+                
+                # Find game by teams and approximate time
+                cache_key = f"{sport_code}:{home_team_name}:{away_team_name}:{commence_time_str}"
+                
+                if cache_key in game_cache:
+                    game_id = game_cache[cache_key]
+                else:
+                    game_id = await self._find_game_id(
+                        session, sport_code, home_team_name, away_team_name, commence_time_str
+                    )
+                    game_cache[cache_key] = game_id
+                
+                if not game_id:
+                    skipped += 1
+                    continue
+                
+                # Get or create sportsbook
+                if sportsbook_key in sportsbook_cache:
+                    sportsbook_id = sportsbook_cache[sportsbook_key]
+                else:
+                    sportsbook = await self._get_or_create_sportsbook(
+                        session, sportsbook_key, meta.get("sportsbook_title", sportsbook_key)
+                    )
+                    sportsbook_id = sportsbook.id
+                    sportsbook_cache[sportsbook_key] = sportsbook_id
+                
+                # Map market to bet_type
+                bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
+                bet_type = bet_type_map.get(market, market)
+                
+                # Parse recorded_at timestamp
+                last_update = meta.get("last_update")
+                if last_update:
+                    try:
+                        recorded_at = datetime.fromisoformat(last_update.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except:
+                        recorded_at = datetime.utcnow()
+                else:
+                    recorded_at = datetime.utcnow()
+                
+                # Build Odds record based on bet_type
+                odds_kwargs = {
+                    "game_id": game_id,
+                    "sportsbook_id": sportsbook_id,
+                    "sportsbook_key": sportsbook_key,
+                    "bet_type": bet_type,
+                    "is_opening": False,
+                    "recorded_at": recorded_at,
+                }
+                
+                if bet_type == "moneyline":
+                    home_data = data.get("home", {})
+                    away_data = data.get("away", {})
+                    odds_kwargs["home_odds"] = int(home_data.get("odds")) if home_data.get("odds") else None
+                    odds_kwargs["away_odds"] = int(away_data.get("odds")) if away_data.get("odds") else None
+                    
+                elif bet_type == "spread":
+                    home_data = data.get("home", {})
+                    away_data = data.get("away", {})
+                    odds_kwargs["home_line"] = float(home_data.get("point")) if home_data.get("point") else None
+                    odds_kwargs["away_line"] = float(away_data.get("point")) if away_data.get("point") else None
+                    odds_kwargs["home_odds"] = int(home_data.get("odds")) if home_data.get("odds") else None
+                    odds_kwargs["away_odds"] = int(away_data.get("odds")) if away_data.get("odds") else None
+                    
+                elif bet_type == "total":
+                    over_data = data.get("over", {})
+                    under_data = data.get("under", {})
+                    odds_kwargs["total"] = float(over_data.get("point")) if over_data.get("point") else None
+                    odds_kwargs["over_odds"] = int(over_data.get("odds")) if over_data.get("odds") else None
+                    odds_kwargs["under_odds"] = int(under_data.get("odds")) if under_data.get("odds") else None
+                
+                # Create and add the odds record
+                odds_record = Odds(**odds_kwargs)
+                session.add(odds_record)
                 saved += 1
                 
                 # Commit every 100 records
@@ -812,12 +949,140 @@ class OddsCollector(BaseCollector):
                     await session.commit()
                     
             except Exception as e:
-                logger.debug(f"Skipping duplicate/error: {e}")
+                logger.debug(f"Skipping record due to error: {e}")
                 await session.rollback()
+                skipped += 1
                 continue
         
-        await session.commit()
+        # Final commit
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.error(f"Final commit error: {e}")
+            await session.rollback()
+        
+        logger.info(f"[OddsAPI Historical] Saved: {saved}, Skipped: {skipped}")
         return saved, updated
+    
+    async def _find_game_id(
+        self,
+        session,
+        sport_code: str,
+        home_team_name: str,
+        away_team_name: str,
+        commence_time_str: str,
+    ) -> Optional[UUID]:
+        """
+        Find a game by sport, teams, and approximate time.
+        
+        Uses flexible team name matching since API names may differ from DB names.
+        """
+        from app.models.models import Game, Team, Sport
+        from sqlalchemy import and_, or_, func
+        from datetime import timedelta
+        
+        try:
+            # Parse commence time
+            if commence_time_str:
+                commence_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            else:
+                return None
+            
+            # Time window: +/- 24 hours to account for timezone differences
+            time_start = commence_time - timedelta(hours=24)
+            time_end = commence_time + timedelta(hours=24)
+            
+            # Find sport
+            sport_result = await session.execute(
+                select(Sport.id).where(Sport.code == sport_code)
+            )
+            sport_id = sport_result.scalar_one_or_none()
+            if not sport_id:
+                return None
+            
+            # Normalize team names for matching
+            home_normalized = self._normalize_team_name(home_team_name)
+            away_normalized = self._normalize_team_name(away_team_name)
+            
+            # Find matching game using ILIKE for flexible matching
+            result = await session.execute(
+                select(Game.id)
+                .join(Team, Game.home_team_id == Team.id, isouter=True)
+                .join(Team, Game.away_team_id == Team.id, isouter=True)
+                .where(
+                    and_(
+                        Game.sport_id == sport_id,
+                        Game.scheduled_at >= time_start,
+                        Game.scheduled_at <= time_end,
+                    )
+                )
+            )
+            
+            # Get all games in the time window
+            games_in_window = await session.execute(
+                select(Game.id, Game.home_team_id, Game.away_team_id)
+                .where(
+                    and_(
+                        Game.sport_id == sport_id,
+                        Game.scheduled_at >= time_start,
+                        Game.scheduled_at <= time_end,
+                    )
+                )
+            )
+            
+            for game_row in games_in_window:
+                game_id, home_team_id, away_team_id = game_row
+                
+                # Get team names
+                home_team_result = await session.execute(
+                    select(Team.name).where(Team.id == home_team_id)
+                )
+                db_home_name = home_team_result.scalar_one_or_none()
+                
+                away_team_result = await session.execute(
+                    select(Team.name).where(Team.id == away_team_id)
+                )
+                db_away_name = away_team_result.scalar_one_or_none()
+                
+                if db_home_name and db_away_name:
+                    db_home_normalized = self._normalize_team_name(db_home_name)
+                    db_away_normalized = self._normalize_team_name(db_away_name)
+                    
+                    # Match if both teams match (allowing partial matches)
+                    if (self._teams_match(home_normalized, db_home_normalized) and
+                        self._teams_match(away_normalized, db_away_normalized)):
+                        return game_id
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error finding game: {e}")
+            return None
+    
+    def _normalize_team_name(self, name: str) -> str:
+        """Normalize team name for matching."""
+        if not name:
+            return ""
+        # Remove common suffixes, lowercase, strip whitespace
+        normalized = name.lower().strip()
+        # Remove "City" suffix for matching (e.g., "Kansas City Chiefs" -> "chiefs")
+        words = normalized.split()
+        if len(words) > 1:
+            # Return just the team name (last word typically)
+            return words[-1]
+        return normalized
+    
+    def _teams_match(self, name1: str, name2: str) -> bool:
+        """Check if two team names match (allowing partial matches)."""
+        if not name1 or not name2:
+            return False
+        # Exact match
+        if name1 == name2:
+            return True
+        # One contains the other
+        if name1 in name2 or name2 in name1:
+            return True
+        return False
 
 
 # Create and register collector instance

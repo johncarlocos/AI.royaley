@@ -627,6 +627,13 @@ class ESPNCollector(BaseCollector):
                 for event in events:
                     parsed = self._parse_event(event, sport_code)
                     if parsed:
+                        # Also parse scores for historical data
+                        score_data = self._parse_score(event, sport_code)
+                        if score_data:
+                            parsed["home_score"] = score_data.get("home_score")
+                            parsed["away_score"] = score_data.get("away_score")
+                            # Update status from score data (more accurate for completed games)
+                            parsed["status"] = score_data.get("status", parsed["status"])
                         all_games.append(parsed)
                 
                 # Progress logging every 30 days
@@ -683,18 +690,44 @@ class ESPNCollector(BaseCollector):
                         existing.status = GameStatus(game_data["status"])
                         updated += 1
                 else:
+                    # Extract team data - handle both nested dict and flat formats
+                    home_team_data = game_data.get("home_team", {})
+                    away_team_data = game_data.get("away_team", {})
+                    
+                    # Handle nested format from _parse_event
+                    if isinstance(home_team_data, dict):
+                        home_team_info = {
+                            "id": home_team_data.get("id"),
+                            "name": home_team_data.get("name"),
+                            "abbreviation": home_team_data.get("abbreviation")
+                        }
+                    else:
+                        # Handle flat format
+                        home_team_info = {
+                            "id": game_data.get("home_team_id"),
+                            "name": home_team_data,
+                            "abbreviation": game_data.get("home_abbreviation")
+                        }
+                    
+                    if isinstance(away_team_data, dict):
+                        away_team_info = {
+                            "id": away_team_data.get("id"),
+                            "name": away_team_data.get("name"),
+                            "abbreviation": away_team_data.get("abbreviation")
+                        }
+                    else:
+                        away_team_info = {
+                            "id": game_data.get("away_team_id"),
+                            "name": away_team_data,
+                            "abbreviation": game_data.get("away_abbreviation")
+                        }
+                    
                     # Get or create teams
                     home_team = await self._get_or_create_team(
-                        session, sport.id,
-                        {"id": game_data.get("home_team_id"), 
-                         "name": game_data["home_team"],
-                         "abbreviation": game_data.get("home_abbreviation")}
+                        session, sport.id, home_team_info
                     )
                     away_team = await self._get_or_create_team(
-                        session, sport.id,
-                        {"id": game_data.get("away_team_id"),
-                         "name": game_data["away_team"],
-                         "abbreviation": game_data.get("away_abbreviation")}
+                        session, sport.id, away_team_info
                     )
                     
                     # Parse datetime

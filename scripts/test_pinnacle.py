@@ -161,12 +161,14 @@ async def test_raw_api_call():
     }
     
     # Correct endpoints from documentation
+    # Sport IDs: 3=Basketball, 4=Hockey, 7=American Football, 9=Baseball, 2=Tennis
     endpoints = [
         "/kit/v1/sports",
         "/kit/v1/betting-status",
-        "/kit/v1/leagues?sport_id=4",  # Basketball
-        "/kit/v1/markets?sport_id=4&is_have_odds=true&event_type=prematch",  # NBA odds
-        "/kit/v1/markets?sport_id=15&is_have_odds=true&event_type=prematch",  # NFL odds
+        "/kit/v1/leagues?sport_id=3",  # Basketball leagues
+        "/kit/v1/markets?sport_id=3&is_have_odds=true&event_type=prematch",  # Basketball odds
+        "/kit/v1/markets?sport_id=7&is_have_odds=true&event_type=prematch",  # American Football odds
+        "/kit/v1/markets?sport_id=4&is_have_odds=true&event_type=prematch",  # Hockey odds
     ]
     
     async with httpx.AsyncClient(base_url="https://pinnacle-odds.p.rapidapi.com", timeout=30) as client:

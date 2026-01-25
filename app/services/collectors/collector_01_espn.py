@@ -435,7 +435,6 @@ class ESPNCollector(BaseCollector):
                             game_data["game_date"].replace("Z", "+00:00")
                         ),
                         status=GameStatus(game_data["status"]),
-                        broadcast=game_data.get("broadcast"),
                     )
                     session.add(game)
                     saved_count += 1

@@ -100,6 +100,25 @@ class Settings(BaseSettings):
     ODDS_API_RATE_LIMIT: int = 500
     ESPN_API_BASE_URL: str = "https://site.api.espn.com/apis/site/v2"
     
+    # RapidAPI (Pinnacle Odds, etc.)
+    RAPIDAPI_KEY: str = ""
+    PINNACLE_API_HOST: str = "pinnacle-odds-api.p.rapidapi.com"
+    
+    # Weather API
+    WEATHER_API_KEY: str = ""
+    WEATHER_API_BASE_URL: str = "https://api.openweathermap.org/data/2.5"
+    
+    # TheSportsDB API
+    SPORTSDB_API_KEY: str = ""
+    SPORTSDB_BASE_URL: str = "https://www.thesportsdb.com/api/v1/json"
+    
+    # Google Maps API (for travel/distance)
+    GOOGLE_MAPS_API_KEY: str = ""
+    
+    # BallDontLie API
+    BALLDONTLIE_API_KEY: str = ""
+    BALLDONTLIE_BASE_URL: str = "https://api.balldontlie.io/v1"
+    
     # ML Configuration
     H2O_MAX_MEM_SIZE: str = "32g"
     H2O_MAX_MODELS: int = 50

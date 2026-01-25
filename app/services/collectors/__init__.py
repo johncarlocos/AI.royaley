@@ -13,6 +13,7 @@ from app.services.collectors.base_collector import (
 )
 from app.services.collectors.odds_collector import OddsCollector, odds_collector
 from app.services.collectors.espn_collector import ESPNCollector, espn_collector
+from app.services.collectors.pinnacle_collector import PinnacleCollector, pinnacle_collector
 
 __all__ = [
     "BaseCollector",
@@ -25,4 +26,6 @@ __all__ = [
     "odds_collector",
     "ESPNCollector",
     "espn_collector",
+    "PinnacleCollector",
+    "pinnacle_collector",
 ]

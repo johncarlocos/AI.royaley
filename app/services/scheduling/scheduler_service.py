@@ -296,7 +296,7 @@ class SchedulerService:
     async def _collect_odds_job(self):
         """Collect odds from TheOddsAPI and save to database."""
         try:
-            from app.services.collectors.odds_collector import odds_collector
+            from app.services.collectors.collector_02_odds_api import odds_collector
             from app.core.database import db_manager
             from app.core.cache import cache_manager
             

@@ -127,7 +127,7 @@ async def preview_odds(
             detail="Admin access required"
         )
     
-    from app.services.collectors.odds_collector import odds_collector
+    from app.services.collectors.collector_02_odds_api import odds_collector
     
     try:
         # Get raw API response
@@ -298,7 +298,7 @@ async def refresh_odds(
             detail="Admin access required"
         )
     
-    from app.services.collectors.odds_collector import odds_collector
+    from app.services.collectors.collector_02_odds_api import odds_collector
     
     try:
         logger.info(f"Starting odds refresh for sport: {sport or 'all'}")
@@ -395,7 +395,7 @@ async def get_odds_api_status(
             detail="Admin access required"
         )
     
-    from app.services.collectors.odds_collector import odds_collector
+    from app.services.collectors.collector_02_odds_api import odds_collector
     
     status = await odds_collector.get_api_status()
     

@@ -568,7 +568,7 @@ async def refresh_games(
             detail="Admin access required"
         )
     
-    from app.services.collectors.espn_collector import espn_collector
+    from app.services.collectors.collector_01_espn import espn_collector
     
     try:
         if sport:

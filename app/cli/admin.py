@@ -512,7 +512,7 @@ def collect_odds(sport: str):
     
     async def run():
         try:
-            from app.services.collectors.odds_collector import OddsCollector
+            from app.services.collectors.collector_02_odds_api import OddsCollector
             collector = OddsCollector()
             await collector.collect_odds(sport.upper())
             console.print(f"[green]✓[/green] Odds collected for {sport}")
@@ -530,7 +530,7 @@ def collect_games(sport: str):
     
     async def run():
         try:
-            from app.services.collectors.espn_collector import ESPNCollector
+            from app.services.collectors.collector_01_espn import ESPNCollector
             collector = ESPNCollector()
             await collector.collect_games(sport.upper())
             console.print(f"[green]✓[/green] Games collected for {sport}")

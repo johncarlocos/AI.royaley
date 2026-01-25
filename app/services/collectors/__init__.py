@@ -7,7 +7,7 @@ IMPLEMENTED COLLECTORS:
     collector_01_espn.py      - ESPN (Injuries, lineups) - FREE
     collector_02_odds_api.py  - TheOddsAPI (40+ books) - $59/mo
     collector_03_pinnacle.py  - Pinnacle (CLV benchmark) - $10/mo
-    collector_04_tennis.py    - Tennis stats
+    collector_04_tennis.py    - Tennis stats (class only, no singleton)
     collector_05_weather.py   - OpenWeatherMap - FREE
 """
 
@@ -39,7 +39,6 @@ __all__ = [
     "PinnacleCollector",
     "pinnacle_collector",
     "TennisCollector",
-    "tennis_collector",
     "WeatherCollector",
     "weather_collector",
 ]

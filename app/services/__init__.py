@@ -24,8 +24,8 @@ from app.services.betting.auto_grader import AutoGrader
 from app.services.betting.line_movement_analyzer import LineMovementAnalyzer
 
 # Data Collection Services
-from app.services.collectors.odds_collector import OddsCollector
-from app.services.collectors.espn_collector import ESPNCollector
+from app.services.collectors.collector_02_odds_api import OddsCollector
+from app.services.collectors.collector_01_espn import ESPNCollector
 from app.services.collectors.tennis_collector import TennisCollector
 
 # Enterprise Services

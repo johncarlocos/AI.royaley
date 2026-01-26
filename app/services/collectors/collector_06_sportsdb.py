@@ -53,16 +53,29 @@ from app.services.collectors.base_collector import (
 
 logger = logging.getLogger(__name__)
 
-# League IDs
+# League IDs - ALL 10 SPORTS
 SPORTSDB_LEAGUE_IDS = {
-    "NFL": 4391, "NBA": 4387, "NHL": 4380, "MLB": 4424,
-    "NCAAF": 4479, "NCAAB": 4607, "MLS": 4346,
+    # Major US Pro Leagues
+    "NFL": 4391,
+    "NBA": 4387,
+    "NHL": 4380,
+    "MLB": 4424,
+    # College Sports
+    "NCAAF": 4479,
+    "NCAAB": 4607,
+    # Additional Leagues
+    "MLS": 4346,
+    "WNBA": 4516,
+    "UFC": 4443,
+    "CFL": 4405,
 }
 
 # Season format by sport
-SPLIT_SEASON_SPORTS = ["NBA", "NHL", "NCAAB"]  # Use "2024-2025" format
+SPLIT_SEASON_SPORTS = ["NBA", "NHL", "NCAAB", "NCAAF"]  # Use "2024-2025" format
+CALENDAR_YEAR_SPORTS = ["NFL", "MLB", "MLS", "WNBA", "UFC", "CFL"]  # Use "2024" format
 
-ML_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB"]
+# All sports for ML training
+ML_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
 
 STATUS_MAP = {
     "NS": "scheduled", "1H": "in_progress", "2H": "in_progress",
@@ -136,7 +149,7 @@ class SportsDBCollector(BaseCollector):
         """Get correct season format for sport."""
         if sport_code in SPLIT_SEASON_SPORTS:
             return f"{year}-{year+1}"
-        return str(year)
+        return str(year)  # Calendar year sports
 
     # =========================================================================
     # REQUIRED ABSTRACT METHODS
@@ -489,18 +502,22 @@ class SportsDBCollector(BaseCollector):
                 
                 # Determine current season based on sport and month
                 if sport in SPLIT_SEASON_SPORTS:
-                    # NBA/NHL/NCAAB: season spans two years (Oct-Apr/Jun)
-                    # In Jan 2026, the current season is 2025-2026
+                    # NBA/NHL/NCAAB/NCAAF: season spans two years
                     if month <= 6:  # Jan-Jun = second half of season
                         sport_season = f"{year-1}-{year}"
                     else:  # Jul-Dec = first half of new season
                         sport_season = f"{year}-{year+1}"
                 else:
-                    # NFL/MLB/NCAAF: single year seasons
-                    # NFL: Sep-Feb, so Jan 2026 = 2025 season
-                    # MLB: Apr-Oct, so Jan 2026 = 2025 season ended
-                    # NCAAF: Aug-Jan, so Jan 2026 = 2025 season
-                    if month <= 2:  # Jan-Feb = still previous year's season
+                    # NFL/MLB/MLS/WNBA/UFC/CFL: single year seasons
+                    if sport == "NFL" and month <= 2:  # NFL playoffs Jan-Feb
+                        sport_season = str(year - 1)
+                    elif sport == "WNBA" and month < 5:  # WNBA starts May
+                        sport_season = str(year - 1)
+                    elif sport == "MLB" and month < 4:  # MLB starts April
+                        sport_season = str(year - 1)
+                    elif sport == "MLS" and month < 3:  # MLS starts March
+                        sport_season = str(year - 1)
+                    elif sport == "CFL" and month < 6:  # CFL starts June
                         sport_season = str(year - 1)
                     else:
                         sport_season = str(year)

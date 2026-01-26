@@ -734,16 +734,12 @@ class SportsDBCollector(BaseCollector):
         return saved
     
     async def save_games_to_database(self, games: List[Dict], session: AsyncSession) -> int:
-        """Save games - auto-creates teams if they don't exist."""
+        """Save games - auto-creates teams, handles duplicates properly."""
         saved = 0
+        updated = 0
         skipped_no_sport = 0
         skipped_no_team = 0
         teams_created = 0
-        
-        # Debug: show first game's team names
-        if games:
-            g0 = games[0]
-            print(f"[DEBUG] First game: {g0.get('home_team')} vs {g0.get('away_team')} ({g0.get('sport_code')})")
         
         for g in games:
             try:
@@ -814,33 +810,55 @@ class SportsDBCollector(BaseCollector):
                     continue
                 
                 ext_id = g.get("external_id")
+                
+                # Check if game exists
                 existing = await session.execute(select(Game).where(Game.external_id == ext_id))
                 game = existing.scalar_one_or_none()
                 
                 if game:
+                    # Update existing game
                     game.home_score = g.get("home_score")
                     game.away_score = g.get("away_score")
+                    game.scheduled_at = g.get("scheduled_time")
+                    updated += 1
                 else:
-                    game = Game(
-                        external_id=ext_id,
-                        sport_id=sport.id,
-                        home_team_id=home_team.id,
-                        away_team_id=away_team.id,
-                        scheduled_at=g.get("scheduled_time"),
-                        home_score=g.get("home_score"),
-                        away_score=g.get("away_score"),
-                    )
-                    session.add(game)
-                    saved += 1
+                    # Create new game
+                    try:
+                        game = Game(
+                            external_id=ext_id,
+                            sport_id=sport.id,
+                            home_team_id=home_team.id,
+                            away_team_id=away_team.id,
+                            scheduled_at=g.get("scheduled_time"),
+                            home_score=g.get("home_score"),
+                            away_score=g.get("away_score"),
+                        )
+                        session.add(game)
+                        await session.flush()
+                        saved += 1
+                    except Exception as insert_err:
+                        # Handle race condition - game was inserted by another process
+                        await session.rollback()
+                        # Re-fetch and update
+                        existing = await session.execute(select(Game).where(Game.external_id == ext_id))
+                        game = existing.scalar_one_or_none()
+                        if game:
+                            game.home_score = g.get("home_score")
+                            game.away_score = g.get("away_score")
+                            updated += 1
+                        
             except Exception as e:
                 logger.warning(f"[SportsDB] Game save error: {e}")
-                if saved == 0 and teams_created == 0:
-                    print(f"[ERROR] {e}")
         
-        await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_sport} no sport, {skipped_no_team} no team)")
-        print(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_team} missing teams)")
-        return saved
+        try:
+            await session.commit()
+        except Exception as commit_err:
+            logger.error(f"[SportsDB] Commit error: {commit_err}")
+            await session.rollback()
+        
+        logger.info(f"[SportsDB] Saved {saved} new, updated {updated} (teams created: {teams_created}, skipped: {skipped_no_sport} no sport, {skipped_no_team} no team)")
+        print(f"[SportsDB] Saved {saved} new, updated {updated}, created {teams_created} teams")
+        return saved + updated
     
     async def save_historical_to_database(self, games: List[Dict], session: AsyncSession) -> Tuple[int, int]:
         """Save historical games."""

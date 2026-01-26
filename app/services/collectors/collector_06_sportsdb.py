@@ -1283,14 +1283,14 @@ class SportsDBCollector(BaseCollector):
         
         venues = []
         
-        league_id = SPORTSDB_LEAGUES.get(sport_code)
+        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
             logger.warning(f"[SportsDB] Unknown sport code: {sport_code}")
             return {"venues": []}
         
         try:
             # Get all teams in league - they include venue info
-            url = f"{self.base_url}/lookup_all_teams.php?id={league_id}"
+            url = f"{self.v1_base_url}/lookup_all_teams.php?id={league_id}"
             
             data = await self.get(url)
             

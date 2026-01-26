@@ -451,6 +451,69 @@ async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
     return result
 
 
+async def import_sportsdb_players(sports: List[str] = None) -> ImportResult:
+    """Import players from TheSportsDB."""
+    result = ImportResult(source="sportsdb_players")
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
+        players_data = await sportsdb_collector.collect_players()
+        if players_data and players_data.get("players"):
+            async with db_manager.session() as session:
+                saved = await sportsdb_collector.save_players_to_database(
+                    players_data["players"], session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_sportsdb_standings(sports: List[str] = None, season: str = None) -> ImportResult:
+    """Import standings from TheSportsDB."""
+    result = ImportResult(source="sportsdb_standings")
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        standings_data = await sportsdb_collector.collect_standings(season=season)
+        if standings_data and standings_data.get("standings"):
+            print(f"[SportsDB] Retrieved {len(standings_data['standings'])} standings entries")
+            result.records = len(standings_data["standings"])
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_sportsdb_seasons(sports: List[str] = None) -> ImportResult:
+    """List available seasons from TheSportsDB."""
+    result = ImportResult(source="sportsdb_seasons")
+    try:
+        from app.services.collectors import sportsdb_collector
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB"]
+        
+        for sport in sports:
+            seasons = await sportsdb_collector.get_available_seasons(sport)
+            print(f"[SportsDB] {sport}: {seasons[:5]}...")
+            result.records += len(seasons)
+        
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 async def import_nflfastr(sports: List[str] = None) -> ImportResult:
     """Import NFL current season from nflfastR."""
     result = ImportResult(source="nflfastr")
@@ -692,6 +755,9 @@ IMPORT_MAP = {
     "nfl_players": import_nflfastr_players,
     "ncaaf_players": import_cfbfastr_players,
     "venues": import_sportsdb_venues,
+    "sportsdb_players": import_sportsdb_players,
+    "sportsdb_standings": import_sportsdb_standings,
+    "sportsdb_seasons": import_sportsdb_seasons,
     "closing_lines": import_pinnacle_closing_lines,
     
     # Live data
@@ -708,7 +774,7 @@ IMPORT_MAP = {
 CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr"]
 HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -841,6 +907,9 @@ def show_status():
     console.print("  • nfl_players   → players, player_stats (from nflfastR)")
     console.print("  • ncaaf_players → players, player_stats (from cfbfastR)")
     console.print("  • venues        → venues (from TheSportsDB)")
+    console.print("  • sportsdb_players   → players (from TheSportsDB)")
+    console.print("  • sportsdb_standings → standings (from TheSportsDB)")
+    console.print("  • sportsdb_seasons   → list available seasons")
     console.print("  • closing_lines → closing_lines (from Pinnacle)")
     
     console.print("\n[cyan]⚡ PLAY-BY-PLAY:[/cyan]")

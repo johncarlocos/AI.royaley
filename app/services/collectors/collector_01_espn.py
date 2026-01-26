@@ -2,19 +2,19 @@
 ROYALEY - ESPN Data Collector
 Phase 1: Data Collection Services
 
-Collects game schedules, scores, and team information from ESPN public API.
+Collects game schedules, scores, team information, injuries, and players from ESPN public API.
 """
 
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-import asyncio
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Sport, Team, Game, GameStatus
+from app.models import Sport, Team, Game, GameStatus, Player
 from app.services.collectors.base_collector import (
     BaseCollector,
     CollectorResult,
@@ -47,6 +47,8 @@ class ESPNCollector(BaseCollector):
     - Game schedules and results
     - Team information
     - Scores and standings
+    - Injuries
+    - Players
     - No API key required
     """
     
@@ -447,7 +449,7 @@ class ESPNCollector(BaseCollector):
                     
             except Exception as e:
                 logger.error(f"Error saving game: {e}")
-                await session.rollback()  # Reset transaction state
+                await session.rollback()
                 continue
         
         await session.commit()
@@ -762,6 +764,305 @@ class ESPNCollector(BaseCollector):
         
         await session.commit()
         return saved, updated
+
+    # =========================================================================
+    # INJURIES COLLECTION
+    # =========================================================================
+    
+    async def collect_injuries(self, sport_code: str) -> Dict[str, Any]:
+        """
+        Collect injury reports from ESPN.
+        
+        ESPN provides injury data at:
+        - https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/injuries
+        """
+        sport_path = ESPN_SPORT_PATHS.get(sport_code)
+        if not sport_path:
+            logger.warning(f"[ESPN] Injuries not supported for {sport_code}")
+            return {"injuries": []}
+        
+        injuries = []
+        
+        try:
+            # Try injuries endpoint
+            endpoint = f"/{sport_path['sport']}/{sport_path['league']}/injuries"
+            
+            try:
+                data = await self.get(endpoint)
+                
+                # Parse team injuries
+                for team_data in data.get("items", []):
+                    team_name = team_data.get("team", {}).get("displayName", "")
+                    team_abbr = team_data.get("team", {}).get("abbreviation", "")
+                    
+                    for injury in team_data.get("injuries", []):
+                        athlete = injury.get("athlete", {})
+                        
+                        injuries.append({
+                            "player_name": athlete.get("displayName", ""),
+                            "player_id": athlete.get("id"),
+                            "position": athlete.get("position", {}).get("abbreviation", ""),
+                            "team_name": team_name,
+                            "team_abbr": team_abbr,
+                            "injury_type": injury.get("type", {}).get("description", ""),
+                            "status": injury.get("status", ""),
+                            "details": injury.get("details", {}).get("detail", ""),
+                            "return_date": injury.get("details", {}).get("returnDate"),
+                            "is_starter": athlete.get("starter", False),
+                        })
+                
+                logger.info(f"[ESPN] Collected {len(injuries)} injuries for {sport_code}")
+                
+            except Exception as e:
+                logger.warning(f"[ESPN] Injuries endpoint error: {e}")
+                
+        except Exception as e:
+            logger.error(f"[ESPN] Error collecting injuries: {e}")
+        
+        return {"injuries": injuries, "sport_code": sport_code}
+    
+    async def save_injuries_to_database(
+        self, 
+        injuries_data: List[Dict[str, Any]], 
+        sport_code: str,
+        session: AsyncSession
+    ) -> int:
+        """Save injuries to database."""
+        from app.models.injury_models import Injury
+        
+        saved_count = 0
+        
+        # Get sport
+        sport_result = await session.execute(
+            select(Sport).where(Sport.code == sport_code)
+        )
+        sport = sport_result.scalar_one_or_none()
+        
+        if not sport:
+            logger.error(f"[ESPN] Sport {sport_code} not found")
+            return 0
+        
+        for injury_data in injuries_data:
+            try:
+                # Find team
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            or_(
+                                Team.abbreviation == injury_data.get("team_abbr"),
+                                Team.name == injury_data.get("team_name")
+                            )
+                        )
+                    )
+                )
+                team = team_result.scalar_one_or_none()
+                
+                if not team:
+                    continue
+                
+                # Check if injury exists
+                existing = await session.execute(
+                    select(Injury).where(
+                        and_(
+                            Injury.team_id == team.id,
+                            Injury.player_name == injury_data.get("player_name"),
+                        )
+                    )
+                )
+                injury = existing.scalar_one_or_none()
+                
+                if injury:
+                    # Update existing
+                    injury.status = injury_data.get("status", injury.status)
+                    injury.injury_type = injury_data.get("injury_type", injury.injury_type)
+                    injury.status_detail = injury_data.get("details", injury.status_detail)
+                    injury.is_starter = injury_data.get("is_starter", injury.is_starter)
+                else:
+                    # Create new
+                    injury = Injury(
+                        team_id=team.id,
+                        sport_code=sport_code,
+                        player_name=injury_data.get("player_name", ""),
+                        position=injury_data.get("position"),
+                        injury_type=injury_data.get("injury_type"),
+                        status=injury_data.get("status", "Unknown"),
+                        status_detail=injury_data.get("details"),
+                        is_starter=injury_data.get("is_starter", False),
+                        source="espn",
+                        external_id=injury_data.get("player_id"),
+                    )
+                    session.add(injury)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[ESPN] Error saving injury: {e}")
+                continue
+        
+        await session.commit()
+        logger.info(f"[ESPN] Saved {saved_count} injuries")
+        return saved_count
+
+    # =========================================================================
+    # PLAYERS COLLECTION
+    # =========================================================================
+    
+    async def collect_players(self, sport_code: str) -> Dict[str, Any]:
+        """
+        Collect player rosters from ESPN.
+        
+        ESPN provides roster data at team endpoints.
+        """
+        sport_path = ESPN_SPORT_PATHS.get(sport_code)
+        if not sport_path:
+            return {"players": []}
+        
+        players = []
+        
+        try:
+            # Get teams first
+            endpoint = f"/{sport_path['sport']}/{sport_path['league']}/teams"
+            data = await self.get(endpoint, params={"limit": 500})
+            
+            teams_data = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+            
+            for team_item in teams_data:
+                team = team_item.get("team", {})
+                team_id = team.get("id")
+                team_abbr = team.get("abbreviation", "")
+                
+                if not team_id:
+                    continue
+                
+                # Get roster for each team
+                roster_endpoint = f"/{sport_path['sport']}/{sport_path['league']}/teams/{team_id}/roster"
+                
+                try:
+                    roster_data = await self.get(roster_endpoint)
+                    
+                    for group in roster_data.get("athletes", []):
+                        for athlete in group.get("items", []):
+                            players.append({
+                                "external_id": f"espn_{athlete.get('id')}",
+                                "name": athlete.get("displayName", ""),
+                                "position": athlete.get("position", {}).get("abbreviation", ""),
+                                "jersey_number": athlete.get("jersey"),
+                                "team_abbr": team_abbr,
+                                "height": athlete.get("displayHeight"),
+                                "weight": athlete.get("displayWeight"),
+                                "birth_date": athlete.get("dateOfBirth"),
+                                "is_active": athlete.get("active", True),
+                            })
+                            
+                    await asyncio.sleep(0.1)  # Rate limiting
+                    
+                except Exception as e:
+                    logger.debug(f"[ESPN] Error getting roster for team {team_id}: {e}")
+                    continue
+            
+            logger.info(f"[ESPN] Collected {len(players)} players for {sport_code}")
+            
+        except Exception as e:
+            logger.error(f"[ESPN] Error collecting players: {e}")
+        
+        return {"players": players, "sport_code": sport_code}
+    
+    async def save_players_to_database(
+        self,
+        players_data: List[Dict[str, Any]],
+        sport_code: str,
+        session: AsyncSession
+    ) -> int:
+        """Save players to database."""
+        saved_count = 0
+        
+        # Get sport
+        sport_result = await session.execute(
+            select(Sport).where(Sport.code == sport_code)
+        )
+        sport = sport_result.scalar_one_or_none()
+        
+        if not sport:
+            return 0
+        
+        for player_data in players_data:
+            try:
+                # Find team
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            Team.abbreviation == player_data.get("team_abbr")
+                        )
+                    )
+                )
+                team = team_result.scalar_one_or_none()
+                
+                external_id = player_data.get("external_id")
+                if not external_id:
+                    continue
+                
+                # Check if player exists
+                existing = await session.execute(
+                    select(Player).where(Player.external_id == external_id)
+                )
+                player = existing.scalar_one_or_none()
+                
+                if player:
+                    # Update
+                    player.name = player_data.get("name", player.name)
+                    player.position = player_data.get("position", player.position)
+                    player.team_id = team.id if team else player.team_id
+                    player.is_active = player_data.get("is_active", True)
+                else:
+                    # Parse birth date
+                    birth_date = None
+                    if player_data.get("birth_date"):
+                        try:
+                            birth_date = datetime.fromisoformat(
+                                player_data["birth_date"].replace("Z", "+00:00")
+                            ).date()
+                        except:
+                            pass
+                    
+                    # Parse jersey number
+                    jersey = None
+                    if player_data.get("jersey_number"):
+                        try:
+                            jersey = int(player_data["jersey_number"])
+                        except:
+                            pass
+                    
+                    # Parse weight
+                    weight = None
+                    if player_data.get("weight"):
+                        try:
+                            weight_str = str(player_data["weight"]).replace(" lbs", "").strip()
+                            weight = int(weight_str)
+                        except:
+                            pass
+                    
+                    player = Player(
+                        external_id=external_id,
+                        name=player_data.get("name", ""),
+                        position=player_data.get("position"),
+                        jersey_number=jersey,
+                        team_id=team.id if team else None,
+                        height=player_data.get("height"),
+                        weight=weight,
+                        birth_date=birth_date,
+                        is_active=player_data.get("is_active", True),
+                    )
+                    session.add(player)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[ESPN] Error saving player: {e}")
+                continue
+        
+        await session.commit()
+        logger.info(f"[ESPN] Saved {saved_count} players")
+        return saved_count
 
 
 # Create and register collector instance

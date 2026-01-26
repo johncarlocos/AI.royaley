@@ -1497,6 +1497,254 @@ class CFBFastRCollector(BaseCollector):
         if not isinstance(data, dict):
             return False
         return True
+    
+    # =========================================================================
+    # PLAYERS & STATS SAVING
+    # =========================================================================
+    
+    async def save_players_to_database(
+        self,
+        player_stats_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """
+        Save NCAAF players and their stats to database.
+        
+        cfbfastR player_stats includes:
+        - athlete_id, athlete_name
+        - position
+        - team
+        - Various stats from game PBP aggregation
+        """
+        from app.models import Player, PlayerStats, Team, Sport
+        from sqlalchemy import or_
+        from collections import defaultdict
+        
+        saved_players = 0
+        saved_stats = 0
+        
+        try:
+            # Get NCAAF sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == "NCAAF")
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                logger.error("[cfbfastR] NCAAF sport not found")
+                return 0
+            
+            # Track unique players
+            processed_players = set()
+            
+            for stat_row in player_stats_data:
+                try:
+                    # Get player ID - cfbfastR uses athlete_id
+                    player_id = (
+                        stat_row.get("athlete_id") or 
+                        stat_row.get("player_id") or
+                        stat_row.get("id")
+                    )
+                    
+                    if not player_id or player_id in processed_players:
+                        continue
+                    
+                    processed_players.add(player_id)
+                    external_id = f"cfb_{player_id}"
+                    
+                    # Get player name
+                    player_name = (
+                        stat_row.get("athlete_name") or 
+                        stat_row.get("player_name") or
+                        stat_row.get("player") or
+                        "Unknown"
+                    )
+                    
+                    # Get team
+                    team_name = stat_row.get("team") or stat_row.get("team_name") or stat_row.get("school")
+                    team = None
+                    if team_name:
+                        # Try to find team by name or abbreviation
+                        team_result = await session.execute(
+                            select(Team).where(
+                                and_(
+                                    Team.sport_id == sport.id,
+                                    or_(
+                                        Team.name.ilike(f"%{team_name}%"),
+                                        Team.abbreviation == team_name
+                                    )
+                                )
+                            )
+                        )
+                        team = team_result.scalar_one_or_none()
+                    
+                    # Check if player exists
+                    existing = await session.execute(
+                        select(Player).where(Player.external_id == external_id)
+                    )
+                    player = existing.scalar_one_or_none()
+                    
+                    position = stat_row.get("position") or stat_row.get("athlete_position")
+                    
+                    if player:
+                        # Update
+                        player.name = player_name
+                        player.position = position
+                        if team:
+                            player.team_id = team.id
+                        player.is_active = True
+                    else:
+                        # Create new player
+                        player = Player(
+                            external_id=external_id,
+                            name=player_name,
+                            position=position,
+                            team_id=team.id if team else None,
+                            is_active=True,
+                        )
+                        session.add(player)
+                        await session.flush()
+                        saved_players += 1
+                    
+                    # Save individual stats
+                    stat_types = [
+                        "completions", "pass_attempts", "passing_yards", "passing_tds",
+                        "interceptions", "sacks", "completion_percentage",
+                        "rushing_attempts", "rushing_yards", "rushing_tds", "yards_per_carry",
+                        "receptions", "receiving_yards", "receiving_tds", "targets",
+                        "tackles", "interceptions_def", "fumbles_forced",
+                        "punt_returns", "punt_return_yards", "kick_returns", "kick_return_yards",
+                        "EPA", "success_rate", "explosiveness"
+                    ]
+                    
+                    for stat_type in stat_types:
+                        value = stat_row.get(stat_type)
+                        if value is not None:
+                            try:
+                                if not pd.isna(value):
+                                    stat_record = PlayerStats(
+                                        player_id=player.id,
+                                        stat_type=stat_type,
+                                        value=float(value),
+                                    )
+                                    session.add(stat_record)
+                                    saved_stats += 1
+                            except:
+                                pass
+                            
+                except Exception as e:
+                    logger.debug(f"[cfbfastR] Error saving player: {e}")
+                    continue
+            
+            await session.commit()
+            logger.info(f"[cfbfastR] Saved {saved_players} players, {saved_stats} stats")
+            
+        except Exception as e:
+            logger.error(f"[cfbfastR] Error saving players: {e}")
+        
+        return saved_players
+    
+    async def save_team_stats_to_database(
+        self,
+        team_stats_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """Save NCAAF team aggregate statistics to database."""
+        from app.models import Team, TeamStats, Sport
+        from sqlalchemy import or_
+        from collections import defaultdict
+        
+        saved_count = 0
+        
+        try:
+            # Get NCAAF sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == "NCAAF")
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                return 0
+            
+            # Aggregate stats by team
+            team_aggregates = defaultdict(lambda: defaultdict(float))
+            team_games = defaultdict(int)
+            
+            for stat_row in team_stats_data:
+                team_name = stat_row.get("team") or stat_row.get("team_name") or stat_row.get("school")
+                if not team_name:
+                    continue
+                
+                # Aggregate stats
+                for stat_type in ["passing_yards", "rushing_yards", "total_yards", "points", "EPA"]:
+                    value = stat_row.get(stat_type)
+                    if value is not None:
+                        try:
+                            if not pd.isna(value):
+                                team_aggregates[team_name][stat_type] += float(value)
+                        except:
+                            pass
+                
+                team_games[team_name] += 1
+            
+            # Save team stats
+            for team_name, stats in team_aggregates.items():
+                # Find team
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            or_(
+                                Team.name.ilike(f"%{team_name}%"),
+                                Team.abbreviation == team_name
+                            )
+                        )
+                    )
+                )
+                team = team_result.scalar_one_or_none()
+                
+                if not team:
+                    continue
+                
+                games_played = team_games.get(team_name, 1)
+                
+                for stat_type, total_value in stats.items():
+                    try:
+                        # Check if exists
+                        existing = await session.execute(
+                            select(TeamStats).where(
+                                and_(
+                                    TeamStats.team_id == team.id,
+                                    TeamStats.stat_type == stat_type,
+                                )
+                            )
+                        )
+                        team_stat = existing.scalar_one_or_none()
+                        
+                        if team_stat:
+                            team_stat.value = total_value
+                            team_stat.games_played = games_played
+                            team_stat.computed_at = datetime.utcnow()
+                        else:
+                            team_stat = TeamStats(
+                                team_id=team.id,
+                                stat_type=stat_type,
+                                value=total_value,
+                                games_played=games_played,
+                            )
+                            session.add(team_stat)
+                            saved_count += 1
+                            
+                    except Exception as e:
+                        logger.debug(f"[cfbfastR] Error saving team stat: {e}")
+            
+            await session.commit()
+            logger.info(f"[cfbfastR] Saved {saved_count} team stats")
+            
+        except Exception as e:
+            logger.error(f"[cfbfastR] Error saving team stats: {e}")
+        
+        return saved_count
 
 
 # =============================================================================

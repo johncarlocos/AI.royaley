@@ -1268,6 +1268,151 @@ class SportsDBCollector(BaseCollector):
         livescores = data.get("livescores", [])
         
         return len(games) > 0 or len(teams) > 0 or len(livescores) > 0
+    
+    # =========================================================================
+    # VENUES COLLECTION
+    # =========================================================================
+    
+    async def collect_venues(self, sport_code: str) -> Dict[str, Any]:
+        """
+        Collect venue/stadium information from TheSportsDB.
+        
+        TheSportsDB provides venue data through team lookups.
+        """
+        from app.models import Venue
+        
+        venues = []
+        
+        league_id = SPORTSDB_LEAGUES.get(sport_code)
+        if not league_id:
+            logger.warning(f"[SportsDB] Unknown sport code: {sport_code}")
+            return {"venues": []}
+        
+        try:
+            # Get all teams in league - they include venue info
+            url = f"{self.base_url}/lookup_all_teams.php?id={league_id}"
+            
+            data = await self.get(url)
+            
+            if data:
+                teams = data.get("teams", []) or []
+                
+                seen_venues = set()
+                
+                for team in teams:
+                    venue_name = team.get("strStadium")
+                    if not venue_name or venue_name in seen_venues:
+                        continue
+                    
+                    seen_venues.add(venue_name)
+                    
+                    # Parse capacity
+                    capacity = None
+                    capacity_str = team.get("intStadiumCapacity")
+                    if capacity_str:
+                        try:
+                            capacity = int(str(capacity_str).replace(",", ""))
+                        except:
+                            pass
+                    
+                    # Parse location
+                    location = team.get("strStadiumLocation", "")
+                    city = location.split(",")[0].strip() if location else None
+                    state = location.split(",")[1].strip() if location and "," in location else None
+                    
+                    # Check if dome
+                    stadium_desc = team.get("strStadiumDescription", "")
+                    is_dome = self._is_dome(venue_name, stadium_desc)
+                    
+                    venues.append({
+                        "name": venue_name,
+                        "city": city,
+                        "state": state,
+                        "country": team.get("strCountry", "USA"),
+                        "capacity": capacity,
+                        "is_dome": is_dome,
+                        "team_name": team.get("strTeam"),
+                        "external_id": f"sportsdb_{team.get('idTeam')}",
+                    })
+                
+                logger.info(f"[SportsDB] Collected {len(venues)} venues for {sport_code}")
+            
+        except Exception as e:
+            logger.error(f"[SportsDB] Error collecting venues: {e}")
+        
+        return {"venues": venues, "sport_code": sport_code}
+    
+    def _is_dome(self, venue_name: str, description: str = "") -> bool:
+        """Determine if venue is a dome/indoor stadium."""
+        known_domes = [
+            "dome", "superdome", "metrodome", "alamodome",
+            "carrier dome", "lucas oil", "at&t stadium",
+            "u.s. bank stadium", "sofi stadium", "allegiant stadium",
+            "mercedes-benz stadium", "nrg stadium", "ford field",
+            "caesars superdome", "state farm stadium"
+        ]
+        
+        venue_lower = venue_name.lower() if venue_name else ""
+        desc_lower = description.lower() if description else ""
+        
+        for dome in known_domes:
+            if dome in venue_lower or dome in desc_lower:
+                return True
+        
+        if "retractable" in venue_lower or "retractable" in desc_lower:
+            return True
+        
+        return False
+    
+    async def save_venues_to_database(
+        self,
+        venues_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """Save venues to database."""
+        from app.models import Venue
+        
+        saved_count = 0
+        
+        for venue_data in venues_data:
+            try:
+                venue_name = venue_data.get("name")
+                if not venue_name:
+                    continue
+                
+                # Check if venue exists
+                existing = await session.execute(
+                    select(Venue).where(Venue.name == venue_name)
+                )
+                venue = existing.scalar_one_or_none()
+                
+                if venue:
+                    # Update
+                    venue.city = venue_data.get("city") or venue.city
+                    venue.state = venue_data.get("state") or venue.state
+                    venue.country = venue_data.get("country") or venue.country
+                    venue.capacity = venue_data.get("capacity") or venue.capacity
+                    venue.is_dome = venue_data.get("is_dome", venue.is_dome)
+                else:
+                    # Create new
+                    venue = Venue(
+                        name=venue_name,
+                        city=venue_data.get("city"),
+                        state=venue_data.get("state"),
+                        country=venue_data.get("country", "USA"),
+                        capacity=venue_data.get("capacity"),
+                        is_dome=venue_data.get("is_dome", False),
+                    )
+                    session.add(venue)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[SportsDB] Error saving venue: {e}")
+                continue
+        
+        await session.commit()
+        logger.info(f"[SportsDB] Saved {saved_count} venues")
+        return saved_count
 
 
 # Create singleton instance

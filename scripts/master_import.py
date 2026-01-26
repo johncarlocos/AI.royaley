@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
-ROYALEY - Master Data Import
-=============================
+ROYALEY - Master Data Import (Enhanced)
+========================================
 
-ONE COMMAND to import all data.
+ONE COMMAND to import all data for ML training.
 
 Usage:
-    python scripts/master_import.py --current          # Current data (default)
-    python scripts/master_import.py --historical       # Historical only
-    python scripts/master_import.py --all              # Both
-    python scripts/master_import.py --source pinnacle  # Specific source
-    python scripts/master_import.py --sport NFL        # Specific sport
-    python scripts/master_import.py --daemon           # Run continuously
-    python scripts/master_import.py --status           # Show status
+    python scripts/master_import.py --full              # ALL data for ML training
+    python scripts/master_import.py --current           # Current data (default)
+    python scripts/master_import.py --historical        # Historical only
+    python scripts/master_import.py --source pinnacle   # Specific source
+    python scripts/master_import.py --source injuries   # Injuries from ESPN
+    python scripts/master_import.py --source weather    # Weather for upcoming games
+    python scripts/master_import.py --source players    # Players/stats from nflfastR/cfbfastR
+    python scripts/master_import.py --sport NFL         # Specific sport
+    python scripts/master_import.py --daemon            # Run continuously
+    python scripts/master_import.py --status            # Show status
+
+Tables filled by each source:
+    espn          → games, teams, injuries, players
+    odds_api      → odds, sportsbooks, games, teams
+    pinnacle      → odds, odds_movements, closing_lines, sportsbooks
+    weather       → weather_data
+    sportsdb      → games, teams, venues
+    nflfastr      → games, teams, players, player_stats, team_stats
+    cfbfastr      → games, teams, players, player_stats, team_stats
 """
 
 import asyncio
@@ -20,8 +32,8 @@ import argparse
 import sys
 import signal
 from pathlib import Path
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional
 from dataclasses import dataclass, field
 
 # MUST come before app imports
@@ -51,7 +63,7 @@ def signal_handler(signum, frame):
 @dataclass
 class ImportResult:
     source: str
-    success: bool
+    success: bool = False
     records: int = 0
     errors: List[str] = field(default_factory=list)
 
@@ -62,7 +74,7 @@ class ImportResult:
 
 async def import_espn(sports: List[str] = None) -> ImportResult:
     """Import games/scores from ESPN."""
-    result = ImportResult(source="espn", success=False)
+    result = ImportResult(source="espn")
     try:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
@@ -75,7 +87,6 @@ async def import_espn(sports: List[str] = None) -> ImportResult:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
-                        # ESPN returns {games: [], scores: [], teams: []}
                         if data.data.get("games"):
                             await espn_collector.save_games_to_database(data.data["games"], session)
                         if data.data.get("scores"):
@@ -88,9 +99,65 @@ async def import_espn(sports: List[str] = None) -> ImportResult:
     return result
 
 
+async def import_espn_injuries(sports: List[str] = None) -> ImportResult:
+    """Import injuries from ESPN."""
+    result = ImportResult(source="injuries")
+    try:
+        from app.services.collectors import espn_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
+        for sport in sports:
+            try:
+                injuries_data = await espn_collector.collect_injuries(sport_code=sport)
+                if injuries_data and injuries_data.get("injuries"):
+                    async with db_manager.session() as session:
+                        saved = await espn_collector.save_injuries_to_database(
+                            injuries_data["injuries"], sport, session
+                        )
+                        result.records += saved
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        result.success = result.records > 0 or len(result.errors) == 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_espn_players(sports: List[str] = None) -> ImportResult:
+    """Import players from ESPN."""
+    result = ImportResult(source="espn_players")
+    try:
+        from app.services.collectors import espn_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
+        for sport in sports:
+            try:
+                players_data = await espn_collector.collect_players(sport_code=sport)
+                if players_data and players_data.get("players"):
+                    async with db_manager.session() as session:
+                        saved = await espn_collector.save_players_to_database(
+                            players_data["players"], sport, session
+                        )
+                        result.records += saved
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        result.success = result.records > 0 or len(result.errors) == 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 async def import_odds_api(sports: List[str] = None) -> ImportResult:
     """Import odds from TheOddsAPI."""
-    result = ImportResult(source="odds_api", success=False)
+    result = ImportResult(source="odds_api")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
@@ -99,7 +166,7 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
         for sport in sports:
             try:
                 data = await odds_collector.collect(sport_code=sport)
-                if data.success and data.data:
+                if data.success:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
@@ -109,77 +176,92 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await odds_collector.close()
-        except:
-            pass
     return result
 
 
 async def import_pinnacle(sports: List[str] = None) -> ImportResult:
-    """Import CLV lines from Pinnacle."""
-    result = ImportResult(source="pinnacle", success=False)
+    """Import Pinnacle odds with line movements and closing lines."""
+    result = ImportResult(source="pinnacle")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
         
         sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
         for sport in sports:
             try:
                 data = await pinnacle_collector.collect(sport_code=sport)
-                if data.success and data.data:
+                if data.success:
                     result.records += data.records_count
-                    await db_manager.initialize()
                     async with db_manager.session() as session:
+                        # Save odds
                         await pinnacle_collector.save_to_database(data.data, session)
+                        # Track line movements
+                        movements = await pinnacle_collector.track_line_movements(data.data, session)
+                        result.records += movements
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await pinnacle_collector.close()
-        except:
-            pass
     return result
 
 
 async def import_pinnacle_history(sports: List[str] = None, pages: int = 50) -> ImportResult:
-    """Import historical results from Pinnacle archive."""
-    result = ImportResult(source="pinnacle_history", success=False)
+    """Import historical Pinnacle game results."""
+    result = ImportResult(source="pinnacle_history")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
         
         sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
         for sport in sports:
             try:
-                data = await pinnacle_collector.collect_historical(sport_code=sport, max_pages=pages)
-                if data.success and data.data:
-                    await db_manager.initialize()
+                data = await pinnacle_collector.collect_historical(
+                    sport_code=sport, 
+                    max_pages=pages
+                )
+                if data.success:
+                    result.records += data.records_count
                     async with db_manager.session() as session:
-                        saved, updated = await pinnacle_collector.save_historical_to_database(
-                            data.data, sport, session
-                        )
-                        result.records += saved + updated
+                        await pinnacle_collector.save_historical_to_database(data.data, session)
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await pinnacle_collector.close()
-        except:
-            pass
     return result
 
 
-async def import_espn_history(sports: List[str] = None, days: int = 365) -> ImportResult:
-    """Import historical games from ESPN."""
-    result = ImportResult(source="espn_history", success=False)
+async def import_pinnacle_closing_lines(sports: List[str] = None) -> ImportResult:
+    """Capture closing lines from Pinnacle for completed games."""
+    result = ImportResult(source="closing_lines")
+    try:
+        from app.services.collectors import pinnacle_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
+        for sport in sports:
+            try:
+                async with db_manager.session() as session:
+                    saved = await pinnacle_collector.capture_closing_lines(sport, session)
+                    result.records += saved
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_espn_history(sports: List[str] = None, days: int = 30) -> ImportResult:
+    """Import ESPN historical games."""
+    result = ImportResult(source="espn_history")
     try:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
@@ -187,83 +269,90 @@ async def import_espn_history(sports: List[str] = None, days: int = 365) -> Impo
         sports = sports or ["NFL", "NBA", "NHL", "MLB"]
         for sport in sports:
             try:
-                data = await espn_collector.collect_historical(sport_code=sport, days_back=days)
-                if data.success and data.data:
-                    games = data.data.get("games", [])
-                    if games:
-                        await db_manager.initialize()
-                        async with db_manager.session() as session:
-                            saved, updated = await espn_collector.save_historical_to_database(
-                                games, sport, session
-                            )
-                            result.records += saved + updated
+                data = await espn_collector.collect_historical(
+                    sport_code=sport, 
+                    days_back=days
+                )
+                if data.success:
+                    result.records += data.records_count
+                    await db_manager.initialize()
+                    async with db_manager.session() as session:
+                        await espn_collector.save_historical_to_database(data.data, session)
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await espn_collector.close()
-        except:
-            pass
     return result
 
 
 async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> ImportResult:
-    """Import historical odds from OddsAPI (requires paid subscription)."""
-    result = ImportResult(source="odds_api_history", success=False)
+    """Import OddsAPI historical odds."""
+    result = ImportResult(source="odds_api_history")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
         
         sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
         for sport in sports:
             try:
-                data = await odds_collector.collect_historical(sport_code=sport, days_back=days)
-                if data.success and data.data:
-                    await db_manager.initialize()
+                data = await odds_collector.collect_historical(
+                    sport_code=sport,
+                    days_back=days
+                )
+                if data.success:
+                    result.records += data.records_count
                     async with db_manager.session() as session:
-                        saved, updated = await odds_collector.save_historical_to_database(
-                            data.data, session
-                        )
-                        result.records += saved + updated
+                        await odds_collector.save_historical_to_database(data.data, session)
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await odds_collector.close()
-        except:
-            pass
     return result
 
 
-async def import_weather(sports: List[str] = None) -> ImportResult:
-    """Import weather data for outdoor games."""
-    result = ImportResult(source="weather", success=False)
+async def import_weather(sports: List[str] = None, days: int = 7) -> ImportResult:
+    """Import weather for upcoming outdoor games."""
+    result = ImportResult(source="weather")
     try:
         from app.services.collectors.collector_05_weather import WeatherCollector
+        from app.core.database import db_manager
         
-        sports = sports or ["NFL", "MLB"]
-        for sport in sports:
-            try:
-                async with WeatherCollector() as collector:
-                    stats = await collector.collect_for_upcoming_games(sport_code=sport, days_ahead=7)
-                    result.records += stats.weather_fetched
-            except Exception as e:
-                result.errors.append(f"{sport}: {str(e)[:50]}")
-        result.success = result.records > 0
+        # Only outdoor sports need weather
+        outdoor_sports = ["NFL", "MLB", "NCAAF"]
+        if sports:
+            outdoor_sports = [s for s in sports if s in outdoor_sports]
+        
+        if not outdoor_sports:
+            result.success = True
+            return result
+        
+        await db_manager.initialize()
+        
+        async with WeatherCollector() as collector:
+            for sport in outdoor_sports:
+                try:
+                    weather_result = await collector.collect_for_upcoming_games(
+                        sport_code=sport,
+                        days_ahead=days
+                    )
+                    if weather_result:
+                        result.records += weather_result.get("saved", 0)
+                except Exception as e:
+                    result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        result.success = result.records >= 0
     except Exception as e:
         result.errors.append(str(e)[:100])
     return result
 
 
 async def import_sportsdb(sports: List[str] = None) -> ImportResult:
-    """Import games/scores/livescores from TheSportsDB."""
-    result = ImportResult(source="sportsdb", success=False)
+    """Import from TheSportsDB."""
+    result = ImportResult(source="sportsdb")
     try:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
@@ -279,20 +368,15 @@ async def import_sportsdb(sports: List[str] = None) -> ImportResult:
                         await sportsdb_collector.save_to_database(data.data, session)
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
-        result.success = result.records > 0
+        result.success = result.records > 0 or len(result.errors) == 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await sportsdb_collector.close()
-        except:
-            pass
     return result
 
 
 async def import_sportsdb_history(sports: List[str] = None, seasons: int = 10) -> ImportResult:
-    """Import historical game results from TheSportsDB by season (default: 10 years)."""
-    result = ImportResult(source="sportsdb_history", success=False)
+    """Import TheSportsDB historical data."""
+    result = ImportResult(source="sportsdb_history")
     try:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
@@ -301,63 +385,106 @@ async def import_sportsdb_history(sports: List[str] = None, seasons: int = 10) -
         for sport in sports:
             try:
                 data = await sportsdb_collector.collect_historical(
-                    sport_code=sport, 
+                    sport_code=sport,
                     seasons_back=seasons
                 )
                 if data.success and data.data:
+                    result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
                         saved, updated = await sportsdb_collector.save_historical_to_database(
-                            data.data, session
+                            data.data.get("games", []), session
                         )
-                        result.records += saved + updated
+                        result.records = saved + updated
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await sportsdb_collector.close()
-        except:
-            pass
     return result
 
 
 async def import_sportsdb_livescores() -> ImportResult:
-    """Import all current livescores from TheSportsDB."""
-    result = ImportResult(source="sportsdb_live", success=False)
+    """Import live scores from TheSportsDB."""
+    result = ImportResult(source="sportsdb_live")
     try:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
         
         data = await sportsdb_collector.collect_all_livescores()
-        if data.success and data.data:
+        if data.success:
             result.records = data.records_count
             await db_manager.initialize()
             async with db_manager.session() as session:
                 await sportsdb_collector._update_livescores(data.data, session)
-        result.success = result.records > 0 or data.success
+        result.success = True
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await sportsdb_collector.close()
-        except:
-            pass
+    return result
+
+
+async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
+    """Import venues from TheSportsDB."""
+    result = ImportResult(source="venues")
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        await db_manager.initialize()
+        
+        for sport in sports:
+            try:
+                venues_data = await sportsdb_collector.collect_venues(sport_code=sport)
+                if venues_data and venues_data.get("venues"):
+                    async with db_manager.session() as session:
+                        saved = await sportsdb_collector.save_venues_to_database(
+                            venues_data["venues"], session
+                        )
+                        result.records += saved
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
     return result
 
 
 async def import_nflfastr(sports: List[str] = None) -> ImportResult:
-    """Import NFL games/schedules from nflfastR (FREE - 1999-present)."""
-    result = ImportResult(source="nflfastr", success=False)
+    """Import NFL current season from nflfastR."""
+    result = ImportResult(source="nflfastr")
     try:
         from app.services.collectors import nflfastr_collector
         from app.core.database import db_manager
         
-        # nflfastR is NFL only
-        data = await nflfastr_collector.collect(sport_code="NFL", collect_type="schedules")
-        if data.success and data.data:
+        current_year = datetime.now().year
+        years = [current_year - 1, current_year] if datetime.now().month < 9 else [current_year]
+        
+        data = await nflfastr_collector.collect(years=years)
+        if data.success:
+            result.records = data.records_count
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                await nflfastr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0 or data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_nflfastr_history(years_back: int = 10) -> ImportResult:
+    """Import NFL historical data from nflfastR."""
+    result = ImportResult(source="nflfastr_history")
+    try:
+        from app.services.collectors import nflfastr_collector
+        from app.core.database import db_manager
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await nflfastr_collector.collect(years=years, collect_type="all")
+        if data.success:
             result.records = data.records_count
             await db_manager.initialize()
             async with db_manager.session() as session:
@@ -365,82 +492,88 @@ async def import_nflfastr(sports: List[str] = None) -> ImportResult:
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await nflfastr_collector.close()
-        except:
-            pass
     return result
 
 
-async def import_nflfastr_history(years_back: int = 10) -> ImportResult:
-    """Import historical NFL data from nflfastR (1999-present, FREE)."""
-    result = ImportResult(source="nflfastr_history", success=False)
+async def import_nflfastr_pbp(years_back: int = 3) -> ImportResult:
+    """Import NFL play-by-play data."""
+    result = ImportResult(source="nflfastr_pbp")
+    try:
+        from app.services.collectors import nflfastr_collector
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await nflfastr_collector.collect_pbp(years=years)
+        if data.success:
+            result.records = data.records_count
+        result.success = data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_nflfastr_players() -> ImportResult:
+    """Import NFL players and stats from nflfastR."""
+    result = ImportResult(source="nfl_players")
     try:
         from app.services.collectors import nflfastr_collector
         from app.core.database import db_manager
         
-        data = await nflfastr_collector.collect_historical(
-            years_back=years_back,
-            data_types=["schedules"]
-        )
+        await db_manager.initialize()
+        
+        # Collect player stats
+        current_year = datetime.now().year
+        years = list(range(current_year - 3, current_year + 1))
+        
+        data = await nflfastr_collector.collect(years=years, collect_type="player_stats")
         if data.success and data.data:
-            await db_manager.initialize()
             async with db_manager.session() as session:
-                saved, updated = await nflfastr_collector.save_historical_to_database(
-                    data.data.get("games", []), session
+                saved = await nflfastr_collector.save_players_to_database(
+                    data.data.get("player_stats", []), session
                 )
-                result.records = saved + updated
-        result.success = result.records > 0
+                result.records = saved
+        
+        result.success = result.records >= 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await nflfastr_collector.close()
-        except:
-            pass
     return result
 
-
-async def import_nflfastr_pbp(years: List[int] = None) -> ImportResult:
-    """Import NFL play-by-play data with EPA, WPA, CPOE (large files!)."""
-    result = ImportResult(source="nflfastr_pbp", success=False)
-    try:
-        from app.services.collectors import nflfastr_collector
-        from datetime import datetime
-        
-        if years is None:
-            # Default to 2025 since current year data may not be available
-            years = [2025]
-        
-        data = await nflfastr_collector.collect_pbp(years=years, save_to_disk=True)
-        if data.success:
-            result.records = data.records_count
-        result.success = result.records > 0
-    except Exception as e:
-        result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await nflfastr_collector.close()
-        except:
-            pass
-    return result
-
-
-# =============================================================================
-# CFBFASTR (College Football) IMPORTS
-# =============================================================================
 
 async def import_cfbfastr(sports: List[str] = None) -> ImportResult:
-    """Import NCAAF games/schedules from cfbfastR (FREE - 2004-present)."""
-    result = ImportResult(source="cfbfastr", success=False)
+    """Import NCAAF current season from cfbfastR."""
+    result = ImportResult(source="cfbfastr")
     try:
         from app.services.collectors import cfbfastr_collector
         from app.core.database import db_manager
         
-        # cfbfastR is NCAAF only
-        data = await cfbfastr_collector.collect(sport_code="NCAAF", collect_type="schedules")
-        if data.success and data.data:
+        current_year = datetime.now().year
+        years = [current_year - 1, current_year]
+        
+        data = await cfbfastr_collector.collect(years=years)
+        if data.success:
+            result.records = data.records_count
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                await cfbfastr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0 or data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbfastr_history(years_back: int = 10) -> ImportResult:
+    """Import NCAAF historical data from cfbfastR."""
+    result = ImportResult(source="cfbfastr_history")
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from app.core.database import db_manager
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(years=years, collect_type="all")
+        if data.success:
             result.records = data.records_count
             await db_manager.initialize()
             async with db_manager.session() as session:
@@ -448,156 +581,144 @@ async def import_cfbfastr(sports: List[str] = None) -> ImportResult:
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await cfbfastr_collector.close()
-        except:
-            pass
     return result
 
 
-async def import_cfbfastr_history(years_back: int = 10) -> ImportResult:
-    """Import historical NCAAF data from cfbfastR (2004-present, FREE)."""
-    result = ImportResult(source="cfbfastr_history", success=False)
+async def import_cfbfastr_pbp(years_back: int = 3) -> ImportResult:
+    """Import NCAAF play-by-play data."""
+    result = ImportResult(source="cfbfastr_pbp")
+    try:
+        from app.services.collectors import cfbfastr_collector
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(years=years, collect_type="pbp")
+        if data.success:
+            result.records = data.records_count
+        result.success = data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbfastr_sp(years_back: int = 5) -> ImportResult:
+    """Import NCAAF SP+ ratings."""
+    result = ImportResult(source="cfbfastr_sp")
+    try:
+        from app.services.collectors import cfbfastr_collector
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(years=years, collect_type="sp_ratings")
+        if data.success:
+            result.records = data.records_count
+        result.success = data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbfastr_recruiting(years_back: int = 5) -> ImportResult:
+    """Import NCAAF recruiting data."""
+    result = ImportResult(source="cfbfastr_recruiting")
+    try:
+        from app.services.collectors import cfbfastr_collector
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(years=years, collect_type="recruiting")
+        if data.success:
+            result.records = data.records_count
+        result.success = data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbfastr_players() -> ImportResult:
+    """Import NCAAF players and stats from cfbfastR."""
+    result = ImportResult(source="ncaaf_players")
     try:
         from app.services.collectors import cfbfastr_collector
         from app.core.database import db_manager
-        from datetime import datetime
+        
+        await db_manager.initialize()
         
         current_year = datetime.now().year
-        start_year = max(current_year - years_back, 2004)
+        years = list(range(current_year - 3, current_year + 1))
         
-        data = await cfbfastr_collector.collect_historical(
-            start_year=start_year,
-            end_year=current_year,
-        )
+        data = await cfbfastr_collector.collect(years=years, collect_type="player_stats")
         if data.success and data.data:
-            await db_manager.initialize()
             async with db_manager.session() as session:
-                saved, updated = await cfbfastr_collector.save_historical_to_database(
-                    data.data.get("games", []), session
+                saved = await cfbfastr_collector.save_players_to_database(
+                    data.data.get("player_stats", []), session
                 )
-                result.records = saved + updated
-        result.success = result.records > 0
+                result.records = saved
+        
+        result.success = result.records >= 0
     except Exception as e:
         result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await cfbfastr_collector.close()
-        except:
-            pass
     return result
 
 
-async def import_cfbfastr_pbp(years: List[int] = None) -> ImportResult:
-    """Import NCAAF play-by-play data with EPA (large files!)."""
-    result = ImportResult(source="cfbfastr_pbp", success=False)
-    try:
-        from app.services.collectors import cfbfastr_collector
-        from datetime import datetime
-        
-        if years is None:
-            # Default to current year
-            years = [datetime.now().year]
-        
-        data = await cfbfastr_collector.collect_pbp(years=years, save_to_disk=True)
-        if data.success:
-            result.records = data.records_count
-        result.success = result.records > 0
-    except Exception as e:
-        result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await cfbfastr_collector.close()
-        except:
-            pass
-    return result
-
-
-async def import_cfbfastr_sp(years: List[int] = None) -> ImportResult:
-    """Import SP+ ratings from cfbfastR (Bill Connelly's advanced metrics)."""
-    result = ImportResult(source="cfbfastr_sp", success=False)
-    try:
-        from app.services.collectors import cfbfastr_collector
-        from datetime import datetime
-        
-        if years is None:
-            current_year = datetime.now().year
-            years = list(range(current_year - 4, current_year + 1))
-        
-        data = await cfbfastr_collector.collect(
-            sport_code="NCAAF", 
-            collect_type="sp_ratings",
-            years=years
-        )
-        if data.success:
-            result.records = len(data.data.get("sp_ratings", []))
-        result.success = result.records > 0
-    except Exception as e:
-        result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await cfbfastr_collector.close()
-        except:
-            pass
-    return result
-
-
-async def import_cfbfastr_recruiting(years: List[int] = None) -> ImportResult:
-    """Import recruiting data from cfbfastR."""
-    result = ImportResult(source="cfbfastr_recruiting", success=False)
-    try:
-        from app.services.collectors import cfbfastr_collector
-        from datetime import datetime
-        
-        if years is None:
-            current_year = datetime.now().year
-            years = list(range(current_year - 4, current_year + 1))
-        
-        data = await cfbfastr_collector.collect(
-            sport_code="NCAAF", 
-            collect_type="recruiting",
-            years=years
-        )
-        if data.success:
-            result.records = len(data.data.get("recruiting", []))
-        result.success = result.records > 0
-    except Exception as e:
-        result.errors.append(str(e)[:100])
-    finally:
-        try:
-            await cfbfastr_collector.close()
-        except:
-            pass
-    return result
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
 IMPORT_MAP = {
+    # Current data
     "espn": import_espn,
     "odds_api": import_odds_api,
     "pinnacle": import_pinnacle,
+    "weather": import_weather,
+    "sportsdb": import_sportsdb,
+    "nflfastr": import_nflfastr,
+    "cfbfastr": import_cfbfastr,
+    
+    # Historical data
     "pinnacle_history": import_pinnacle_history,
     "espn_history": import_espn_history,
     "odds_api_history": import_odds_api_history,
-    "weather": import_weather,
-    "sportsdb": import_sportsdb,
     "sportsdb_history": import_sportsdb_history,
-    "sportsdb_live": import_sportsdb_livescores,
-    "nflfastr": import_nflfastr,
     "nflfastr_history": import_nflfastr_history,
-    "nflfastr_pbp": import_nflfastr_pbp,
-    # College Football (cfbfastR)
-    "cfbfastr": import_cfbfastr,
     "cfbfastr_history": import_cfbfastr_history,
+    
+    # Specialized data
+    "injuries": import_espn_injuries,
+    "players": import_espn_players,
+    "nfl_players": import_nflfastr_players,
+    "ncaaf_players": import_cfbfastr_players,
+    "venues": import_sportsdb_venues,
+    "closing_lines": import_pinnacle_closing_lines,
+    
+    # Live data
+    "sportsdb_live": import_sportsdb_livescores,
+    
+    # Play-by-play
+    "nflfastr_pbp": import_nflfastr_pbp,
     "cfbfastr_pbp": import_cfbfastr_pbp,
     "cfbfastr_sp": import_cfbfastr_sp,
     "cfbfastr_recruiting": import_cfbfastr_recruiting,
 }
 
+# Source groups
 CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr"]
 HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history"]
-ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines"]
+
+# Full ML training data - everything needed
+FULL_ML_SOURCES = (
+    HISTORICAL_SOURCES + 
+    CURRENT_SOURCES + 
+    PLAYER_SOURCES + 
+    SPECIALIZED_SOURCES
+)
+
+ALL_SOURCES = list(IMPORT_MAP.keys())
 
 
 # =============================================================================
@@ -628,28 +749,21 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             continue
         
         try:
+            # Call with appropriate parameters based on source
             if source == "pinnacle_history":
                 result = await func(sports=sports, pages=pages)
-            elif source == "espn_history":
-                result = await func(sports=sports, days=days)
-            elif source == "odds_api_history":
+            elif source in ["espn_history", "odds_api_history"]:
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source == "sportsdb_live":
-                result = await func()
-            elif source == "nflfastr_history":
+            elif source in ["nflfastr_history", "cfbfastr_history"]:
                 result = await func(years_back=seasons)
-            elif source == "nflfastr_pbp":
+            elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
+                           "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
+                           "nfl_players", "ncaaf_players"]:
                 result = await func()
-            elif source == "cfbfastr_history":
-                result = await func(years_back=seasons)
-            elif source == "cfbfastr_pbp":
-                result = await func()
-            elif source == "cfbfastr_sp":
-                result = await func()
-            elif source == "cfbfastr_recruiting":
-                result = await func()
+            elif source == "weather":
+                result = await func(sports=sports, days=7)
             else:
                 result = await func(sports=sports)
             
@@ -701,42 +815,61 @@ async def daemon_mode(interval: int, sources: List[str], sports: List[str]):
 
 def show_status():
     """Show status of all data collectors."""
-    console.print("\n[bold]ROYALEY DATA COLLECTORS[/bold]")
-    console.print("=" * 50)
-    console.print("\n[green]✅ CURRENT DATA:[/green]")
-    console.print("  • ESPN          - Games/scores (FREE)")
-    console.print("  • OddsAPI       - 40+ books ($59/mo)")
-    console.print("  • Pinnacle      - CLV lines ($10/mo)")
-    console.print("  • Weather       - OpenWeatherMap (FREE)")
-    console.print("  • SportsDB      - Games/scores/livescores ($295/mo)")
-    console.print("  • nflfastr      - NFL schedules/results (FREE)")
-    console.print("  • cfbfastr      - NCAAF schedules/results (FREE)")
-    console.print("\n[green]✅ HISTORICAL DATA:[/green]")
-    console.print("  • pinnacle_history  - Game results (~100/page)")
-    console.print("  • espn_history      - Historical games (FREE)")
-    console.print("  • odds_api_history  - Historical odds ($119/mo)")
-    console.print("  • sportsdb_history  - Historical by season ($295/mo)")
-    console.print("  • nflfastr_history  - NFL 1999-present (FREE)")
-    console.print("  • cfbfastr_history  - NCAAF 2004-present (FREE)")
-    console.print("\n[cyan]⚡ ADVANCED NFL DATA:[/cyan]")
-    console.print("  • nflfastr_pbp      - Play-by-play + EPA/WPA/CPOE (FREE)")
-    console.print("\n[cyan]⚡ ADVANCED NCAAF DATA:[/cyan]")
-    console.print("  • cfbfastr_pbp      - Play-by-play + EPA (FREE)")
-    console.print("  • cfbfastr_sp       - SP+ ratings (FREE)")
-    console.print("  • cfbfastr_recruiting - Recruiting rankings (FREE)")
+    console.print("\n[bold]ROYALEY DATA COLLECTORS - ENHANCED[/bold]")
+    console.print("=" * 60)
+    
+    console.print("\n[green]✅ CURRENT DATA (--current):[/green]")
+    console.print("  • espn          → games, teams")
+    console.print("  • odds_api      → odds, sportsbooks")
+    console.print("  • pinnacle      → odds, odds_movements, closing_lines")
+    console.print("  • weather       → weather_data")
+    console.print("  • sportsdb      → games, teams")
+    console.print("  • nflfastr      → games, teams (NFL)")
+    console.print("  • cfbfastr      → games, teams (NCAAF)")
+    
+    console.print("\n[green]✅ HISTORICAL DATA (--historical):[/green]")
+    console.print("  • pinnacle_history  → games (archived)")
+    console.print("  • espn_history      → games (past N days)")
+    console.print("  • odds_api_history  → odds (past N days)")
+    console.print("  • sportsdb_history  → games (past N seasons)")
+    console.print("  • nflfastr_history  → games (1999-present)")
+    console.print("  • cfbfastr_history  → games (2002-present)")
+    
+    console.print("\n[cyan]⚡ SPECIALIZED DATA:[/cyan]")
+    console.print("  • injuries      → injuries (from ESPN)")
+    console.print("  • players       → players (from ESPN)")
+    console.print("  • nfl_players   → players, player_stats (from nflfastR)")
+    console.print("  • ncaaf_players → players, player_stats (from cfbfastR)")
+    console.print("  • venues        → venues (from TheSportsDB)")
+    console.print("  • closing_lines → closing_lines (from Pinnacle)")
+    
+    console.print("\n[cyan]⚡ PLAY-BY-PLAY:[/cyan]")
+    console.print("  • nflfastr_pbp      → PBP + EPA/WPA/CPOE")
+    console.print("  • cfbfastr_pbp      → PBP + EPA")
+    console.print("  • cfbfastr_sp       → SP+ ratings")
+    console.print("  • cfbfastr_recruiting → Recruiting rankings")
+    
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
-    console.print("  • sportsdb_live     - Real-time scores ($295/mo)")
-    console.print("\n[yellow]⏳ PENDING:[/yellow]")
-    console.print("  • Basketball-Ref - NBA stats")
-    console.print("  • Hockey-Ref    - NHL stats")
-    console.print("  • Statcast      - MLB pitch data")
+    console.print("  • sportsdb_live     → Real-time scores")
+    
+    console.print("\n[bold yellow]🚀 FULL ML TRAINING (--full):[/bold yellow]")
+    console.print("  Imports ALL data needed for ML model training:")
+    console.print("  → Historical games, odds, players, injuries, venues, weather")
+    console.print("  → Closing lines for CLV calculation")
+    console.print("  → Player/team stats for feature engineering")
+    
+    console.print("\n[bold]TABLES FILLED:[/bold]")
+    console.print("  games, teams, sports, odds, sportsbooks, odds_movements,")
+    console.print("  closing_lines, weather_data, injuries, players, player_stats,")
+    console.print("  team_stats, venues")
 
 
 def main():
     parser = argparse.ArgumentParser(description="ROYALEY Master Data Import")
     
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--all", action="store_true", help="All data")
+    mode.add_argument("--full", action="store_true", help="ALL data for ML training")
+    mode.add_argument("--all", action="store_true", help="All sources")
     mode.add_argument("--current", action="store_true", help="Current only (default)")
     mode.add_argument("--historical", action="store_true", help="Historical only")
     mode.add_argument("--daemon", action="store_true", help="Run continuously")
@@ -745,9 +878,9 @@ def main():
     parser.add_argument("--source", "-s", help="Specific source")
     parser.add_argument("--sport", help="Specific sport")
     parser.add_argument("--sports", help="Comma-separated sports")
-    parser.add_argument("--pages", "-p", type=int, default=50, help="Pinnacle history pages (100 events/page)")
-    parser.add_argument("--days", "-d", type=int, default=30, help="Days back for ESPN/OddsAPI history")
-    parser.add_argument("--seasons", type=int, default=10, help="Seasons back for SportsDB history (default: 10)")
+    parser.add_argument("--pages", "-p", type=int, default=50, help="Pinnacle history pages")
+    parser.add_argument("--days", "-d", type=int, default=30, help="Days back for history")
+    parser.add_argument("--seasons", type=int, default=10, help="Seasons back (default: 10)")
     parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval (min)")
     
     args = parser.parse_args()
@@ -759,6 +892,8 @@ def main():
     # Determine sources
     if args.source:
         sources = [args.source]
+    elif args.full:
+        sources = FULL_ML_SOURCES
     elif args.all:
         sources = ALL_SOURCES
     elif args.historical:

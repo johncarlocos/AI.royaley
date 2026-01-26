@@ -34,7 +34,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import Sport, Team, Game, GameStatus
+from app.models import Sport, Team, Game, GameStatus, Player, PlayerStats, TeamStats
 from app.services.collectors.base_collector import (
     BaseCollector,
     CollectorResult,
@@ -1032,6 +1032,236 @@ class NFLFastRCollector(BaseCollector):
         if not isinstance(data, dict):
             return False
         return True
+    
+    # =========================================================================
+    # PLAYERS & STATS SAVING
+    # =========================================================================
+    
+    async def save_players_to_database(
+        self,
+        player_stats_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """
+        Save players and their stats to database.
+        
+        nflfastR player_stats includes:
+        - player_id, player_name, player_display_name
+        - position, position_group
+        - team (abbreviation)
+        - Various stats: completions, passing_yards, rushing_yards, etc.
+        """
+        from app.models import Player, PlayerStats, Team, Sport
+        from collections import defaultdict
+        
+        saved_players = 0
+        saved_stats = 0
+        
+        try:
+            # Get NFL sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == "NFL")
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                logger.error("[nflfastR] NFL sport not found")
+                return 0
+            
+            # Track unique players we've processed
+            processed_players = set()
+            
+            for stat_row in player_stats_data:
+                try:
+                    player_id = stat_row.get("player_id") or stat_row.get("gsis_id")
+                    if not player_id or player_id in processed_players:
+                        continue
+                    
+                    processed_players.add(player_id)
+                    external_id = f"nfl_{player_id}"
+                    
+                    # Get player name
+                    player_name = (
+                        stat_row.get("player_display_name") or 
+                        stat_row.get("player_name") or
+                        stat_row.get("athlete_name") or
+                        "Unknown"
+                    )
+                    
+                    # Get team
+                    team_abbr = stat_row.get("recent_team") or stat_row.get("team")
+                    team = None
+                    if team_abbr:
+                        team_result = await session.execute(
+                            select(Team).where(
+                                and_(
+                                    Team.sport_id == sport.id,
+                                    Team.abbreviation == team_abbr
+                                )
+                            )
+                        )
+                        team = team_result.scalar_one_or_none()
+                    
+                    # Check if player exists
+                    existing = await session.execute(
+                        select(Player).where(Player.external_id == external_id)
+                    )
+                    player = existing.scalar_one_or_none()
+                    
+                    if player:
+                        # Update
+                        player.name = player_name
+                        player.position = stat_row.get("position") or stat_row.get("position_group")
+                        if team:
+                            player.team_id = team.id
+                        player.is_active = True
+                    else:
+                        # Create new player
+                        player = Player(
+                            external_id=external_id,
+                            name=player_name,
+                            position=stat_row.get("position") or stat_row.get("position_group"),
+                            team_id=team.id if team else None,
+                            is_active=True,
+                        )
+                        session.add(player)
+                        await session.flush()  # Get player.id
+                        saved_players += 1
+                    
+                    # Save individual stats
+                    stat_types = [
+                        "completions", "attempts", "passing_yards", "passing_tds", 
+                        "interceptions", "sacks", "sack_yards", "sack_fumbles",
+                        "rushing_yards", "rushing_tds", "rushing_fumbles",
+                        "receptions", "targets", "receiving_yards", "receiving_tds",
+                        "fantasy_points", "fantasy_points_ppr"
+                    ]
+                    
+                    for stat_type in stat_types:
+                        value = stat_row.get(stat_type)
+                        if value is not None:
+                            try:
+                                # Skip NaN values
+                                if pd.isna(value):
+                                    continue
+                                stat_record = PlayerStats(
+                                    player_id=player.id,
+                                    stat_type=stat_type,
+                                    value=float(value),
+                                )
+                                session.add(stat_record)
+                                saved_stats += 1
+                            except:
+                                pass
+                            
+                except Exception as e:
+                    logger.debug(f"[nflfastR] Error saving player: {e}")
+                    continue
+            
+            await session.commit()
+            logger.info(f"[nflfastR] Saved {saved_players} players, {saved_stats} stats")
+            
+        except Exception as e:
+            logger.error(f"[nflfastR] Error saving players: {e}")
+        
+        return saved_players
+    
+    async def save_team_stats_to_database(
+        self,
+        team_stats_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """Save team aggregate statistics to database."""
+        from app.models import Team, TeamStats, Sport
+        from collections import defaultdict
+        
+        saved_count = 0
+        
+        try:
+            # Get NFL sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == "NFL")
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                return 0
+            
+            # Aggregate stats by team
+            team_aggregates = defaultdict(lambda: defaultdict(float))
+            team_games = defaultdict(int)
+            
+            for stat_row in team_stats_data:
+                team_abbr = stat_row.get("recent_team") or stat_row.get("team")
+                if not team_abbr:
+                    continue
+                
+                # Aggregate various stats
+                for stat_type in ["passing_yards", "rushing_yards", "receiving_yards", "points"]:
+                    value = stat_row.get(stat_type)
+                    if value is not None:
+                        try:
+                            if not pd.isna(value):
+                                team_aggregates[team_abbr][stat_type] += float(value)
+                        except:
+                            pass
+                
+                team_games[team_abbr] += 1
+            
+            # Save team stats
+            for team_abbr, stats in team_aggregates.items():
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            Team.abbreviation == team_abbr
+                        )
+                    )
+                )
+                team = team_result.scalar_one_or_none()
+                
+                if not team:
+                    continue
+                
+                games_played = team_games.get(team_abbr, 1)
+                
+                for stat_type, total_value in stats.items():
+                    try:
+                        # Check if exists
+                        existing = await session.execute(
+                            select(TeamStats).where(
+                                and_(
+                                    TeamStats.team_id == team.id,
+                                    TeamStats.stat_type == stat_type,
+                                )
+                            )
+                        )
+                        team_stat = existing.scalar_one_or_none()
+                        
+                        if team_stat:
+                            team_stat.value = total_value
+                            team_stat.games_played = games_played
+                            team_stat.computed_at = datetime.utcnow()
+                        else:
+                            team_stat = TeamStats(
+                                team_id=team.id,
+                                stat_type=stat_type,
+                                value=total_value,
+                                games_played=games_played,
+                            )
+                            session.add(team_stat)
+                            saved_count += 1
+                            
+                    except Exception as e:
+                        logger.debug(f"[nflfastR] Error saving team stat: {e}")
+            
+            await session.commit()
+            logger.info(f"[nflfastR] Saved {saved_count} team stats")
+            
+        except Exception as e:
+            logger.error(f"[nflfastR] Error saving team stats: {e}")
+        
+        return saved_count
 
 
 # =============================================================================

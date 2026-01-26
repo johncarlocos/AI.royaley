@@ -995,6 +995,207 @@ class PinnacleCollector(BaseCollector):
         return saved, updated
 
 
+    # =========================================================================
+    # LINE MOVEMENT TRACKING
+    # =========================================================================
+    
+    async def track_line_movements(
+        self,
+        odds_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """
+        Track line movements by comparing current odds to previous odds.
+        
+        Detects:
+        - Steam moves (sharp money causing rapid line movement)
+        - Reverse line movement (line moves opposite to public betting)
+        """
+        movements_saved = 0
+        
+        if not odds_data:
+            return 0
+        
+        for odds_record in odds_data:
+            try:
+                external_id = odds_record.get("external_id")
+                if not external_id:
+                    continue
+                
+                # Get game
+                game_result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                game = game_result.scalar_one_or_none()
+                
+                if not game:
+                    continue
+                
+                # Get previous odds for this game (from last hour)
+                one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+                
+                prev_result = await session.execute(
+                    select(Odds).where(
+                        and_(
+                            Odds.game_id == game.id,
+                            Odds.created_at < one_hour_ago,
+                        )
+                    ).order_by(Odds.created_at.desc()).limit(1)
+                )
+                prev_odds = prev_result.scalar_one_or_none()
+                
+                if not prev_odds:
+                    continue
+                
+                bet_type = odds_record.get("bet_type")
+                
+                # Check spread movement
+                if bet_type == "spread":
+                    current_spread = odds_record.get("home_line")
+                    prev_spread = prev_odds.spread_home
+                    
+                    if current_spread is not None and prev_spread is not None:
+                        movement = current_spread - prev_spread
+                        
+                        if abs(movement) >= 0.5:  # Significant movement
+                            is_steam = abs(movement) >= 1.0
+                            
+                            movement_record = OddsMovement(
+                                game_id=game.id,
+                                bet_type="spread",
+                                previous_line=prev_spread,
+                                current_line=current_spread,
+                                movement=movement,
+                                is_steam=is_steam,
+                                is_reverse=False,
+                                detected_at=datetime.utcnow(),
+                            )
+                            session.add(movement_record)
+                            movements_saved += 1
+                
+                # Check total movement
+                if bet_type == "total":
+                    current_total = odds_record.get("total")
+                    prev_total = prev_odds.total
+                    
+                    if current_total is not None and prev_total is not None:
+                        movement = current_total - prev_total
+                        
+                        if abs(movement) >= 0.5:
+                            is_steam = abs(movement) >= 1.0
+                            
+                            movement_record = OddsMovement(
+                                game_id=game.id,
+                                bet_type="total",
+                                previous_line=prev_total,
+                                current_line=current_total,
+                                movement=movement,
+                                is_steam=is_steam,
+                                is_reverse=False,
+                                detected_at=datetime.utcnow(),
+                            )
+                            session.add(movement_record)
+                            movements_saved += 1
+                        
+            except Exception as e:
+                logger.debug(f"[Pinnacle] Error tracking movement: {e}")
+                continue
+        
+        if movements_saved > 0:
+            await session.commit()
+            logger.info(f"[Pinnacle] Recorded {movements_saved} line movements")
+        
+        return movements_saved
+    
+    async def capture_closing_lines(
+        self,
+        sport_code: str,
+        session: AsyncSession
+    ) -> int:
+        """
+        Capture closing lines for games that have started or completed.
+        
+        This should run periodically to capture the final lines before game start.
+        Closing lines are the benchmark for CLV (Closing Line Value) calculation.
+        """
+        saved_count = 0
+        
+        try:
+            # Get sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == sport_code)
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                return 0
+            
+            # Find games that started in last 2 hours without closing lines
+            two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+            now = datetime.utcnow()
+            
+            games_result = await session.execute(
+                select(Game).where(
+                    and_(
+                        Game.sport_id == sport.id,
+                        Game.scheduled_at >= two_hours_ago,
+                        Game.scheduled_at <= now,
+                    )
+                )
+            )
+            games = games_result.scalars().all()
+            
+            for game in games:
+                try:
+                    # Check if closing line already exists
+                    existing = await session.execute(
+                        select(ClosingLine).where(ClosingLine.game_id == game.id)
+                    )
+                    if existing.scalar_one_or_none():
+                        continue
+                    
+                    # Get most recent Pinnacle odds before game start
+                    odds_result = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.created_at < game.scheduled_at,
+                            )
+                        ).order_by(Odds.created_at.desc()).limit(1)
+                    )
+                    final_odds = odds_result.scalar_one_or_none()
+                    
+                    if not final_odds:
+                        continue
+                    
+                    # Create closing line record
+                    closing_line = ClosingLine(
+                        game_id=game.id,
+                        spread_home=final_odds.spread_home,
+                        spread_away=final_odds.spread_away,
+                        total=final_odds.total,
+                        moneyline_home=final_odds.ml_home,
+                        moneyline_away=final_odds.ml_away,
+                        source="pinnacle",
+                        recorded_at=final_odds.created_at,
+                    )
+                    session.add(closing_line)
+                    saved_count += 1
+                    
+                except Exception as e:
+                    logger.debug(f"[Pinnacle] Error capturing closing line for game {game.id}: {e}")
+                    continue
+            
+            if saved_count > 0:
+                await session.commit()
+                logger.info(f"[Pinnacle] Captured {saved_count} closing lines for {sport_code}")
+                
+        except Exception as e:
+            logger.error(f"[Pinnacle] Error capturing closing lines: {e}")
+        
+        return saved_count
+
+
 # Create and register collector instance
 pinnacle_collector = PinnacleCollector()
 collector_manager.register(pinnacle_collector)

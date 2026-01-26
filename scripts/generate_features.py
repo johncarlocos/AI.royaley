@@ -181,6 +181,9 @@ class FeatureGenerator:
             ) as progress:
                 task = progress.add_task(f"Processing {sport.code}", total=len(games))
                 
+                batch_count = 0
+                BATCH_SIZE = 50  # Commit every 50 games
+                
                 for game in games:
                     try:
                         features = await self._compute_game_features(
@@ -202,15 +205,36 @@ class FeatureGenerator:
                                 await self._update_elo_after_game(game, sport.code)
                         
                         stats.games_processed += 1
+                        batch_count += 1
+                        
+                        # Commit in batches to prevent transaction buildup
+                        if batch_count >= BATCH_SIZE:
+                            try:
+                                await session.commit()
+                                batch_count = 0
+                            except Exception as e:
+                                logger.warning(f"Batch commit error: {e}")
+                                await session.rollback()
+                                batch_count = 0
                         
                     except Exception as e:
                         logger.warning(f"Error processing game {game.id}: {e}")
                         stats.errors += 1
+                        # CRITICAL: Rollback the failed transaction to continue processing
+                        try:
+                            await session.rollback()
+                            batch_count = 0
+                        except:
+                            pass
                     
                     progress.advance(task)
             
-            # Commit changes
-            await session.commit()
+            # Commit any remaining changes
+            try:
+                await session.commit()
+            except Exception as e:
+                logger.warning(f"Final commit error: {e}")
+                await session.rollback()
             
             # Save ELO ratings back to teams
             await self._save_elo_ratings(session, sport.code)
@@ -239,11 +263,19 @@ class FeatureGenerator:
         features = {}
         
         try:
-            # Get teams
-            home_team = await session.get(Team, game.home_team_id)
-            away_team = await session.get(Team, game.away_team_id)
+            # Get teams using query (more robust than session.get)
+            home_result = await session.execute(
+                select(Team).where(Team.id == game.home_team_id)
+            )
+            home_team = home_result.scalar_one_or_none()
+            
+            away_result = await session.execute(
+                select(Team).where(Team.id == game.away_team_id)
+            )
+            away_team = away_result.scalar_one_or_none()
             
             if not home_team or not away_team:
+                logger.debug(f"Missing team for game {game.id}: home={home_team is not None}, away={away_team is not None}")
                 return None
             
             # 1. ELO Features
@@ -778,16 +810,24 @@ class FeatureGenerator:
         if sport_code not in self.elo_ratings:
             return
         
+        from uuid import UUID
+        
         for team_id, rating in self.elo_ratings[sport_code].items():
             try:
-                from uuid import UUID
-                team = await session.get(Team, UUID(team_id))
+                result = await session.execute(
+                    select(Team).where(Team.id == UUID(team_id))
+                )
+                team = result.scalar_one_or_none()
                 if team:
                     team.elo_rating = rating
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error saving ELO for team {team_id}: {e}")
         
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.warning(f"Error committing ELO ratings: {e}")
+            await session.rollback()
     
     async def _save_game_features(
         self,

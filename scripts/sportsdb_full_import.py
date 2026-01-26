@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-SportsDB Full Import - Populates ALL tables from TheSportsDB
+SportsDB Full Import - FIXED VERSION with Player Debugging
 Run: docker exec royaley_api python scripts/sportsdb_full_import.py
 
 Tables populated:
 1. teams - All team rosters
 2. venues - Stadiums/arenas  
-3. players - Player rosters
+3. players - Player rosters (FIXED)
 4. games - Historical (10yr) + Upcoming + Past results
 
 Order matters:
 - Teams must exist before games can reference them
 - Sport records must exist (already in DB)
+
+FIXES:
+- Better player response parsing (handles both "player" and "players" keys)
+- Detailed logging to identify API response structure
+- Skip tennis sports for player import (individual sports)
 """
 
 import asyncio
@@ -26,7 +31,7 @@ TEAM_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA"]
 
 async def main():
     print("=" * 60)
-    print("SPORTSDB FULL DATABASE IMPORT")
+    print("SPORTSDB FULL DATABASE IMPORT - FIXED VERSION")
     print("=" * 60)
     print(f"Started: {datetime.now()}")
     print(f"Sports: {', '.join(TEAM_SPORTS)}")
@@ -91,24 +96,38 @@ async def main():
     print(f"\n📊 Total venues: {totals['venues']}")
     
     # ============================================
-    # STEP 3: PLAYERS
+    # STEP 3: PLAYERS (FIXED)
     # ============================================
     print("\n" + "=" * 40)
-    print("STEP 3: IMPORTING PLAYERS")
+    print("STEP 3: IMPORTING PLAYERS (FIXED VERSION)")
     print("=" * 40)
+    print("Note: This will show API response keys for debugging")
+    print()
     
     for sport in TEAM_SPORTS:
         try:
+            print(f"\n--- {sport} ---")
             players_data = await sportsdb_collector.collect_players(sport_code=sport)
-            if players_data and players_data.get("players"):
+            
+            player_count = players_data.get("count", 0) if players_data else 0
+            players_list = players_data.get("players", []) if players_data else []
+            
+            print(f"[DEBUG] {sport}: collect_players returned {player_count} players")
+            
+            if players_list:
                 async with db_manager.session() as session:
                     saved = await sportsdb_collector.save_players_to_database(
-                        players_data["players"], session
+                        players_list, session
                     )
                     totals["players"] += saved
-                    print(f"✅ {sport}: {saved} players")
+                    print(f"✅ {sport}: {saved} players saved to database")
+            else:
+                print(f"⚠️ {sport}: No players to save")
+                
         except Exception as e:
+            import traceback
             print(f"❌ {sport}: {str(e)[:80]}")
+            traceback.print_exc()
     
     print(f"\n📊 Total players: {totals['players']}")
     
@@ -198,6 +217,19 @@ async def main():
                 ORDER BY s.code
             """))
             print("\nTeams per sport:")
+            for row in result:
+                print(f"  {row[0]}: {row[1]}")
+            
+            # Count players per sport (via team)
+            result = await session.execute(text("""
+                SELECT s.code, COUNT(p.id) as count 
+                FROM sports s 
+                LEFT JOIN teams t ON t.sport_id = s.id 
+                LEFT JOIN players p ON p.team_id = t.id
+                GROUP BY s.code 
+                ORDER BY s.code
+            """))
+            print("\nPlayers per sport:")
             for row in result:
                 print(f"  {row[0]}: {row[1]}")
             

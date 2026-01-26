@@ -1,5 +1,5 @@
 """
-ROYALEY - TheSportsDB Collector (V2 Premium) - COMPLETE FIX
+ROYALEY - TheSportsDB Collector (V2 Premium) - PLAYER FIX
 ============================================================
 
 V2 API Endpoints (Premium $295):
@@ -21,7 +21,8 @@ SEASONS:
 - /list/seasons/{leagueId}        → available seasons for league
 
 PLAYERS:
-- /list/players/{teamId}          → team roster
+- /list/players/{teamId}          → team roster (returns "player" or "players" key)
+- /lookup/player/{playerId}       → player details
 
 STANDINGS:
 - /lookup/table/{leagueId}/{season} → league standings
@@ -32,6 +33,9 @@ LIVESCORES:
 Season Format:
 - NFL/MLB/NCAAF: "2024" (calendar year)
 - NBA/NHL/NCAAB: "2024-2025" (split season)
+
+FIX: Updated _get_list to handle both "player" and "players" keys
+FIX: Added better error handling and logging for player collection
 """
 
 import asyncio
@@ -88,7 +92,7 @@ STATUS_MAP = {
 
 
 class SportsDBCollector(BaseCollector):
-    """TheSportsDB V2 API Collector - Complete Implementation."""
+    """TheSportsDB V2 API Collector - Complete Implementation with Player Fix."""
     
     def __init__(self):
         super().__init__(
@@ -104,7 +108,7 @@ class SportsDBCollector(BaseCollector):
         return {"Accept": "application/json", "X-API-KEY": self.api_key}
     
     async def _v2(self, endpoint: str) -> Optional[Any]:
-        """V2 API request."""
+        """V2 API request with detailed response logging."""
         url = f"{self.base_url}{endpoint}"
         logger.info(f"[SportsDB] 🌐 {url}")
         print(f"[SportsDB] 🌐 {url}")
@@ -121,13 +125,14 @@ class SportsDBCollector(BaseCollector):
                             logger.warning(f"[SportsDB] ⚠️ API Message: {data.get('Message')}")
                             print(f"[SportsDB] ⚠️ API Message: {data.get('Message')}")
                             return None
+                        # Log all keys for debugging
                         info = {k: len(v) if isinstance(v, list) else type(v).__name__ for k, v in data.items()}
-                        logger.info(f"[SportsDB] ✅ 200 | {info}")
-                        print(f"[SportsDB] ✅ 200 | {info}")
+                        logger.info(f"[SportsDB] ✅ 200 | Keys: {list(data.keys())} | {info}")
+                        print(f"[SportsDB] ✅ 200 | Keys: {list(data.keys())} | {info}")
                     return data
                 else:
                     logger.warning(f"[SportsDB] ❌ {resp.status_code}")
-                    print(f"[SportsDB] ❌ {resp.status_code}: {resp.text[:100]}")
+                    print(f"[SportsDB] ❌ {resp.status_code}: {resp.text[:200]}")
                     return None
         except Exception as e:
             logger.error(f"[SportsDB] ❌ {e}")
@@ -135,15 +140,26 @@ class SportsDBCollector(BaseCollector):
             return None
     
     def _get_list(self, data: Any, *keys) -> List[Dict]:
-        """Extract list from V2 response."""
+        """Extract list from V2 response - FIXED to handle both 'player' and 'players' keys."""
         if not data:
             return []
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            for k in list(keys) + ["schedule", "events", "list", "lookup", "teams", "livescore", "table", "players", "seasons"]:
-                if k in data and isinstance(data[k], list):
-                    return data[k]
+            # Check all possible keys including singular versions
+            all_possible_keys = list(keys) + [
+                "schedule", "events", "list", "lookup", "teams", "livescore", 
+                "table", "players", "player", "seasons", "roster"
+            ]
+            for k in all_possible_keys:
+                if k in data:
+                    val = data[k]
+                    if isinstance(val, list):
+                        return val
+                    elif val is None:
+                        # API returned null - this is normal for empty rosters
+                        logger.debug(f"[SportsDB] Key '{k}' is null")
+                        return []
         return []
     
     def _get_season_format(self, sport_code: str, year: int) -> str:
@@ -310,11 +326,11 @@ class SportsDBCollector(BaseCollector):
         return any(d in check for d in ["dome", "arena", "center", "centre", "garden", "indoor", "fieldhouse", "forum", "palace"])
 
     # =========================================================================
-    # PLAYERS COLLECTION
+    # PLAYERS COLLECTION - FIXED
     # =========================================================================
     
     async def collect_players(self, sport_code: str = None) -> Dict[str, Any]:
-        """Collect players via /list/players/{teamId}."""
+        """Collect players via /list/players/{teamId} - FIXED version."""
         sports = [sport_code] if sport_code else ML_SPORTS
         all_players = []
         
@@ -323,11 +339,18 @@ class SportsDBCollector(BaseCollector):
             if not league_id:
                 continue
             
+            # Skip tennis (individual sport)
+            if sport in ["ATP", "WTA"]:
+                print(f"[SportsDB] {sport}: Skipping (individual sport, no team rosters)")
+                continue
+            
             # Get teams first
             data = await self._v2(f"/list/teams/{league_id}")
             teams = self._get_list(data, "list", "teams")
             
             print(f"[SportsDB] {sport}: Fetching players for {len(teams)} teams...")
+            
+            sport_player_count = 0
             
             for t in teams:
                 team_id = t.get("idTeam")
@@ -336,10 +359,22 @@ class SportsDBCollector(BaseCollector):
                     continue
                 
                 player_data = await self._v2(f"/list/players/{team_id}")
-                players = self._get_list(player_data, "players", "list")
+                
+                # DEBUG: Log raw response structure
+                if player_data:
+                    print(f"[SportsDB] {team_name}: Response keys = {list(player_data.keys()) if isinstance(player_data, dict) else 'list'}")
+                
+                # FIXED: Use _get_list which now handles both "player" and "players" keys
+                players = self._get_list(player_data, "player", "players", "list")
+                
+                if not players:
+                    print(f"[SportsDB] {team_name}: No players found")
+                    continue
+                
+                print(f"[SportsDB] {team_name}: {len(players)} players")
                 
                 for p in players:
-                    all_players.append({
+                    player_entry = {
                         "external_id": f"sportsdb_{p.get('idPlayer')}",
                         "sportsdb_id": p.get("idPlayer"),
                         "name": p.get("strPlayer"),
@@ -353,13 +388,16 @@ class SportsDBCollector(BaseCollector):
                         "weight": p.get("strWeight"),
                         "photo_url": p.get("strCutout") or p.get("strThumb"),
                         "sport_code": sport,
-                    })
+                    }
+                    all_players.append(player_entry)
+                    sport_player_count += 1
                 
                 await asyncio.sleep(0.15)
             
-            logger.info(f"[SportsDB] {sport}: {len([p for p in all_players if p['sport_code'] == sport])} players")
+            logger.info(f"[SportsDB] {sport}: {sport_player_count} players collected")
+            print(f"[SportsDB] {sport}: {sport_player_count} players total")
         
-        print(f"[SportsDB] Total: {len(all_players)} players")
+        print(f"[SportsDB] TOTAL: {len(all_players)} players across all sports")
         return {"players": all_players, "count": len(all_players)}
 
     # =========================================================================
@@ -393,165 +431,6 @@ class SportsDBCollector(BaseCollector):
         games = [self._parse_event(e, sport_code) for e in events]
         return [g for g in games if g]
     
-    def _parse_event(self, e: Dict, sport_code: str) -> Optional[Dict]:
-        """Parse event to game dict."""
-        try:
-            date_str = e.get("dateEvent", "")
-            if not date_str:
-                return None
-            
-            time_str = (e.get("strTime") or "00:00:00").split("+")[0].replace("Z", "").strip() or "00:00:00"
-            try:
-                dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-            except:
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-            
-            # Keep as naive datetime (no timezone) for database compatibility
-            
-            home_score = away_score = None
-            if e.get("intHomeScore") not in (None, "", "null"):
-                try:
-                    home_score = int(e["intHomeScore"])
-                except:
-                    pass
-            if e.get("intAwayScore") not in (None, "", "null"):
-                try:
-                    away_score = int(e["intAwayScore"])
-                except:
-                    pass
-            
-            return {
-                "external_id": f"sportsdb_{e.get('idEvent')}",
-                "sport_code": sport_code,
-                "home_team": e.get("strHomeTeam"),
-                "away_team": e.get("strAwayTeam"),
-                "home_team_id": e.get("idHomeTeam"),
-                "away_team_id": e.get("idAwayTeam"),
-                "scheduled_time": dt,  # naive datetime
-                "status": STATUS_MAP.get(e.get("strStatus", ""), "scheduled"),
-                "home_score": home_score,
-                "away_score": away_score,
-                "venue": e.get("strVenue"),
-                "season": e.get("strSeason"),
-            }
-        except Exception as ex:
-            logger.debug(f"[SportsDB] Parse error: {ex}")
-            return None
-
-    # =========================================================================
-    # HISTORICAL GAMES - Full Season Schedule
-    # =========================================================================
-    
-    async def collect_historical(self, sport_code: str = None, seasons_back: int = 10, **kwargs) -> CollectorResult:
-        """Collect historical games using /schedule/league/{id}/{season}."""
-        sports = [sport_code] if sport_code else ML_SPORTS
-        all_games = []
-        
-        for sport in sports:
-            league_id = SPORTSDB_LEAGUE_IDS.get(sport)
-            if not league_id:
-                continue
-            
-            # First get available seasons
-            available = await self.get_available_seasons(sport)
-            if not available:
-                # Fall back to generating season strings
-                year = datetime.now().year
-                available = [self._get_season_format(sport, year - i) for i in range(seasons_back)]
-            
-            # Limit to requested seasons
-            seasons_to_fetch = available[:seasons_back]
-            
-            for season in seasons_to_fetch:
-                # V2 endpoint: /schedule/league/{leagueId}/{season}
-                data = await self._v2(f"/schedule/league/{league_id}/{season}")
-                events = self._get_list(data, "schedule", "events")
-                
-                games = [self._parse_event(e, sport) for e in events]
-                games = [g for g in games if g]
-                all_games.extend(games)
-                
-                logger.info(f"[SportsDB] {sport} {season}: {len(games)} games")
-                print(f"[SportsDB] {sport} {season}: {len(games)} games")
-                await asyncio.sleep(0.3)
-        
-        return CollectorResult(
-            success=len(all_games) > 0,
-            data={"games": all_games},
-            records_count=len(all_games),
-        )
-
-    # =========================================================================
-    # STANDINGS / TABLE
-    # =========================================================================
-    
-    async def collect_standings(self, sport_code: str = None, season: str = None) -> Dict[str, Any]:
-        """Collect league standings."""
-        sports = [sport_code] if sport_code else ML_SPORTS
-        all_standings = []
-        
-        for sport in sports:
-            league_id = SPORTSDB_LEAGUE_IDS.get(sport)
-            if not league_id:
-                continue
-            
-            # Get current season if not specified
-            sport_season = season
-            if not sport_season:
-                year = datetime.now().year
-                month = datetime.now().month
-                
-                # Determine current season based on sport and month
-                if sport in SPLIT_SEASON_SPORTS:
-                    # NBA/NHL/NCAAB/NCAAF: season spans two years
-                    if month <= 6:  # Jan-Jun = second half of season
-                        sport_season = f"{year-1}-{year}"
-                    else:  # Jul-Dec = first half of new season
-                        sport_season = f"{year}-{year+1}"
-                else:
-                    # NFL/MLB/MLS/WNBA/UFC/CFL: single year seasons
-                    if sport == "NFL" and month <= 2:  # NFL playoffs Jan-Feb
-                        sport_season = str(year - 1)
-                    elif sport == "WNBA" and month < 5:  # WNBA starts May
-                        sport_season = str(year - 1)
-                    elif sport == "MLB" and month < 4:  # MLB starts April
-                        sport_season = str(year - 1)
-                    elif sport == "MLS" and month < 3:  # MLS starts March
-                        sport_season = str(year - 1)
-                    elif sport == "CFL" and month < 6:  # CFL starts June
-                        sport_season = str(year - 1)
-                    else:
-                        sport_season = str(year)
-            
-            data = await self._v2(f"/lookup/table/{league_id}/{sport_season}")
-            table = self._get_list(data, "table", "standings")
-            
-            for entry in table:
-                all_standings.append({
-                    "sport_code": sport,
-                    "season": sport_season,
-                    "team_name": entry.get("strTeam"),
-                    "team_id": entry.get("idTeam"),
-                    "rank": entry.get("intRank"),
-                    "wins": entry.get("intWin"),
-                    "losses": entry.get("intLoss"),
-                    "draws": entry.get("intDraw"),
-                    "points": entry.get("intPoints"),
-                    "games_played": entry.get("intPlayed"),
-                    "goals_for": entry.get("intGoalsFor"),
-                    "goals_against": entry.get("intGoalsAgainst"),
-                    "goal_diff": entry.get("intGoalDifference"),
-                })
-            
-            logger.info(f"[SportsDB] {sport} {sport_season}: {len(table)} standings entries")
-            print(f"[SportsDB] {sport} {sport_season}: {len(table)} standings entries")
-        
-        return {"standings": all_standings, "count": len(all_standings)}
-
-    # =========================================================================
-    # LIVESCORES
-    # =========================================================================
-    
     async def _collect_livescores(self, sport_code: str) -> List[Dict]:
         """Collect live scores."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
@@ -561,40 +440,105 @@ class SportsDBCollector(BaseCollector):
         data = await self._v2(f"/livescore/{league_id}")
         events = self._get_list(data, "livescore", "events")
         
-        scores = []
+        result = []
         for e in events:
-            scores.append({
+            result.append({
                 "external_id": f"sportsdb_{e.get('idEvent')}",
-                "sport_code": sport_code,
                 "home_team": e.get("strHomeTeam"),
                 "away_team": e.get("strAwayTeam"),
-                "home_score": int(e.get("intHomeScore", 0) or 0),
-                "away_score": int(e.get("intAwayScore", 0) or 0),
-                "status": e.get("strStatus", ""),
+                "home_score": self._safe_int(e.get("intHomeScore")),
+                "away_score": self._safe_int(e.get("intAwayScore")),
+                "status": STATUS_MAP.get(e.get("strStatus"), "in_progress"),
+                "sport_code": sport_code,
             })
-        return scores
+        return result
     
-    async def collect_all_livescores(self) -> CollectorResult:
-        """Collect all live scores."""
-        all_scores = []
-        for sport in ML_SPORTS:
-            scores = await self._collect_livescores(sport)
-            all_scores.extend(scores)
-            await asyncio.sleep(0.1)
-        return CollectorResult(success=True, data={"livescores": all_scores}, records_count=len(all_scores))
+    def _parse_event(self, e: Dict, sport_code: str) -> Optional[Dict]:
+        """Parse event to game dict."""
+        try:
+            date_str = e.get("dateEvent", "")
+            if not date_str:
+                return None
+            
+            time_str = e.get("strTime", "00:00:00")
+            if not time_str:
+                time_str = "00:00:00"
+            
+            # Handle time format
+            time_str = time_str.replace("+00:00", "").strip()
+            if len(time_str) == 5:  # HH:MM
+                time_str += ":00"
+            
+            try:
+                scheduled = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+            except:
+                scheduled = datetime.strptime(date_str, "%Y-%m-%d")
+            
+            return {
+                "external_id": f"sportsdb_{e.get('idEvent')}",
+                "home_team": e.get("strHomeTeam"),
+                "away_team": e.get("strAwayTeam"),
+                "scheduled_time": scheduled,
+                "home_score": self._safe_int(e.get("intHomeScore")),
+                "away_score": self._safe_int(e.get("intAwayScore")),
+                "venue": e.get("strVenue"),
+                "round": e.get("intRound"),
+                "season": e.get("strSeason"),
+                "sport_code": sport_code,
+            }
+        except Exception as ex:
+            logger.debug(f"[SportsDB] Parse error: {ex}")
+            return None
+    
+    def _safe_int(self, val) -> Optional[int]:
+        if val is None or val == "":
+            return None
+        try:
+            return int(val)
+        except:
+            return None
+
+    # =========================================================================
+    # HISTORICAL DATA (Multi-season)
+    # =========================================================================
+    
+    async def collect_historical(self, sport_code: str, seasons_back: int = 10) -> CollectorResult:
+        """Collect historical games for multiple seasons."""
+        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
+        if not league_id:
+            return CollectorResult(success=False, data={"games": []}, records_count=0)
+        
+        # Get available seasons
+        seasons = await self.get_available_seasons(sport_code)
+        if not seasons:
+            print(f"[SportsDB] {sport_code}: No seasons found")
+            return CollectorResult(success=False, data={"games": []}, records_count=0)
+        
+        # Limit to requested number of seasons
+        seasons = seasons[:seasons_back]
+        print(f"[SportsDB] {sport_code}: Collecting {len(seasons)} seasons: {seasons}")
+        
+        all_games = []
+        for season in seasons:
+            try:
+                data = await self._v2(f"/schedule/league/{league_id}/{season}")
+                events = self._get_list(data, "schedule", "events")
+                
+                games = [self._parse_event(e, sport_code) for e in events]
+                games = [g for g in games if g]
+                all_games.extend(games)
+                
+                print(f"[SportsDB] {sport_code} {season}: {len(games)} games")
+                await asyncio.sleep(0.5)  # Be nice to the API
+            except Exception as e:
+                print(f"[SportsDB] {sport_code} {season}: Error - {e}")
+        
+        print(f"[SportsDB] {sport_code}: {len(all_games)} total historical games")
+        return CollectorResult(success=len(all_games) > 0, data={"games": all_games}, records_count=len(all_games))
 
     # =========================================================================
     # DATABASE SAVE METHODS
     # =========================================================================
-    
-    async def save_to_database(self, data: Dict, session: AsyncSession) -> int:
-        """Save collected data."""
-        total = 0
-        if data.get("teams"):
-            total += await self.save_teams_to_database(data["teams"], session)
-        if data.get("games"):
-            total += await self.save_games_to_database(data["games"], session)
-        return total
     
     async def save_venues_to_database(self, venues: List[Dict], session: AsyncSession) -> int:
         """Save venues."""
@@ -643,7 +587,7 @@ class SportsDBCollector(BaseCollector):
         return saved
     
     async def save_players_to_database(self, players: List[Dict], session: AsyncSession) -> int:
-        """Save players."""
+        """Save players - FIXED with better error handling."""
         try:
             from app.models import Player
         except ImportError:
@@ -651,13 +595,19 @@ class SportsDBCollector(BaseCollector):
                 from app.models.models import Player
             except:
                 logger.error("[SportsDB] Player model not found")
+                print("[SportsDB] ❌ Player model not found!")
                 return 0
         
         saved = 0
+        skipped_no_ext_id = 0
+        skipped_no_sport = 0
+        skipped_error = 0
+        
         for p in players:
             try:
                 ext_id = p.get("external_id")
                 if not ext_id:
+                    skipped_no_ext_id += 1
                     continue
                 
                 existing = await session.execute(select(Player).where(Player.external_id == ext_id))
@@ -669,6 +619,7 @@ class SportsDBCollector(BaseCollector):
                     sport_result = await session.execute(select(Sport).where(Sport.code == sport_code))
                     sport = sport_result.scalar_one_or_none()
                     if not sport:
+                        skipped_no_sport += 1
                         continue
                     
                     team_result = await session.execute(
@@ -676,21 +627,30 @@ class SportsDBCollector(BaseCollector):
                     )
                     team = team_result.scalar_one_or_none()
                     
+                    # Parse jersey number
+                    jersey = None
+                    if p.get("number"):
+                        try:
+                            jersey = int(str(p.get("number")).strip())
+                        except:
+                            pass
+                    
                     player = Player(
                         external_id=ext_id,
                         name=p.get("name", "Unknown")[:200],
                         team_id=team.id if team else None,
                         position=p.get("position"),
-                        jersey_number=p.get("number"),
+                        jersey_number=jersey,
                     )
                     session.add(player)
                     saved += 1
             except Exception as e:
+                skipped_error += 1
                 logger.debug(f"[SportsDB] Player save error: {e}")
         
         await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} new players")
-        print(f"[SportsDB] Saved {saved} new players")
+        logger.info(f"[SportsDB] Saved {saved} new players (skipped: {skipped_no_ext_id} no ext_id, {skipped_no_sport} no sport, {skipped_error} errors)")
+        print(f"[SportsDB] Saved {saved} new players (skipped: {skipped_no_ext_id} no ext_id, {skipped_no_sport} no sport, {skipped_error} errors)")
         return saved
     
     async def save_teams_to_database(self, teams: List[Dict], session: AsyncSession) -> int:

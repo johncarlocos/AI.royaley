@@ -536,7 +536,7 @@ class CFBFastRCollector(BaseCollector):
             home_team = str(home_team).strip()
             away_team = str(away_team).strip()
             
-            if home_team == "nan" or away_team == "nan":
+            if home_team == "nan" or away_team == "nan" or not home_team or not away_team:
                 return None
             
             # Get scores
@@ -546,22 +546,42 @@ class CFBFastRCollector(BaseCollector):
             home_score = int(home_score) if pd.notna(home_score) else None
             away_score = int(away_score) if pd.notna(away_score) else None
             
-            # Parse game date
+            # Parse game date - try multiple column names
             game_date = row.get("start_date") or row.get("game_date") or row.get("date")
-            if pd.isna(game_date):
-                return None
             
-            if isinstance(game_date, str):
-                # Handle various date formats
+            # Handle various date types - USE FALLBACK INSTEAD OF RETURNING NONE
+            if game_date is None or (hasattr(game_date, '__len__') and len(str(game_date)) == 0):
+                game_date = datetime(year, 9, 1)
+            elif pd.isna(game_date):
+                game_date = datetime(year, 9, 1)
+            elif isinstance(game_date, str):
                 try:
                     if "T" in game_date:
                         game_date = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
                     else:
                         game_date = datetime.strptime(game_date[:10], "%Y-%m-%d")
                 except:
-                    return None
+                    game_date = datetime(year, 9, 1)
+            elif isinstance(game_date, pd.Timestamp):
+                if pd.isna(game_date):
+                    game_date = datetime(year, 9, 1)
+                else:
+                    game_date = game_date.to_pydatetime()
             elif hasattr(game_date, 'to_pydatetime'):
-                game_date = game_date.to_pydatetime()
+                try:
+                    game_date = game_date.to_pydatetime()
+                    if pd.isna(game_date):
+                        game_date = datetime(year, 9, 1)
+                except:
+                    game_date = datetime(year, 9, 1)
+            elif isinstance(game_date, datetime):
+                pass
+            else:
+                game_date = datetime(year, 9, 1)
+            
+            # Remove timezone if present
+            if hasattr(game_date, 'tzinfo') and game_date.tzinfo is not None:
+                game_date = game_date.replace(tzinfo=None)
             
             # Determine status
             completed = row.get("completed") if pd.notna(row.get("completed")) else None
@@ -580,9 +600,21 @@ class CFBFastRCollector(BaseCollector):
             home_info = self._get_team_info(home_team)
             away_info = self._get_team_info(away_team)
             
+            # Get season with proper handling
+            season_val = row.get("season")
+            if pd.isna(season_val) or season_val is None:
+                season = year
+            else:
+                season = int(season_val)
+            
             # Get additional info
             conference_game = bool(row.get("conference_game")) if pd.notna(row.get("conference_game")) else None
             neutral_site = bool(row.get("neutral_site")) if pd.notna(row.get("neutral_site")) else False
+            
+            # Get season type with fallback
+            season_type = row.get("season_type")
+            if pd.isna(season_type) or not season_type:
+                season_type = "regular"
             
             return {
                 "sport_code": "NCAAF",
@@ -600,9 +632,9 @@ class CFBFastRCollector(BaseCollector):
                 "status": status,
                 "home_score": home_score,
                 "away_score": away_score,
-                "season": int(row.get("season", year)),
+                "season": season,
                 "week": week,
-                "season_type": row.get("season_type", "regular"),
+                "season_type": season_type,
                 "home_conference": row.get("home_conference") or row.get("homeConference"),
                 "away_conference": row.get("away_conference") or row.get("awayConference"),
                 "conference_game": conference_game,
@@ -648,8 +680,15 @@ class CFBFastRCollector(BaseCollector):
                 # Older data in cfbfastR-data repo
                 url = CFBFASTR_URLS["pbp_parquet_old"].format(year=year)
             
-            cols = ["game_id", "home", "away", "game_date", "season", "week",
-                    "home_score", "away_score", "season_type"]
+            # Request ALL possible column name variations
+            # PBP data uses: home_team, away_team, start_date (NOT home, away, game_date)
+            cols = [
+                "game_id", "id",
+                "home", "away", "home_team", "away_team",  # Team columns
+                "game_date", "start_date", "date",  # Date columns
+                "season", "week", "season_type",
+                "home_score", "away_score", "home_points", "away_points",  # Score columns
+            ]
             
             df = await self._download_parquet(url, columns=cols)
             
@@ -661,38 +700,97 @@ class CFBFastRCollector(BaseCollector):
             if df is None or len(df) == 0:
                 return None
             
-            # Get unique games with final scores
-            # Handle potential column variations
-            home_col = "home" if "home" in df.columns else "home_team"
-            away_col = "away" if "away" in df.columns else "away_team"
+            # Debug: log available columns
+            logger.debug(f"[cfbfastR] PBP {year} columns: {df.columns.tolist()[:15]}")
             
-            if home_col not in df.columns or away_col not in df.columns:
-                logger.debug(f"[cfbfastR] PBP columns: {df.columns.tolist()}")
+            # Find game_id column
+            if "game_id" not in df.columns:
+                if "id" in df.columns:
+                    df = df.rename(columns={"id": "game_id"})
+                else:
+                    logger.warning(f"[cfbfastR] No game_id column in PBP data")
+                    return None
+            
+            # Find home/away team columns
+            home_col = None
+            away_col = None
+            for col in ["home_team", "home"]:
+                if col in df.columns:
+                    home_col = col
+                    break
+            for col in ["away_team", "away"]:
+                if col in df.columns:
+                    away_col = col
+                    break
+            
+            if home_col is None or away_col is None:
+                logger.warning(f"[cfbfastR] No home/away columns found. Available: {df.columns.tolist()[:20]}")
                 return None
             
+            # Find date column
+            date_col = None
+            for col in ["start_date", "game_date", "date"]:
+                if col in df.columns:
+                    date_col = col
+                    break
+            
+            # Find score columns
+            home_score_col = "home_score" if "home_score" in df.columns else "home_points" if "home_points" in df.columns else None
+            away_score_col = "away_score" if "away_score" in df.columns else "away_points" if "away_points" in df.columns else None
+            
+            # Build aggregation dict
             agg_dict = {
                 home_col: "first",
                 away_col: "first",
             }
             
-            # Add optional columns if they exist
-            for col in ["game_date", "season", "week", "season_type", "home_score", "away_score"]:
-                if col in df.columns:
-                    agg_dict[col] = "first" if col not in ["home_score", "away_score"] else "max"
+            if date_col:
+                agg_dict[date_col] = "first"
             
+            for col in ["season", "week", "season_type"]:
+                if col in df.columns:
+                    agg_dict[col] = "first"
+            
+            if home_score_col:
+                agg_dict[home_score_col] = "max"
+            if away_score_col:
+                agg_dict[away_score_col] = "max"
+            
+            # Group by game_id to get unique games
             games = df.groupby("game_id").agg(agg_dict).reset_index()
             
-            # Rename columns to match schedule format
-            games = games.rename(columns={
-                home_col: "home_team",
-                away_col: "away_team",
-            })
+            # Standardize column names for _parse_schedule_row
+            rename_map = {}
+            if home_col != "home_team":
+                rename_map[home_col] = "home_team"
+            if away_col != "away_team":
+                rename_map[away_col] = "away_team"
+            if date_col and date_col != "game_date":
+                rename_map[date_col] = "game_date"
+            if home_score_col and home_score_col != "home_score":
+                rename_map[home_score_col] = "home_score"
+            if away_score_col and away_score_col != "away_score":
+                rename_map[away_score_col] = "away_score"
+            
+            if rename_map:
+                games = games.rename(columns=rename_map)
+            
+            # If no date column was found, create one using season year
+            if "game_date" not in games.columns or games["game_date"].isna().all():
+                games["game_date"] = pd.to_datetime(f"{year}-09-01")
+                logger.debug(f"[cfbfastR] Using fallback date for {year}")
+            
+            # Ensure season column exists
+            if "season" not in games.columns:
+                games["season"] = year
             
             logger.info(f"[cfbfastR] Extracted {len(games)} games from {year} PBP")
             return games
             
         except Exception as e:
-            logger.debug(f"[cfbfastR] PBP extraction failed for {year}: {e}")
+            logger.error(f"[cfbfastR] PBP extraction failed for {year}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
     
     # =========================================================================

@@ -428,6 +428,148 @@ async def import_nflfastr_pbp(years: List[int] = None) -> ImportResult:
 
 
 # =============================================================================
+# CFBFASTR (College Football) IMPORTS
+# =============================================================================
+
+async def import_cfbfastr(sports: List[str] = None) -> ImportResult:
+    """Import NCAAF games/schedules from cfbfastR (FREE - 2004-present)."""
+    result = ImportResult(source="cfbfastr", success=False)
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from app.core.database import db_manager
+        
+        # cfbfastR is NCAAF only
+        data = await cfbfastr_collector.collect(sport_code="NCAAF", collect_type="schedules")
+        if data.success and data.data:
+            result.records = data.records_count
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                await cfbfastr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await cfbfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_cfbfastr_history(years_back: int = 10) -> ImportResult:
+    """Import historical NCAAF data from cfbfastR (2004-present, FREE)."""
+    result = ImportResult(source="cfbfastr_history", success=False)
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from app.core.database import db_manager
+        from datetime import datetime
+        
+        current_year = datetime.now().year
+        start_year = max(current_year - years_back, 2004)
+        
+        data = await cfbfastr_collector.collect_historical(
+            start_year=start_year,
+            end_year=current_year,
+        )
+        if data.success and data.data:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                saved, updated = await cfbfastr_collector.save_historical_to_database(
+                    data.data.get("games", []), session
+                )
+                result.records = saved + updated
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await cfbfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_cfbfastr_pbp(years: List[int] = None) -> ImportResult:
+    """Import NCAAF play-by-play data with EPA (large files!)."""
+    result = ImportResult(source="cfbfastr_pbp", success=False)
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from datetime import datetime
+        
+        if years is None:
+            # Default to current year
+            years = [datetime.now().year]
+        
+        data = await cfbfastr_collector.collect_pbp(years=years, save_to_disk=True)
+        if data.success:
+            result.records = data.records_count
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await cfbfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_cfbfastr_sp(years: List[int] = None) -> ImportResult:
+    """Import SP+ ratings from cfbfastR (Bill Connelly's advanced metrics)."""
+    result = ImportResult(source="cfbfastr_sp", success=False)
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from datetime import datetime
+        
+        if years is None:
+            current_year = datetime.now().year
+            years = list(range(current_year - 4, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(
+            sport_code="NCAAF", 
+            collect_type="sp_ratings",
+            years=years
+        )
+        if data.success:
+            result.records = len(data.data.get("sp_ratings", []))
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await cfbfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_cfbfastr_recruiting(years: List[int] = None) -> ImportResult:
+    """Import recruiting data from cfbfastR."""
+    result = ImportResult(source="cfbfastr_recruiting", success=False)
+    try:
+        from app.services.collectors import cfbfastr_collector
+        from datetime import datetime
+        
+        if years is None:
+            current_year = datetime.now().year
+            years = list(range(current_year - 4, current_year + 1))
+        
+        data = await cfbfastr_collector.collect(
+            sport_code="NCAAF", 
+            collect_type="recruiting",
+            years=years
+        )
+        if data.success:
+            result.records = len(data.data.get("recruiting", []))
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await cfbfastr_collector.close()
+        except:
+            pass
+    return result
 # SOURCE MAPPING
 # =============================================================================
 
@@ -445,10 +587,16 @@ IMPORT_MAP = {
     "nflfastr": import_nflfastr,
     "nflfastr_history": import_nflfastr_history,
     "nflfastr_pbp": import_nflfastr_pbp,
+    # College Football (cfbfastR)
+    "cfbfastr": import_cfbfastr,
+    "cfbfastr_history": import_cfbfastr_history,
+    "cfbfastr_pbp": import_cfbfastr_pbp,
+    "cfbfastr_sp": import_cfbfastr_sp,
+    "cfbfastr_recruiting": import_cfbfastr_recruiting,
 }
 
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history"]
 ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 
 
@@ -493,6 +641,14 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "nflfastr_history":
                 result = await func(years_back=seasons)
             elif source == "nflfastr_pbp":
+                result = await func()
+            elif source == "cfbfastr_history":
+                result = await func(years_back=seasons)
+            elif source == "cfbfastr_pbp":
+                result = await func()
+            elif source == "cfbfastr_sp":
+                result = await func()
+            elif source == "cfbfastr_recruiting":
                 result = await func()
             else:
                 result = await func(sports=sports)
@@ -554,14 +710,20 @@ def show_status():
     console.print("  • Weather       - OpenWeatherMap (FREE)")
     console.print("  • SportsDB      - Games/scores/livescores ($295/mo)")
     console.print("  • nflfastr      - NFL schedules/results (FREE)")
+    console.print("  • cfbfastr      - NCAAF schedules/results (FREE)")
     console.print("\n[green]✅ HISTORICAL DATA:[/green]")
     console.print("  • pinnacle_history  - Game results (~100/page)")
     console.print("  • espn_history      - Historical games (FREE)")
     console.print("  • odds_api_history  - Historical odds ($119/mo)")
     console.print("  • sportsdb_history  - Historical by season ($295/mo)")
     console.print("  • nflfastr_history  - NFL 1999-present (FREE)")
+    console.print("  • cfbfastr_history  - NCAAF 2004-present (FREE)")
     console.print("\n[cyan]⚡ ADVANCED NFL DATA:[/cyan]")
     console.print("  • nflfastr_pbp      - Play-by-play + EPA/WPA/CPOE (FREE)")
+    console.print("\n[cyan]⚡ ADVANCED NCAAF DATA:[/cyan]")
+    console.print("  • cfbfastr_pbp      - Play-by-play + EPA (FREE)")
+    console.print("  • cfbfastr_sp       - SP+ ratings (FREE)")
+    console.print("  • cfbfastr_recruiting - Recruiting rankings (FREE)")
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
     console.print("  • sportsdb_live     - Real-time scores ($295/mo)")
     console.print("\n[yellow]⏳ PENDING:[/yellow]")

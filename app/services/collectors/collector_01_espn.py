@@ -775,6 +775,24 @@ class ESPNCollector(BaseCollector):
         
         ESPN provides injury data at:
         - https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/injuries
+        
+        Response structure:
+        {
+            "injuries": [
+                {
+                    "id": "22",
+                    "displayName": "Arizona Cardinals",
+                    "injuries": [
+                        {
+                            "athlete": {"displayName": "...", "position": {...}, "team": {...}},
+                            "status": "Injured Reserve",
+                            "type": {"description": "Injured Reserve"},
+                            "details": {"type": "Knee - MCL", "returnDate": "..."}
+                        }
+                    ]
+                }
+            ]
+        }
         """
         sport_path = ESPN_SPORT_PATHS.get(sport_code)
         if not sport_path:
@@ -790,31 +808,50 @@ class ESPNCollector(BaseCollector):
             try:
                 data = await self.get(endpoint)
                 
-                # Parse team injuries
-                for team_data in data.get("items", []):
-                    team_name = team_data.get("team", {}).get("displayName", "")
-                    team_abbr = team_data.get("team", {}).get("abbreviation", "")
+                # Parse team injuries - ESPN wraps in "injuries" at top level
+                # Each item is a team with nested "injuries" list
+                teams_with_injuries = data.get("injuries", [])
+                
+                for team_data in teams_with_injuries:
+                    # Team info is at team level
+                    team_name = team_data.get("displayName", "")
+                    team_id = team_data.get("id", "")
                     
-                    for injury in team_data.get("injuries", []):
+                    # Injuries are nested within each team
+                    team_injuries = team_data.get("injuries", [])
+                    
+                    for injury in team_injuries:
                         athlete = injury.get("athlete", {})
+                        athlete_team = athlete.get("team", {})
+                        injury_type = injury.get("type", {})
+                        injury_details = injury.get("details", {})
+                        
+                        # Get team abbreviation from athlete's team info
+                        team_abbr = athlete_team.get("abbreviation", "")
+                        if not team_abbr and team_name:
+                            # Fallback - extract from team name
+                            team_abbr = team_id
                         
                         injuries.append({
                             "player_name": athlete.get("displayName", ""),
                             "player_id": athlete.get("id"),
                             "position": athlete.get("position", {}).get("abbreviation", ""),
-                            "team_name": team_name,
+                            "team_name": team_name or athlete_team.get("displayName", ""),
                             "team_abbr": team_abbr,
-                            "injury_type": injury.get("type", {}).get("description", ""),
-                            "status": injury.get("status", ""),
-                            "details": injury.get("details", {}).get("detail", ""),
-                            "return_date": injury.get("details", {}).get("returnDate"),
+                            "injury_type": injury_details.get("type", "") or injury_type.get("description", ""),
+                            "status": injury.get("status", "") or injury_type.get("description", ""),
+                            "details": injury_details.get("detail", ""),
+                            "return_date": injury_details.get("returnDate"),
                             "is_starter": athlete.get("starter", False),
+                            "short_comment": injury.get("shortComment", ""),
                         })
                 
                 logger.info(f"[ESPN] Collected {len(injuries)} injuries for {sport_code}")
                 
             except Exception as e:
                 logger.warning(f"[ESPN] Injuries endpoint error: {e}")
+                import traceback
+                traceback.print_exc()
                 
         except Exception as e:
             logger.error(f"[ESPN] Error collecting injuries: {e}")
@@ -828,7 +865,15 @@ class ESPNCollector(BaseCollector):
         session: AsyncSession
     ) -> int:
         """Save injuries to database."""
-        from app.models.injury_models import Injury
+        # Import Injury model - handle both possible locations
+        try:
+            from app.models.injury_models import Injury
+        except ImportError:
+            try:
+                from app.models import Injury
+            except ImportError:
+                logger.error("[ESPN] Injury model not found")
+                return 0
         
         saved_count = 0
         
@@ -844,63 +889,91 @@ class ESPNCollector(BaseCollector):
         
         for injury_data in injuries_data:
             try:
-                # Find team
-                team_result = await session.execute(
-                    select(Team).where(
-                        and_(
-                            Team.sport_id == sport.id,
-                            or_(
-                                Team.abbreviation == injury_data.get("team_abbr"),
-                                Team.name == injury_data.get("team_name")
+                player_name = injury_data.get("player_name", "")
+                if not player_name:
+                    continue
+                
+                # Find team by abbreviation or name
+                team_abbr = injury_data.get("team_abbr", "")
+                team_name = injury_data.get("team_name", "")
+                
+                team = None
+                if team_abbr:
+                    team_result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.abbreviation == team_abbr
                             )
                         )
                     )
-                )
-                team = team_result.scalar_one_or_none()
+                    team = team_result.scalar_one_or_none()
+                
+                if not team and team_name:
+                    team_result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name.ilike(f"%{team_name}%")
+                            )
+                        )
+                    )
+                    team = team_result.scalar_one_or_none()
                 
                 if not team:
+                    logger.debug(f"[ESPN] Team not found for injury: {team_abbr} / {team_name}")
                     continue
                 
-                # Check if injury exists
+                # Check if injury already exists for this player on this team
                 existing = await session.execute(
                     select(Injury).where(
                         and_(
                             Injury.team_id == team.id,
-                            Injury.player_name == injury_data.get("player_name"),
+                            Injury.player_name == player_name,
                         )
                     )
                 )
                 injury = existing.scalar_one_or_none()
                 
+                status = injury_data.get("status", "Unknown")
+                injury_type = injury_data.get("injury_type", "")
+                
                 if injury:
-                    # Update existing
-                    injury.status = injury_data.get("status", injury.status)
-                    injury.injury_type = injury_data.get("injury_type", injury.injury_type)
-                    injury.status_detail = injury_data.get("details", injury.status_detail)
-                    injury.is_starter = injury_data.get("is_starter", injury.is_starter)
+                    # Update existing injury
+                    injury.status = status
+                    injury.injury_type = injury_type
+                    injury.status_detail = injury_data.get("details") or injury_data.get("short_comment")
+                    injury.is_starter = injury_data.get("is_starter", False)
+                    injury.position = injury_data.get("position") or injury.position
+                    # last_updated auto-updates via onupdate
                 else:
-                    # Create new
+                    # Create new injury
                     injury = Injury(
                         team_id=team.id,
                         sport_code=sport_code,
-                        player_name=injury_data.get("player_name", ""),
+                        player_name=player_name,
                         position=injury_data.get("position"),
-                        injury_type=injury_data.get("injury_type"),
-                        status=injury_data.get("status", "Unknown"),
-                        status_detail=injury_data.get("details"),
+                        injury_type=injury_type,
+                        status=status,
+                        status_detail=injury_data.get("details") or injury_data.get("short_comment"),
                         is_starter=injury_data.get("is_starter", False),
                         source="espn",
-                        external_id=injury_data.get("player_id"),
+                        external_id=str(injury_data.get("player_id")) if injury_data.get("player_id") else None,
                     )
                     session.add(injury)
                     saved_count += 1
                     
             except Exception as e:
-                logger.debug(f"[ESPN] Error saving injury: {e}")
+                logger.debug(f"[ESPN] Error saving injury for {injury_data.get('player_name')}: {e}")
                 continue
         
-        await session.commit()
-        logger.info(f"[ESPN] Saved {saved_count} injuries")
+        try:
+            await session.commit()
+            logger.info(f"[ESPN] Saved {saved_count} new injuries for {sport_code}")
+        except Exception as e:
+            logger.error(f"[ESPN] Error committing injuries: {e}")
+            await session.rollback()
+            
         return saved_count
 
     # =========================================================================

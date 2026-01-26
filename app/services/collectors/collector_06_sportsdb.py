@@ -53,7 +53,7 @@ from app.services.collectors.base_collector import (
 
 logger = logging.getLogger(__name__)
 
-# League IDs - ALL 10 SPORTS
+# League IDs - ALL 10 SPORTS (matching database)
 SPORTSDB_LEAGUE_IDS = {
     # Major US Pro Leagues
     "NFL": 4391,
@@ -64,18 +64,19 @@ SPORTSDB_LEAGUE_IDS = {
     "NCAAF": 4479,
     "NCAAB": 4607,
     # Additional Leagues
-    "MLS": 4346,
-    "WNBA": 4516,
-    "UFC": 4443,
     "CFL": 4405,
+    "WNBA": 4516,
+    # Tennis (individual sport - no teams)
+    "ATP": 4464,
+    "WTA": 4517,
 }
 
 # Season format by sport
 SPLIT_SEASON_SPORTS = ["NBA", "NHL", "NCAAB", "NCAAF"]  # Use "2024-2025" format
-CALENDAR_YEAR_SPORTS = ["NFL", "MLB", "MLS", "WNBA", "UFC", "CFL"]  # Use "2024" format
+CALENDAR_YEAR_SPORTS = ["NFL", "MLB", "CFL", "WNBA", "ATP", "WTA"]  # Use "2024" format
 
 # All sports for ML training
-ML_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+ML_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
 
 STATUS_MAP = {
     "NS": "scheduled", "1H": "in_progress", "2H": "in_progress",
@@ -733,28 +734,56 @@ class SportsDBCollector(BaseCollector):
         return saved
     
     async def save_games_to_database(self, games: List[Dict], session: AsyncSession) -> int:
-        """Save games."""
+        """Save games - auto-creates teams if they don't exist."""
         saved = 0
+        skipped_no_sport = 0
+        teams_created = 0
+        
         for g in games:
             try:
                 sport_code = g.get("sport_code")
                 sport_result = await session.execute(select(Sport).where(Sport.code == sport_code))
                 sport = sport_result.scalar_one_or_none()
                 if not sport:
+                    skipped_no_sport += 1
                     continue
                 
                 home_name = g.get("home_team", "")
                 away_name = g.get("away_team", "")
                 
+                # Get or create home team
                 home_result = await session.execute(
-                    select(Team).where(and_(Team.sport_id == sport.id, Team.name.ilike(f"%{home_name}%")))
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == home_name))
                 )
                 home_team = home_result.scalar_one_or_none()
                 
+                if not home_team and home_name:
+                    # Auto-create team
+                    home_team = Team(
+                        name=home_name,
+                        sport_id=sport.id,
+                        external_id=f"sportsdb_{sport_code}_{home_name.replace(' ', '_').lower()}",
+                    )
+                    session.add(home_team)
+                    await session.flush()
+                    teams_created += 1
+                
+                # Get or create away team
                 away_result = await session.execute(
-                    select(Team).where(and_(Team.sport_id == sport.id, Team.name.ilike(f"%{away_name}%")))
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == away_name))
                 )
                 away_team = away_result.scalar_one_or_none()
+                
+                if not away_team and away_name:
+                    # Auto-create team
+                    away_team = Team(
+                        name=away_name,
+                        sport_id=sport.id,
+                        external_id=f"sportsdb_{sport_code}_{away_name.replace(' ', '_').lower()}",
+                    )
+                    session.add(away_team)
+                    await session.flush()
+                    teams_created += 1
                 
                 if not home_team or not away_team:
                     continue
@@ -782,7 +811,8 @@ class SportsDBCollector(BaseCollector):
                 logger.debug(f"[SportsDB] Game save error: {e}")
         
         await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} games")
+        logger.info(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_sport} no sport)")
+        print(f"[SportsDB] Saved {saved} games, created {teams_created} teams")
         return saved
     
     async def save_historical_to_database(self, games: List[Dict], session: AsyncSession) -> Tuple[int, int]:

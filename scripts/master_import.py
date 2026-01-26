@@ -357,8 +357,8 @@ async def import_sportsdb(sports: List[str] = None) -> ImportResult:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
         
-        # All 10 sports
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+        # All 10 sports (matching database)
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         for sport in sports:
             try:
                 data = await sportsdb_collector.collect(sport_code=sport)
@@ -382,8 +382,8 @@ async def import_sportsdb_history(sports: List[str] = None, seasons: int = 10) -
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
         
-        # All 10 sports
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+        # All 10 sports (matching database)
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         for sport in sports:
             try:
                 data = await sportsdb_collector.collect_historical(
@@ -432,8 +432,8 @@ async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
         
-        # All 10 sports
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+        # All 10 sports (matching database)
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         await db_manager.initialize()
         
         for sport in sports:
@@ -461,8 +461,8 @@ async def import_sportsdb_players(sports: List[str] = None) -> ImportResult:
         from app.services.collectors import sportsdb_collector
         from app.core.database import db_manager
         
-        # All 10 sports
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+        # All 10 sports (matching database)
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         await db_manager.initialize()
         
         players_data = await sportsdb_collector.collect_players()
@@ -505,8 +505,8 @@ async def import_sportsdb_seasons(sports: List[str] = None) -> ImportResult:
     try:
         from app.services.collectors import sportsdb_collector
         
-        # All 10 sports
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "MLS", "WNBA", "UFC", "CFL"]
+        # All 10 sports (matching database)
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         
         for sport in sports:
             seasons = await sportsdb_collector.get_available_seasons(sport)

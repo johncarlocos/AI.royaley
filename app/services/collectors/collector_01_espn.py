@@ -938,27 +938,34 @@ class ESPNCollector(BaseCollector):
                 status = injury_data.get("status", "Unknown")
                 injury_type = injury_data.get("injury_type", "")
                 
+                # Truncate status_detail to fit VARCHAR(200) column
+                status_detail_raw = injury_data.get("details") or injury_data.get("short_comment") or ""
+                status_detail = status_detail_raw[:200] if status_detail_raw else None
+                
+                # Truncate injury_type to fit VARCHAR(200) column
+                injury_type_truncated = injury_type[:200] if injury_type else None
+                
                 if injury:
                     # Update existing injury
-                    injury.status = status
-                    injury.injury_type = injury_type
-                    injury.status_detail = injury_data.get("details") or injury_data.get("short_comment")
+                    injury.status = status[:50] if status else "Unknown"  # VARCHAR(50)
+                    injury.injury_type = injury_type_truncated
+                    injury.status_detail = status_detail
                     injury.is_starter = injury_data.get("is_starter", False)
-                    injury.position = injury_data.get("position") or injury.position
+                    injury.position = (injury_data.get("position") or injury.position or "")[:50]  # VARCHAR(50)
                     # last_updated auto-updates via onupdate
                 else:
                     # Create new injury
                     injury = Injury(
                         team_id=team.id,
                         sport_code=sport_code,
-                        player_name=player_name,
-                        position=injury_data.get("position"),
-                        injury_type=injury_type,
-                        status=status,
-                        status_detail=injury_data.get("details") or injury_data.get("short_comment"),
+                        player_name=player_name[:200],  # VARCHAR(200)
+                        position=(injury_data.get("position") or "")[:50],  # VARCHAR(50)
+                        injury_type=injury_type_truncated,
+                        status=(status or "Unknown")[:50],  # VARCHAR(50)
+                        status_detail=status_detail,
                         is_starter=injury_data.get("is_starter", False),
                         source="espn",
-                        external_id=str(injury_data.get("player_id")) if injury_data.get("player_id") else None,
+                        external_id=str(injury_data.get("player_id"))[:100] if injury_data.get("player_id") else None,
                     )
                     session.add(injury)
                     saved_count += 1

@@ -50,16 +50,26 @@ logger = logging.getLogger(__name__)
 
 NFLVERSE_BASE = "https://github.com/nflverse/nflverse-data/releases/download"
 
+# Note: Different data types have different file formats available
+# - pbp: parquet, csv, rds
+# - schedules: rds only (use CSV from nfldata repo as fallback)
+# - player_stats: parquet, csv
+# - etc.
+
 NFLVERSE_URLS = {
-    # Play-by-play (1999-present, ~500MB per season)
-    "pbp": f"{NFLVERSE_BASE}/pbp/play_by_play_{{year}}.parquet",
+    # Play-by-play (1999-present, parquet available)
+    "pbp_parquet": f"{NFLVERSE_BASE}/pbp/play_by_play_{{year}}.parquet",
+    "pbp_csv": f"{NFLVERSE_BASE}/pbp/play_by_play_{{year}}.csv.gz",
     
-    # Schedules (all seasons in one file)
-    "schedules": f"{NFLVERSE_BASE}/schedules/schedules.parquet",
+    # Schedules - use Lee Sharpe's nfldata CSV (schedules release only has rds)
+    "schedules": "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
     
     # Player stats (per season)
-    "player_stats": f"{NFLVERSE_BASE}/player_stats/player_stats_{{year}}.parquet",
-    "player_stats_def": f"{NFLVERSE_BASE}/player_stats/player_stats_def_{{year}}.parquet",
+    "player_stats": f"{NFLVERSE_BASE}/stats_player/player_stats_{{year}}.parquet",
+    "player_stats_csv": f"{NFLVERSE_BASE}/stats_player/player_stats_{{year}}.csv",
+    
+    # Team stats
+    "team_stats": f"{NFLVERSE_BASE}/stats_team/team_stats_{{year}}.parquet",
     
     # Rosters
     "rosters": f"{NFLVERSE_BASE}/rosters/roster_{{year}}.parquet",
@@ -71,14 +81,13 @@ NFLVERSE_URLS = {
     "ngs_receiving": f"{NFLVERSE_BASE}/nextgen_stats/ngs_{{year}}_receiving.parquet",
     
     # Other data
-    "teams": f"{NFLVERSE_BASE}/teams/teams.parquet",
+    "teams": f"{NFLVERSE_BASE}/teams/teams.csv",
+    "players": f"{NFLVERSE_BASE}/players/players.parquet",
     "officials": f"{NFLVERSE_BASE}/officials/officials.parquet",
     "combine": f"{NFLVERSE_BASE}/combine/combine.parquet",
     "draft_picks": f"{NFLVERSE_BASE}/draft_picks/draft_picks.parquet",
     "injuries": f"{NFLVERSE_BASE}/injuries/injuries_{{year}}.parquet",
     "snap_counts": f"{NFLVERSE_BASE}/snap_counts/snap_counts_{{year}}.parquet",
-    "pfr_advstats": f"{NFLVERSE_BASE}/pfr_advstats/advstats_season_{{stat_type}}_{{year}}.parquet",
-    "ftn_charting": f"{NFLVERSE_BASE}/ftn_charting/ftn_charting_{{year}}.parquet",
 }
 
 
@@ -296,32 +305,99 @@ class NFLFastRCollector(BaseCollector):
     async def _collect_schedules(self, years: List[int]) -> List[Dict[str, Any]]:
         """
         Collect game schedules with results and betting lines.
-        Downloads the schedules.parquet file from nflverse.
+        
+        Note: nflverse schedules release only has RDS format (not CSV/parquet).
+        We try nflreadpy first, then fall back to extracting from PBP data.
         """
         games = []
         
         try:
-            # Download schedules parquet
-            url = NFLVERSE_URLS["schedules"]
-            logger.info(f"[nflfastR] Downloading schedules from {url}")
+            # First try nflreadpy if installed
+            try:
+                import nflreadpy as nfl
+                logger.info("[nflfastR] Using nflreadpy to load schedules")
+                df = nfl.load_schedules().to_pandas()
+                df = df[df["season"].isin(years)]
+                
+                for _, row in df.iterrows():
+                    game = self._parse_schedule_row(row)
+                    if game:
+                        games.append(game)
+                
+                logger.info(f"[nflfastR] Loaded {len(games)} games via nflreadpy")
+                return games
+                
+            except ImportError:
+                logger.info("[nflfastR] nflreadpy not installed")
+            except Exception as e:
+                logger.warning(f"[nflfastR] nflreadpy failed: {e}")
             
-            df = await self._download_parquet(url)
+            # Try to extract schedules from PBP data
+            logger.info("[nflfastR] Extracting schedules from PBP data...")
             
-            if df is None or len(df) == 0:
-                logger.error("[nflfastR] Failed to download schedules")
-                return []
+            for year in years:
+                try:
+                    # Only download a few columns for schedule extraction
+                    url = NFLVERSE_URLS["pbp_parquet"].format(year=year)
+                    cols = ["game_id", "home_team", "away_team", "game_date", "season", 
+                            "week", "season_type", "total_home_score", "total_away_score"]
+                    
+                    df = await self._download_parquet(url, columns=cols)
+                    
+                    if df is None or len(df) == 0:
+                        continue
+                    
+                    # Get unique games
+                    game_df = df.drop_duplicates(subset=["game_id"]).copy()
+                    
+                    for _, row in game_df.iterrows():
+                        game_id = row.get("game_id")
+                        if not game_id:
+                            continue
+                        
+                        home_team = str(row.get("home_team", ""))
+                        away_team = str(row.get("away_team", ""))
+                        
+                        if not home_team or not away_team:
+                            continue
+                        
+                        # Get max scores from the game
+                        home_score = int(row.get("total_home_score", 0)) if pd.notna(row.get("total_home_score")) else None
+                        away_score = int(row.get("total_away_score", 0)) if pd.notna(row.get("total_away_score")) else None
+                        
+                        game_date = row.get("game_date")
+                        if isinstance(game_date, str):
+                            game_date = datetime.strptime(game_date, "%Y-%m-%d")
+                        elif hasattr(game_date, 'to_pydatetime'):
+                            game_date = game_date.to_pydatetime()
+                        
+                        games.append({
+                            "sport_code": "NFL",
+                            "external_id": f"nfl_{game_id}",
+                            "game_id": game_id,
+                            "home_team": {
+                                "name": NFL_TEAMS.get(home_team, home_team),
+                                "abbreviation": home_team,
+                            },
+                            "away_team": {
+                                "name": NFL_TEAMS.get(away_team, away_team),
+                                "abbreviation": away_team,
+                            },
+                            "game_date": game_date.isoformat() if game_date else None,
+                            "status": "final",
+                            "home_score": home_score,
+                            "away_score": away_score,
+                            "season": int(row.get("season", year)),
+                            "week": int(row.get("week", 0)) if pd.notna(row.get("week")) else None,
+                            "game_type": row.get("season_type", "REG"),
+                        })
+                    
+                    logger.info(f"[nflfastR] Extracted {len(game_df)} games from {year} PBP")
+                    
+                except Exception as e:
+                    logger.error(f"[nflfastR] Failed to extract schedules from {year}: {e}")
             
-            # Filter to requested years
-            df = df[df["season"].isin(years)]
-            
-            logger.info(f"[nflfastR] Processing {len(df)} games for years {min(years)}-{max(years)}")
-            
-            for _, row in df.iterrows():
-                game = self._parse_schedule_row(row)
-                if game:
-                    games.append(game)
-            
-            logger.info(f"[nflfastR] Parsed {len(games)} valid games")
+            logger.info(f"[nflfastR] Extracted total {len(games)} games from PBP data")
             
         except Exception as e:
             logger.error(f"[nflfastR] Schedule collection error: {e}")
@@ -443,7 +519,7 @@ class NFLFastRCollector(BaseCollector):
         
         for year in years:
             try:
-                url = NFLVERSE_URLS["pbp"].format(year=year)
+                url = NFLVERSE_URLS["pbp_parquet"].format(year=year)
                 logger.info(f"[nflfastR] Downloading PBP for {year}...")
                 
                 # Check if cached
@@ -518,7 +594,7 @@ class NFLFastRCollector(BaseCollector):
                 pbp = pd.read_parquet(cache_path, columns=cols)
             else:
                 # Download
-                url = NFLVERSE_URLS["pbp"].format(year=season)
+                url = NFLVERSE_URLS["pbp_parquet"].format(year=season)
                 cols = ["posteam", "play_type", "epa", "success", "week"]
                 pbp = await self._download_parquet(url, columns=cols)
             
@@ -739,6 +815,25 @@ class NFLFastRCollector(BaseCollector):
             
         except Exception as e:
             logger.error(f"[nflfastR] Download error for {url}: {e}")
+            return None
+    
+    async def _download_csv(
+        self,
+        url: str,
+    ) -> Optional[pd.DataFrame]:
+        """Download and parse a CSV file from URL."""
+        try:
+            client = await self.get_client()
+            response = await client.get(url, follow_redirects=True, timeout=120.0)
+            response.raise_for_status()
+            
+            # Read CSV from bytes
+            df = pd.read_csv(BytesIO(response.content))
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"[nflfastR] CSV download error for {url}: {e}")
             return None
     
     # =========================================================================

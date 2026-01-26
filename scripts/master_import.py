@@ -410,8 +410,8 @@ async def import_nflfastr_pbp(years: List[int] = None) -> ImportResult:
         from datetime import datetime
         
         if years is None:
-            current_year = datetime.now().year
-            years = [current_year]
+            # Default to 2025 since current year data may not be available
+            years = [2025]
         
         data = await nflfastr_collector.collect_pbp(years=years, save_to_disk=True)
         if data.success:

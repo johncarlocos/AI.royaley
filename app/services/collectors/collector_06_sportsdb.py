@@ -37,7 +37,7 @@ Season Format:
 import asyncio
 import logging
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select, and_
@@ -174,7 +174,7 @@ class SportsDBCollector(BaseCollector):
     # =========================================================================
     
     async def get_available_seasons(self, sport_code: str) -> List[str]:
-        """Get list of available seasons for a league."""
+        """Get list of available seasons for a league (most recent first)."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
             return []
@@ -183,6 +183,8 @@ class SportsDBCollector(BaseCollector):
         seasons = self._get_list(data, "seasons")
         
         result = [s.get("strSeason") for s in seasons if s.get("strSeason")]
+        # Sort descending (most recent first)
+        result = sorted(result, reverse=True)
         logger.info(f"[SportsDB] {sport_code}: {len(result)} seasons available")
         print(f"[SportsDB] {sport_code}: {len(result)} seasons available")
         return result
@@ -390,6 +392,8 @@ class SportsDBCollector(BaseCollector):
             except:
                 dt = datetime.strptime(date_str, "%Y-%m-%d")
             
+            # Keep as naive datetime (no timezone) for database compatibility
+            
             home_score = away_score = None
             if e.get("intHomeScore") not in (None, "", "null"):
                 try:
@@ -409,7 +413,7 @@ class SportsDBCollector(BaseCollector):
                 "away_team": e.get("strAwayTeam"),
                 "home_team_id": e.get("idHomeTeam"),
                 "away_team_id": e.get("idAwayTeam"),
-                "scheduled_time": dt.replace(tzinfo=timezone.utc),
+                "scheduled_time": dt,  # naive datetime
                 "status": STATUS_MAP.get(e.get("strStatus", ""), "scheduled"),
                 "home_score": home_score,
                 "away_score": away_score,
@@ -478,21 +482,36 @@ class SportsDBCollector(BaseCollector):
                 continue
             
             # Get current season if not specified
-            if not season:
+            sport_season = season
+            if not sport_season:
                 year = datetime.now().year
-                # Adjust for split seasons (NBA/NHL/NCAAB are mid-season in Jan)
+                month = datetime.now().month
+                
+                # Determine current season based on sport and month
                 if sport in SPLIT_SEASON_SPORTS:
-                    season = f"{year-1}-{year}"
+                    # NBA/NHL/NCAAB: season spans two years (Oct-Apr/Jun)
+                    # In Jan 2026, the current season is 2025-2026
+                    if month <= 6:  # Jan-Jun = second half of season
+                        sport_season = f"{year-1}-{year}"
+                    else:  # Jul-Dec = first half of new season
+                        sport_season = f"{year}-{year+1}"
                 else:
-                    season = str(year)
+                    # NFL/MLB/NCAAF: single year seasons
+                    # NFL: Sep-Feb, so Jan 2026 = 2025 season
+                    # MLB: Apr-Oct, so Jan 2026 = 2025 season ended
+                    # NCAAF: Aug-Jan, so Jan 2026 = 2025 season
+                    if month <= 2:  # Jan-Feb = still previous year's season
+                        sport_season = str(year - 1)
+                    else:
+                        sport_season = str(year)
             
-            data = await self._v2(f"/lookup/table/{league_id}/{season}")
+            data = await self._v2(f"/lookup/table/{league_id}/{sport_season}")
             table = self._get_list(data, "table", "standings")
             
             for entry in table:
                 all_standings.append({
                     "sport_code": sport,
-                    "season": season,
+                    "season": sport_season,
                     "team_name": entry.get("strTeam"),
                     "team_id": entry.get("idTeam"),
                     "rank": entry.get("intRank"),
@@ -506,8 +525,8 @@ class SportsDBCollector(BaseCollector):
                     "goal_diff": entry.get("intGoalDifference"),
                 })
             
-            logger.info(f"[SportsDB] {sport} {season}: {len(table)} standings entries")
-            print(f"[SportsDB] {sport} {season}: {len(table)} standings entries")
+            logger.info(f"[SportsDB] {sport} {sport_season}: {len(table)} standings entries")
+            print(f"[SportsDB] {sport} {sport_season}: {len(table)} standings entries")
         
         return {"standings": all_standings, "count": len(all_standings)}
 

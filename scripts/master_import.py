@@ -290,8 +290,8 @@ async def import_sportsdb(sports: List[str] = None) -> ImportResult:
     return result
 
 
-async def import_sportsdb_history(sports: List[str] = None, seasons: int = 3) -> ImportResult:
-    """Import historical game results from TheSportsDB by season."""
+async def import_sportsdb_history(sports: List[str] = None, seasons: int = 10) -> ImportResult:
+    """Import historical game results from TheSportsDB by season (default: 10 years)."""
     result = ImportResult(source="sportsdb_history", success=False)
     try:
         from app.services.collectors import sportsdb_collector
@@ -374,7 +374,7 @@ ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 # MAIN IMPORT RUNNER
 # =============================================================================
 
-async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50, days: int = 30):
+async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50, days: int = 30, seasons: int = 10):
     """Run data import for specified sources."""
     console.print(f"\n[bold blue]{'='*60}[/bold blue]")
     console.print(f"[bold]ROYALEY DATA IMPORT[/bold]")
@@ -405,7 +405,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "odds_api_history":
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
-                result = await func(sports=sports, seasons=3)
+                result = await func(sports=sports, seasons=seasons)
             elif source == "sportsdb_live":
                 result = await func()
             else:
@@ -496,6 +496,7 @@ def main():
     parser.add_argument("--sports", help="Comma-separated sports")
     parser.add_argument("--pages", "-p", type=int, default=50, help="Pinnacle history pages (100 events/page)")
     parser.add_argument("--days", "-d", type=int, default=30, help="Days back for ESPN/OddsAPI history")
+    parser.add_argument("--seasons", type=int, default=10, help="Seasons back for SportsDB history (default: 10)")
     parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval (min)")
     
     args = parser.parse_args()
@@ -525,7 +526,7 @@ def main():
     if args.daemon:
         asyncio.run(daemon_mode(args.interval, sources, sports))
     else:
-        asyncio.run(run_import(sources, sports, args.pages, args.days))
+        asyncio.run(run_import(sources, sports, args.pages, args.days, args.seasons))
 
 
 if __name__ == "__main__":

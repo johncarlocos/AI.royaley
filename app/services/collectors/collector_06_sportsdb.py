@@ -219,7 +219,18 @@ class SportsDBCollector(BaseCollector):
             endpoint = f"/schedule/next/league/{league_id}"
             
             data = await self.get(endpoint)
-            events = data.get("schedule") or data.get("events") or []
+            
+            # Handle different response structures
+            events = (
+                data.get("schedule") or 
+                data.get("events") or 
+                data.get("event") or
+                []
+            )
+            
+            # If events is a dict (single event), wrap in list
+            if isinstance(events, dict):
+                events = [events]
             
             logger.info(f"[SportsDB] {sport_code}: Fetched {len(events)} upcoming events")
             
@@ -400,7 +411,13 @@ class SportsDBCollector(BaseCollector):
             endpoint = f"/list/teams/{league_id}"
             
             data = await self.get(endpoint)
-            teams_data = data.get("teams") or []
+            
+            # Handle different response structures
+            teams_data = data.get("teams") or data.get("team") or []
+            
+            # If teams_data is a dict (single team), wrap in list
+            if isinstance(teams_data, dict):
+                teams_data = [teams_data]
             
             logger.info(f"[SportsDB] {sport_code}: Fetched {len(teams_data)} teams")
             
@@ -421,6 +438,8 @@ class SportsDBCollector(BaseCollector):
                 data = response.json()
                 
                 teams_data = data.get("teams") or []
+                logger.info(f"[SportsDB V1] {sport_code}: Fetched {len(teams_data)} teams")
+                
                 for team_item in teams_data:
                     team = self._parse_team(team_item, sport_code)
                     if team:
@@ -438,15 +457,15 @@ class SportsDBCollector(BaseCollector):
         self,
         sport_code: str = None,
         season: str = None,
-        seasons_back: int = 5,
+        seasons_back: int = 10,
     ) -> CollectorResult:
         """
         Collect historical game results by season.
         
         Args:
             sport_code: Sport to collect (or all if None)
-            season: Specific season (e.g., "2024-2025") or None for recent
-            seasons_back: Number of seasons to collect if season is None
+            season: Specific season (e.g., "2024" for NFL, "2023-2024" for NBA) or None for recent
+            seasons_back: Number of seasons to collect if season is None (default: 10 years)
             
         Returns:
             CollectorResult with historical games
@@ -533,13 +552,25 @@ class SportsDBCollector(BaseCollector):
         current_year = datetime.now().year
         
         # Different sports have different season formats
-        if sport_code in ["NFL", "NCAAF", "CFL", "NBA", "NCAAB", "WNBA", "NHL"]:
-            # These sports span calendar years (e.g., 2024-2025)
+        # NFL, MLB use single year (2024, 2025)
+        # NBA, NHL, NCAAB, NCAAF span years (2024-2025)
+        if sport_code in ["MLB"]:
+            # MLB uses single calendar year
             for i in range(count):
                 year = current_year - i
+                seasons.append(str(year))
+        elif sport_code in ["NFL"]:
+            # NFL uses single year but offset (2024 season plays in fall 2024 through early 2025)
+            for i in range(count):
+                year = current_year - i
+                seasons.append(str(year))
+        elif sport_code in ["NBA", "NHL", "NCAAB", "NCAAF", "WNBA", "CFL"]:
+            # These sports span calendar years (e.g., 2024-2025)
+            for i in range(count):
+                year = current_year - 1 - i  # Current season is previous year to current
                 seasons.append(f"{year}-{year+1}")
         else:
-            # MLB and others use single year
+            # Default to single year
             for i in range(count):
                 year = current_year - i
                 seasons.append(str(year))

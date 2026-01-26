@@ -10,6 +10,7 @@ IMPLEMENTED COLLECTORS:
     collector_04_tennis.py    - Tennis stats (class only, no singleton)
     collector_05_weather.py   - OpenWeatherMap - FREE
     collector_06_sportsdb.py  - TheSportsDB (Games, scores, livescores) - $295/mo
+    collector_07_nflfastr.py  - nflfastR (NFL PBP, EPA, WPA, CPOE) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -26,6 +27,7 @@ from app.services.collectors.collector_03_pinnacle import PinnacleCollector, pin
 from app.services.collectors.collector_04_tennis import TennisCollector
 from app.services.collectors.collector_05_weather import WeatherCollector, weather_collector
 from app.services.collectors.collector_06_sportsdb import SportsDBCollector, sportsdb_collector
+from app.services.collectors.collector_07_nflfastr import NFLFastRCollector, nflfastr_collector
 
 __all__ = [
     "BaseCollector",
@@ -45,4 +47,6 @@ __all__ = [
     "weather_collector",
     "SportsDBCollector",
     "sportsdb_collector",
+    "NFLFastRCollector",
+    "nflfastr_collector",
 ]

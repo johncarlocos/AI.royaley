@@ -348,6 +348,85 @@ async def import_sportsdb_livescores() -> ImportResult:
     return result
 
 
+async def import_nflfastr(sports: List[str] = None) -> ImportResult:
+    """Import NFL games/schedules from nflfastR (FREE - 1999-present)."""
+    result = ImportResult(source="nflfastr", success=False)
+    try:
+        from app.services.collectors import nflfastr_collector
+        from app.core.database import db_manager
+        
+        # nflfastR is NFL only
+        data = await nflfastr_collector.collect(sport_code="NFL", collect_type="schedules")
+        if data.success and data.data:
+            result.records = data.records_count
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                await nflfastr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await nflfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_nflfastr_history(years_back: int = 10) -> ImportResult:
+    """Import historical NFL data from nflfastR (1999-present, FREE)."""
+    result = ImportResult(source="nflfastr_history", success=False)
+    try:
+        from app.services.collectors import nflfastr_collector
+        from app.core.database import db_manager
+        
+        data = await nflfastr_collector.collect_historical(
+            years_back=years_back,
+            data_types=["schedules"]
+        )
+        if data.success and data.data:
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                saved, updated = await nflfastr_collector.save_historical_to_database(
+                    data.data.get("games", []), session
+                )
+                result.records = saved + updated
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await nflfastr_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_nflfastr_pbp(years: List[int] = None) -> ImportResult:
+    """Import NFL play-by-play data with EPA, WPA, CPOE (large files!)."""
+    result = ImportResult(source="nflfastr_pbp", success=False)
+    try:
+        from app.services.collectors import nflfastr_collector
+        from datetime import datetime
+        
+        if years is None:
+            current_year = datetime.now().year
+            years = [current_year]
+        
+        data = await nflfastr_collector.collect_pbp(years=years, save_to_disk=True)
+        if data.success:
+            result.records = data.records_count
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await nflfastr_collector.close()
+        except:
+            pass
+    return result
+
+
 # =============================================================================
 # SOURCE MAPPING
 # =============================================================================
@@ -363,10 +442,13 @@ IMPORT_MAP = {
     "sportsdb": import_sportsdb,
     "sportsdb_history": import_sportsdb_history,
     "sportsdb_live": import_sportsdb_livescores,
+    "nflfastr": import_nflfastr,
+    "nflfastr_history": import_nflfastr_history,
+    "nflfastr_pbp": import_nflfastr_pbp,
 }
 
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history"]
 ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 
 
@@ -407,6 +489,10 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
             elif source == "sportsdb_live":
+                result = await func()
+            elif source == "nflfastr_history":
+                result = await func(years_back=seasons)
+            elif source == "nflfastr_pbp":
                 result = await func()
             else:
                 result = await func(sports=sports)
@@ -467,15 +553,18 @@ def show_status():
     console.print("  • Pinnacle      - CLV lines ($10/mo)")
     console.print("  • Weather       - OpenWeatherMap (FREE)")
     console.print("  • SportsDB      - Games/scores/livescores ($295/mo)")
+    console.print("  • nflfastr      - NFL schedules/results (FREE)")
     console.print("\n[green]✅ HISTORICAL DATA:[/green]")
     console.print("  • pinnacle_history  - Game results (~100/page)")
     console.print("  • espn_history      - Historical games (FREE)")
     console.print("  • odds_api_history  - Historical odds ($119/mo)")
     console.print("  • sportsdb_history  - Historical by season ($295/mo)")
+    console.print("  • nflfastr_history  - NFL 1999-present (FREE)")
+    console.print("\n[cyan]⚡ ADVANCED NFL DATA:[/cyan]")
+    console.print("  • nflfastr_pbp      - Play-by-play + EPA/WPA/CPOE (FREE)")
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
     console.print("  • sportsdb_live     - Real-time scores ($295/mo)")
     console.print("\n[yellow]⏳ PENDING:[/yellow]")
-    console.print("  • nflfastR      - NFL play-by-play")
     console.print("  • Basketball-Ref - NBA stats")
     console.print("  • Hockey-Ref    - NHL stats")
     console.print("  • Statcast      - MLB pitch data")

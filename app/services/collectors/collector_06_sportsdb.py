@@ -833,7 +833,9 @@ class SportsDBCollector(BaseCollector):
                     session.add(game)
                     saved += 1
             except Exception as e:
-                logger.debug(f"[SportsDB] Game save error: {e}")
+                logger.warning(f"[SportsDB] Game save error: {e}")
+                if saved == 0 and teams_created == 0:
+                    print(f"[ERROR] {e}")
         
         await session.commit()
         logger.info(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_sport} no sport, {skipped_no_team} no team)")

@@ -875,6 +875,16 @@ class SportsDBCollector(BaseCollector):
                 if data:
                     return True
         return False
+    
+    async def validate(self, data: Any) -> bool:
+        """Validate collected data."""
+        if data is None:
+            return False
+        if isinstance(data, dict):
+            return len(data) > 0
+        if isinstance(data, list):
+            return len(data) > 0
+        return True
 
 
 # Create singleton instance

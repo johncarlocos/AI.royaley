@@ -47,63 +47,48 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# SPORTSDATAVERSE CFB DATA URLS (Direct GitHub Release Downloads)
+# SPORTSDATAVERSE CFB DATA URLS (Direct GitHub Raw Files)
 # =============================================================================
 
-# Primary data source - sportsdataverse cfbfastR-data releases
-CFBVERSE_BASE = "https://github.com/sportsdataverse/cfbfastR-data/releases/download"
+# Primary data source - raw GitHub files from cfbfastR-data repo (MASTER branch)
+CFBVERSE_RAW = "https://raw.githubusercontent.com/sportsdataverse/cfbfastR-data/master"
 
-# Alternative raw data access
-CFBVERSE_RAW = "https://raw.githubusercontent.com/sportsdataverse/cfbfastR-data/main"
+# sportsdataverse-data releases (newer consolidated data)
+SPORTSDATA_RELEASES = "https://github.com/sportsdataverse/sportsdataverse-data/releases/download"
 
 CFBFASTR_URLS = {
-    # Play-by-play (2004-present)
-    "pbp_parquet": f"{CFBVERSE_BASE}/pbp/play_by_play_{{year}}.parquet",
-    "pbp_csv": f"{CFBVERSE_BASE}/pbp/play_by_play_{{year}}.csv.gz",
+    # Play-by-play (2002-2020 in cfbfastR-data, newer in sportsdataverse-data)
+    # Parquet - older data (2002-2020)
+    "pbp_parquet_old": f"{CFBVERSE_RAW}/data/parquet/play_by_play_{{year}}.parquet",
+    # CSV - older data (2002-2020)  
+    "pbp_csv": f"{CFBVERSE_RAW}/pbp/csv/play_by_play_{{year}}.csv.gz",
+    # RDS - older data
+    "pbp_rds": f"{CFBVERSE_RAW}/pbp/rds/play_by_play_{{year}}.rds",
     
-    # Schedules / Game results
-    "schedules_parquet": f"{CFBVERSE_BASE}/schedules/cfb_schedules_{{year}}.parquet",
-    "schedules_csv": f"{CFBVERSE_RAW}/schedules/cfb_schedules_{{year}}.csv",
+    # Newer PBP data from sportsdataverse-data releases (2021+)
+    "pbp_parquet_new": f"{SPORTSDATA_RELEASES}/cfbfastR_cfb_pbp/play_by_play_{{year}}.parquet",
+    
+    # Schedules from cfbfastR-data
+    "schedules_parquet": f"{CFBVERSE_RAW}/schedules/parquet/schedules_{{year}}.parquet",
+    "schedules_csv": f"{CFBVERSE_RAW}/schedules/csv/schedules_{{year}}.csv",
     
     # Team information
-    "teams": f"{CFBVERSE_BASE}/teams/teams.parquet",
-    "teams_csv": f"{CFBVERSE_RAW}/teams/teams.csv",
-    "team_info": f"{CFBVERSE_BASE}/team_info/cfb_team_info.parquet",
-    "fbs_teams": f"{CFBVERSE_RAW}/teams/fbs_teams.csv",
+    "teams_parquet": f"{CFBVERSE_RAW}/teams/parquet/teams.parquet",
+    "teams_csv": f"{CFBVERSE_RAW}/teams/csv/teams.csv",
+    "team_info_parquet": f"{CFBVERSE_RAW}/team_info/parquet/cfb_team_info.parquet",
+    "team_info_csv": f"{CFBVERSE_RAW}/team_info/csv/cfb_team_info.csv",
     
-    # SP+ Ratings (Bill Connelly's advanced metrics)
-    "sp_ratings": f"{CFBVERSE_BASE}/sp/sp_ratings_{{year}}.parquet",
-    "sp_csv": f"{CFBVERSE_RAW}/sp/sp_ratings_{{year}}.csv",
-    
-    # FPI (ESPN Football Power Index)
-    "fpi": f"{CFBVERSE_BASE}/fpi/fpi_{{year}}.parquet",
-    
-    # Betting lines
-    "betting_lines": f"{CFBVERSE_BASE}/betting/cfb_betting_lines_{{year}}.parquet",
-    "betting_csv": f"{CFBVERSE_RAW}/betting/cfb_betting_lines_{{year}}.csv",
-    
-    # Recruiting
-    "recruiting_team": f"{CFBVERSE_BASE}/recruiting/team_recruiting_{{year}}.parquet",
-    "recruiting_player": f"{CFBVERSE_BASE}/recruiting/player_recruiting_{{year}}.parquet",
+    # Betting lines  
+    "betting_parquet": f"{CFBVERSE_RAW}/betting/parquet/betting_{{year}}.parquet",
+    "betting_csv": f"{CFBVERSE_RAW}/betting/csv/betting_{{year}}.csv",
     
     # Player stats
-    "player_stats_season": f"{CFBVERSE_BASE}/player_stats/player_season_stats_{{year}}.parquet",
-    "player_stats_game": f"{CFBVERSE_BASE}/player_stats/player_game_stats_{{year}}.parquet",
-    
-    # Team stats
-    "team_stats": f"{CFBVERSE_BASE}/team_stats/team_stats_{{year}}.parquet",
+    "player_stats_parquet": f"{CFBVERSE_RAW}/player_stats/parquet/player_stats_{{year}}.parquet",
+    "player_stats_csv": f"{CFBVERSE_RAW}/player_stats/csv/player_stats_{{year}}.csv",
     
     # Rosters
-    "rosters": f"{CFBVERSE_BASE}/rosters/rosters_{{year}}.parquet",
-    
-    # Draft picks
-    "draft_picks": f"{CFBVERSE_BASE}/draft/nfl_draft_picks.parquet",
-    
-    # Pregame win probability
-    "pregame_wp": f"{CFBVERSE_BASE}/pregame/pregame_wp_{{year}}.parquet",
-    
-    # Elo ratings (calculated)
-    "elo": f"{CFBVERSE_BASE}/elo/elo_{{year}}.parquet",
+    "rosters_parquet": f"{CFBVERSE_RAW}/rosters/parquet/rosters_{{year}}.parquet",
+    "rosters_csv": f"{CFBVERSE_RAW}/rosters/csv/rosters_{{year}}.csv",
 }
 
 
@@ -418,8 +403,8 @@ class CFBFastRCollector(BaseCollector):
         if years is None:
             years = list(range(current_year - 4, current_year + 1))
         
-        # Ensure years are within cfbfastR range (2004+)
-        years = [y for y in years if y >= 2004]
+        # Ensure years are within cfbfastR-data range (2002+)
+        years = [y for y in years if y >= 2002]
         
         all_data = {
             "games": [],
@@ -487,22 +472,32 @@ class CFBFastRCollector(BaseCollector):
         - Conference championship games
         - Bowl games
         - CFP games
+        
+        Note: Primary method is extracting from PBP data since 
+        dedicated schedule files may not be available.
         """
         games = []
         
         for year in years:
             try:
-                # Try parquet first
-                url = CFBFASTR_URLS["schedules_parquet"].format(year=year)
-                df = await self._download_parquet(url)
+                df = None
+                
+                # Try dedicated schedules first (less likely to work)
+                try:
+                    url = CFBFASTR_URLS["schedules_parquet"].format(year=year)
+                    df = await self._download_parquet(url)
+                except:
+                    pass
                 
                 if df is None or len(df) == 0:
-                    # Try CSV fallback
-                    url = CFBFASTR_URLS["schedules_csv"].format(year=year)
-                    df = await self._download_csv(url)
+                    try:
+                        url = CFBFASTR_URLS["schedules_csv"].format(year=year)
+                        df = await self._download_csv(url)
+                    except:
+                        pass
                 
+                # Extract from PBP as primary fallback (most reliable)
                 if df is None or len(df) == 0:
-                    # Extract from PBP as last resort
                     df = await self._extract_games_from_pbp(year)
                 
                 if df is not None and len(df) > 0:
@@ -646,31 +641,51 @@ class CFBFastRCollector(BaseCollector):
     async def _extract_games_from_pbp(self, year: int) -> Optional[pd.DataFrame]:
         """Extract unique games from PBP data as fallback."""
         try:
-            url = CFBFASTR_URLS["pbp_parquet"].format(year=year)
+            # Try newer sportsdataverse-data first (2021+)
+            if year >= 2021:
+                url = CFBFASTR_URLS["pbp_parquet_new"].format(year=year)
+            else:
+                # Older data in cfbfastR-data repo
+                url = CFBFASTR_URLS["pbp_parquet_old"].format(year=year)
+            
             cols = ["game_id", "home", "away", "game_date", "season", "week",
                     "home_score", "away_score", "season_type"]
             
             df = await self._download_parquet(url, columns=cols)
             
             if df is None or len(df) == 0:
+                # Try CSV as fallback
+                url = CFBFASTR_URLS["pbp_csv"].format(year=year)
+                df = await self._download_csv(url)
+            
+            if df is None or len(df) == 0:
                 return None
             
             # Get unique games with final scores
-            games = df.groupby("game_id").agg({
-                "home": "first",
-                "away": "first",
-                "game_date": "first",
-                "season": "first",
-                "week": "first",
-                "season_type": "first",
-                "home_score": "max",
-                "away_score": "max",
-            }).reset_index()
+            # Handle potential column variations
+            home_col = "home" if "home" in df.columns else "home_team"
+            away_col = "away" if "away" in df.columns else "away_team"
+            
+            if home_col not in df.columns or away_col not in df.columns:
+                logger.debug(f"[cfbfastR] PBP columns: {df.columns.tolist()}")
+                return None
+            
+            agg_dict = {
+                home_col: "first",
+                away_col: "first",
+            }
+            
+            # Add optional columns if they exist
+            for col in ["game_date", "season", "week", "season_type", "home_score", "away_score"]:
+                if col in df.columns:
+                    agg_dict[col] = "first" if col not in ["home_score", "away_score"] else "max"
+            
+            games = df.groupby("game_id").agg(agg_dict).reset_index()
             
             # Rename columns to match schedule format
             games = games.rename(columns={
-                "home": "home_team",
-                "away": "away_team",
+                home_col: "home_team",
+                away_col: "away_team",
             })
             
             logger.info(f"[cfbfastR] Extracted {len(games)} games from {year} PBP")
@@ -696,7 +711,7 @@ class CFBFastRCollector(BaseCollector):
         WARNING: Large files (~300MB per season compressed)
         
         Args:
-            years: List of years (2004-present)
+            years: List of years (2002-present)
             columns: Specific columns to load (None = key columns only)
             save_to_disk: Save parquet files locally for faster reuse
             
@@ -707,8 +722,8 @@ class CFBFastRCollector(BaseCollector):
         if years is None:
             years = [current_year]
         
-        # Ensure valid years (cfbfastR starts at 2004)
-        years = [y for y in years if 2004 <= y <= current_year]
+        # Ensure valid years (cfbfastR starts at 2002)
+        years = [y for y in years if 2002 <= y <= current_year]
         
         if columns is None:
             columns = CFB_PBP_KEY_COLUMNS
@@ -718,26 +733,39 @@ class CFBFastRCollector(BaseCollector):
         
         for year in years:
             try:
-                url = CFBFASTR_URLS["pbp_parquet"].format(year=year)
-                logger.info(f"[cfbfastR] Downloading PBP for {year}...")
-                
-                # Check if cached
+                # Check if cached first
                 cache_path = self.data_dir / f"pbp_{year}.parquet"
                 
                 if cache_path.exists() and not save_to_disk:
                     logger.info(f"[cfbfastR] Loading cached PBP for {year}")
-                    # Only load available columns
                     available_cols = pd.read_parquet(cache_path, columns=None).columns.tolist()
                     load_cols = [c for c in columns if c in available_cols]
                     df = pd.read_parquet(cache_path, columns=load_cols if load_cols else None)
                 else:
-                    df = await self._download_parquet(url, columns=columns)
+                    # Try newer sportsdataverse-data first (2021+)
+                    df = None
+                    if year >= 2021:
+                        url = CFBFASTR_URLS["pbp_parquet_new"].format(year=year)
+                        logger.info(f"[cfbfastR] Trying sportsdataverse-data for {year}...")
+                        df = await self._download_parquet(url, columns=columns)
+                    
+                    # Fall back to cfbfastR-data repo (2002-2020)
+                    if df is None:
+                        url = CFBFASTR_URLS["pbp_parquet_old"].format(year=year)
+                        logger.info(f"[cfbfastR] Trying cfbfastR-data for {year}...")
+                        df = await self._download_parquet(url, columns=columns)
+                    
+                    # Try CSV as last resort
+                    if df is None:
+                        url = CFBFASTR_URLS["pbp_csv"].format(year=year)
+                        logger.info(f"[cfbfastR] Trying CSV for {year}...")
+                        df = await self._download_csv(url)
                     
                     if df is not None and save_to_disk:
                         df.to_parquet(cache_path)
                         logger.info(f"[cfbfastR] Cached PBP {year} to {cache_path}")
                 
-                if df is not None:
+                if df is not None and len(df) > 0:
                     results.append({
                         "year": year,
                         "plays": len(df),
@@ -799,8 +827,11 @@ class CFBFastRCollector(BaseCollector):
                 load_cols = [c for c in cols if c in available]
                 pbp = pd.read_parquet(cache_path, columns=load_cols)
             else:
-                # Download
-                url = CFBFASTR_URLS["pbp_parquet"].format(year=season)
+                # Download - select URL based on year
+                if season >= 2021:
+                    url = CFBFASTR_URLS["pbp_parquet_new"].format(year=season)
+                else:
+                    url = CFBFASTR_URLS["pbp_parquet_old"].format(year=season)
                 cols = ["pos_team", "play_type", "EPA", "success", "week", "explosiveness"]
                 pbp = await self._download_parquet(url, columns=cols)
             
@@ -863,6 +894,10 @@ class CFBFastRCollector(BaseCollector):
         """
         Collect SP+ ratings - the gold standard for CFB team evaluation.
         
+        NOTE: SP+ ratings are NOT available in the cfbfastR-data repository.
+        They require the CollegeFootballData API (CFBD_API_KEY).
+        This method is a placeholder for future API integration.
+        
         SP+ Components:
         - Overall rating
         - Offensive rating
@@ -871,31 +906,9 @@ class CFBFastRCollector(BaseCollector):
         - Second-order wins
         - Strength of schedule
         """
-        sp_ratings = []
-        
-        for year in years:
-            try:
-                # Try parquet
-                url = CFBFASTR_URLS["sp_ratings"].format(year=year)
-                df = await self._download_parquet(url)
-                
-                if df is None or len(df) == 0:
-                    # Try CSV
-                    url = CFBFASTR_URLS["sp_csv"].format(year=year)
-                    df = await self._download_csv(url)
-                
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        rating = self._parse_sp_rating(row, year)
-                        if rating:
-                            sp_ratings.append(rating)
-                    
-                    logger.info(f"[cfbfastR] {year}: {len(df)} SP+ ratings loaded")
-                    
-            except Exception as e:
-                logger.debug(f"[cfbfastR] SP+ {year} error: {e}")
-        
-        return sp_ratings
+        logger.warning("[cfbfastR] SP+ ratings not available in cfbfastR-data repo. "
+                      "These require the CollegeFootballData API.")
+        return []
     
     def _parse_sp_rating(self, row, year: int) -> Optional[Dict[str, Any]]:
         """Parse SP+ rating row."""
@@ -938,31 +951,19 @@ class CFBFastRCollector(BaseCollector):
         """
         Collect team recruiting rankings.
         
+        NOTE: Recruiting data is NOT available in the cfbfastR-data repository.
+        It requires the CollegeFootballData API (CFBD_API_KEY).
+        This method is a placeholder for future API integration.
+        
         Includes:
         - Team ranking (247Sports Composite)
         - Total points
         - 5-star, 4-star, 3-star counts
         - Average player rating
         """
-        recruiting = []
-        
-        for year in years:
-            try:
-                url = CFBFASTR_URLS["recruiting_team"].format(year=year)
-                df = await self._download_parquet(url)
-                
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        rec = self._parse_recruiting(row, year)
-                        if rec:
-                            recruiting.append(rec)
-                    
-                    logger.info(f"[cfbfastR] {year}: {len(df)} recruiting records")
-                    
-            except Exception as e:
-                logger.debug(f"[cfbfastR] Recruiting {year} error: {e}")
-        
-        return recruiting
+        logger.warning("[cfbfastR] Recruiting data not available in cfbfastR-data repo. "
+                      "This requires the CollegeFootballData API.")
+        return []
     
     def _parse_recruiting(self, row, year: int) -> Optional[Dict[str, Any]]:
         """Parse recruiting row."""
@@ -997,7 +998,7 @@ class CFBFastRCollector(BaseCollector):
         
         for year in years:
             try:
-                url = CFBFASTR_URLS["betting_lines"].format(year=year)
+                url = CFBFASTR_URLS["betting_parquet"].format(year=year)
                 df = await self._download_parquet(url)
                 
                 if df is None or len(df) == 0:
@@ -1045,26 +1046,15 @@ class CFBFastRCollector(BaseCollector):
     # =========================================================================
     
     async def _collect_team_stats(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect team statistics."""
-        team_stats = []
+        """
+        Collect team statistics.
         
-        for year in years:
-            try:
-                url = CFBFASTR_URLS["team_stats"].format(year=year)
-                df = await self._download_parquet(url)
-                
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        stats = row.to_dict()
-                        stats["season"] = year
-                        team_stats.append(stats)
-                    
-                    logger.info(f"[cfbfastR] {year}: {len(df)} team stats")
-                    
-            except Exception as e:
-                logger.debug(f"[cfbfastR] Team stats {year} error: {e}")
-        
-        return team_stats
+        NOTE: Team stats are NOT available in the cfbfastR-data repository as separate files.
+        Team statistics can be derived from PBP data using get_team_epa().
+        """
+        logger.warning("[cfbfastR] Team stats not available as separate files. "
+                      "Use get_team_epa() to calculate from PBP data.")
+        return []
     
     # =========================================================================
     # PLAYER STATS
@@ -1076,8 +1066,12 @@ class CFBFastRCollector(BaseCollector):
         
         for year in years:
             try:
-                url = CFBFASTR_URLS["player_stats_season"].format(year=year)
+                url = CFBFASTR_URLS["player_stats_parquet"].format(year=year)
                 df = await self._download_parquet(url)
+                
+                if df is None or len(df) == 0:
+                    url = CFBFASTR_URLS["player_stats_csv"].format(year=year)
+                    df = await self._download_csv(url)
                 
                 if df is not None and len(df) > 0:
                     for _, row in df.iterrows():
@@ -1107,7 +1101,7 @@ class CFBFastRCollector(BaseCollector):
         Collect historical NCAAF data.
         
         Args:
-            start_year: First year (2004 minimum for PBP)
+            start_year: First year (2002 minimum for cfbfastR-data)
             end_year: Last year (default: current year)
             include_pbp: Download full PBP data (WARNING: large files)
             
@@ -1117,8 +1111,8 @@ class CFBFastRCollector(BaseCollector):
         if end_year is None:
             end_year = datetime.now().year
         
-        # Ensure valid range for cfbfastR (2004+)
-        start_year = max(start_year, 2004)
+        # Ensure valid range for cfbfastR-data (2002+)
+        start_year = max(start_year, 2002)
         
         years = list(range(start_year, end_year + 1))
         

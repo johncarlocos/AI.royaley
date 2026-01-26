@@ -109,8 +109,9 @@ class Settings(BaseSettings):
     WEATHER_API_BASE_URL: str = "https://api.openweathermap.org/data/2.5"
     
     # TheSportsDB API
-    SPORTSDB_API_KEY: str = ""
-    SPORTSDB_BASE_URL: str = "https://www.thesportsdb.com/api/v1/json"
+    SPORTSDB_API_KEY: str = "688655"
+    SPORTSDB_BASE_URL: str = "https://www.thesportsdb.com/api/v2/json"
+    SPORTSDB_V1_BASE_URL: str = "https://www.thesportsdb.com/api/v1/json"
     
     # Google Maps API (for travel/distance)
     GOOGLE_MAPS_API_KEY: str = ""

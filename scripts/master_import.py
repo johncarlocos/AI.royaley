@@ -261,6 +261,93 @@ async def import_weather(sports: List[str] = None) -> ImportResult:
     return result
 
 
+async def import_sportsdb(sports: List[str] = None) -> ImportResult:
+    """Import games/scores/livescores from TheSportsDB."""
+    result = ImportResult(source="sportsdb", success=False)
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        for sport in sports:
+            try:
+                data = await sportsdb_collector.collect(sport_code=sport)
+                if data.success and data.data:
+                    result.records += data.records_count
+                    await db_manager.initialize()
+                    async with db_manager.session() as session:
+                        await sportsdb_collector.save_to_database(data.data, session)
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await sportsdb_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_sportsdb_history(sports: List[str] = None, seasons: int = 3) -> ImportResult:
+    """Import historical game results from TheSportsDB by season."""
+    result = ImportResult(source="sportsdb_history", success=False)
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        for sport in sports:
+            try:
+                data = await sportsdb_collector.collect_historical(
+                    sport_code=sport, 
+                    seasons_back=seasons
+                )
+                if data.success and data.data:
+                    await db_manager.initialize()
+                    async with db_manager.session() as session:
+                        saved, updated = await sportsdb_collector.save_historical_to_database(
+                            data.data, session
+                        )
+                        result.records += saved + updated
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:50]}")
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await sportsdb_collector.close()
+        except:
+            pass
+    return result
+
+
+async def import_sportsdb_livescores() -> ImportResult:
+    """Import all current livescores from TheSportsDB."""
+    result = ImportResult(source="sportsdb_live", success=False)
+    try:
+        from app.services.collectors import sportsdb_collector
+        from app.core.database import db_manager
+        
+        data = await sportsdb_collector.collect_all_livescores()
+        if data.success and data.data:
+            result.records = data.records_count
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                await sportsdb_collector._update_livescores(data.data, session)
+        result.success = result.records > 0 or data.success
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    finally:
+        try:
+            await sportsdb_collector.close()
+        except:
+            pass
+    return result
+
+
 # =============================================================================
 # SOURCE MAPPING
 # =============================================================================
@@ -273,10 +360,13 @@ IMPORT_MAP = {
     "espn_history": import_espn_history,
     "odds_api_history": import_odds_api_history,
     "weather": import_weather,
+    "sportsdb": import_sportsdb,
+    "sportsdb_history": import_sportsdb_history,
+    "sportsdb_live": import_sportsdb_livescores,
 }
 
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history"]
 ALL_SOURCES = CURRENT_SOURCES + HISTORICAL_SOURCES
 
 
@@ -314,6 +404,10 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "odds_api_history":
                 result = await func(sports=sports, days=days)
+            elif source == "sportsdb_history":
+                result = await func(sports=sports, seasons=3)
+            elif source == "sportsdb_live":
+                result = await func()
             else:
                 result = await func(sports=sports)
             
@@ -372,10 +466,14 @@ def show_status():
     console.print("  • OddsAPI       - 40+ books ($59/mo)")
     console.print("  • Pinnacle      - CLV lines ($10/mo)")
     console.print("  • Weather       - OpenWeatherMap (FREE)")
+    console.print("  • SportsDB      - Games/scores/livescores ($295/mo)")
     console.print("\n[green]✅ HISTORICAL DATA:[/green]")
     console.print("  • pinnacle_history  - Game results (~100/page)")
     console.print("  • espn_history      - Historical games (FREE)")
     console.print("  • odds_api_history  - Historical odds ($119/mo)")
+    console.print("  • sportsdb_history  - Historical by season ($295/mo)")
+    console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
+    console.print("  • sportsdb_live     - Real-time scores ($295/mo)")
     console.print("\n[yellow]⏳ PENDING:[/yellow]")
     console.print("  • nflfastR      - NFL play-by-play")
     console.print("  • Basketball-Ref - NBA stats")

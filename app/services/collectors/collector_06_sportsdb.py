@@ -1,23 +1,24 @@
 """
-ROYALEY - TheSportsDB Collector
+ROYALEY - TheSportsDB Collector (V2 Premium)
 Phase 1: Data Collection Services
 
-Collects comprehensive sports data from TheSportsDB API.
-Features: Games, scores, teams, livescores, historical results.
+PREMIUM USER FIX ($295 subscription):
+- Uses V2 API with X-API-KEY header authentication
+- API Key: 688655 (user's premium key)
+- Base URL: https://www.thesportsdb.com/api/v2/json
 
-API Documentation: https://www.thesportsdb.com/documentation
-API Tier: Premium ($295/mo) - Full V2 API access with livescores
-
-V2 API Base URL: https://www.thesportsdb.com/api/v2/json
-V1 API Base URL: https://www.thesportsdb.com/api/v1/json/{API_KEY}
-
-Authentication:
-- V2: X-API-KEY header
-- V1: API key in URL path
+V2 API Endpoints (Premium):
+- /list/teams/{league_id} - List all teams in league
+- /lookup/team/{team_id} - Lookup team details
+- /schedule/league/{league_id} - League schedule
+- /schedule/next/league/{league_id} - Upcoming events
+- /schedule/previous/league/{league_id} - Past events
+- /livescore/{league_id} - Live scores
 """
 
 import asyncio
 import logging
+import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
@@ -46,8 +47,8 @@ SPORTSDB_LEAGUE_IDS = {
     "NCAAB": 4607,
     "WNBA": 4962,
     "CFL": 4406,
-    "ATP": 4464,   # ATP Tour
-    "WTA": 4465,   # WTA Tour
+    "ATP": 4464,
+    "WTA": 4465,
 }
 
 # Sport names in TheSportsDB
@@ -66,27 +67,27 @@ SPORTSDB_SPORT_NAMES = {
 
 # Game status mapping
 STATUS_MAP = {
-    "NS": "scheduled",      # Not Started
-    "1H": "in_progress",    # First Half
-    "2H": "in_progress",    # Second Half
-    "HT": "in_progress",    # Half Time
-    "Q1": "in_progress",    # Quarter 1
-    "Q2": "in_progress",    # Quarter 2
-    "Q3": "in_progress",    # Quarter 3
-    "Q4": "in_progress",    # Quarter 4
-    "OT": "in_progress",    # Overtime
-    "BT": "in_progress",    # Break Time
-    "PT": "in_progress",    # Penalty Time
-    "ET": "in_progress",    # Extra Time
-    "FT": "final",          # Full Time / Finished
-    "AOT": "final",         # After Over Time
-    "AET": "final",         # After Extra Time
-    "AP": "final",          # After Penalties
-    "CANC": "cancelled",    # Cancelled
-    "PST": "postponed",     # Postponed
-    "ABD": "cancelled",     # Abandoned
-    "AWD": "final",         # Awarded
-    "WO": "final",          # Walkover
+    "NS": "scheduled",
+    "1H": "in_progress",
+    "2H": "in_progress",
+    "HT": "in_progress",
+    "Q1": "in_progress",
+    "Q2": "in_progress",
+    "Q3": "in_progress",
+    "Q4": "in_progress",
+    "OT": "in_progress",
+    "BT": "in_progress",
+    "PT": "in_progress",
+    "ET": "in_progress",
+    "FT": "final",
+    "AOT": "final",
+    "AET": "final",
+    "AP": "final",
+    "CANC": "cancelled",
+    "PST": "postponed",
+    "ABD": "cancelled",
+    "AWD": "final",
+    "WO": "final",
     "Match Finished": "final",
     "Not Started": "scheduled",
     "": "scheduled",
@@ -95,39 +96,101 @@ STATUS_MAP = {
 
 class SportsDBCollector(BaseCollector):
     """
-    Collector for TheSportsDB API.
+    Collector for TheSportsDB API - V2 Premium Version.
     
-    Features:
-    - Games/Events schedule (current, upcoming, past)
-    - Livescores (real-time updates)
-    - Team information
-    - Historical results (by season)
-    - League standings
-    
-    Premium features available with $9+/mo subscription.
+    Uses V2 API with X-API-KEY header authentication.
+    Premium features: Livescores, video highlights, full access.
     """
     
     def __init__(self):
-        # V2 API base URL (premium)
         super().__init__(
             name="sportsdb",
             base_url="https://www.thesportsdb.com/api/v2/json",
-            rate_limit=120,  # Business tier limit
+            rate_limit=120,  # Business tier: 120/min
             rate_window=60,
             timeout=30.0,
             max_retries=3,
         )
+        # User's premium API key
         self.api_key = settings.SPORTSDB_API_KEY or "688655"
+        # V1 base URL for fallback
         self.v1_base_url = f"https://www.thesportsdb.com/api/v1/json/{self.api_key}"
+        logger.info(f"[SportsDB] Initialized with premium API key: {self.api_key}")
         
     def _get_headers(self) -> Dict[str, str]:
-        """Get V2 API headers with authentication."""
+        """Get V2 API headers with X-API-KEY authentication."""
         return {
             "Accept": "application/json",
             "Content-Type": "application/json",
             "X-API-KEY": self.api_key,
         }
     
+    async def _request_v2(self, endpoint: str) -> Optional[Dict]:
+        """
+        Make a V2 API request with header authentication.
+        
+        Args:
+            endpoint: V2 endpoint path (e.g., "/list/teams/4391")
+        """
+        url = f"{self.base_url}{endpoint}"
+        headers = self._get_headers()
+        
+        logger.info(f"[SportsDB] 🌐 V2 request: {url}")
+        print(f"[SportsDB] 🌐 V2 request: {url}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url, headers=headers)
+                logger.info(f"[SportsDB] 📥 V2 Response: {response.status_code}")
+                print(f"[SportsDB] 📥 V2 Response: {response.status_code}")
+                
+                if response.status_code == 200:
+                    return response.json()
+                elif response.status_code == 401:
+                    logger.error(f"[SportsDB] V2 API 401 Unauthorized - check API key")
+                    return None
+                elif response.status_code == 429:
+                    logger.warning(f"[SportsDB] V2 API rate limited")
+                    await asyncio.sleep(60)
+                    return None
+                else:
+                    logger.warning(f"[SportsDB] V2 API returned {response.status_code}: {response.text[:200]}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"[SportsDB] V2 API error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    async def _request_v1(self, endpoint: str) -> Optional[Dict]:
+        """
+        Make a V1 API request (fallback).
+        
+        Args:
+            endpoint: V1 endpoint path (e.g., "lookup_all_teams.php?id=4391")
+        """
+        url = f"{self.v1_base_url}/{endpoint}"
+        
+        logger.info(f"[SportsDB] 🌐 V1 fallback: {url}")
+        print(f"[SportsDB] 🌐 V1 fallback: {url}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+                logger.info(f"[SportsDB] 📥 V1 Response: {response.status_code}")
+                print(f"[SportsDB] 📥 V1 Response: {response.status_code}")
+                
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.warning(f"[SportsDB] V1 API returned {response.status_code}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"[SportsDB] V1 API error: {e}")
+            return None
+
     async def collect(
         self,
         sport_code: str = None,
@@ -135,17 +198,7 @@ class SportsDBCollector(BaseCollector):
         days_ahead: int = 7,
         **kwargs,
     ) -> CollectorResult:
-        """
-        Collect data from TheSportsDB.
-        
-        Args:
-            sport_code: Optional sport code (NFL, NBA, etc.)
-            collect_type: Type of data (schedule, livescores, teams, all)
-            days_ahead: Days ahead for schedule
-            
-        Returns:
-            CollectorResult with collected data
-        """
+        """Collect data from TheSportsDB."""
         sports_to_collect = (
             [sport_code] if sport_code 
             else list(SPORTSDB_LEAGUE_IDS.keys())
@@ -153,138 +206,125 @@ class SportsDBCollector(BaseCollector):
         
         all_data = {
             "games": [],
-            "livescores": [],
             "teams": [],
+            "livescores": [],
         }
-        errors = []
         
         for sport in sports_to_collect:
             if sport not in SPORTSDB_LEAGUE_IDS:
-                logger.warning(f"[SportsDB] Unknown sport: {sport}")
                 continue
                 
             try:
-                if collect_type in ["schedule", "all"]:
-                    # Get upcoming games
+                if collect_type in ("all", "schedule", "games"):
                     games = await self._collect_schedule(sport, days_ahead)
                     all_data["games"].extend(games)
                     
-                    # Get recent results
-                    results = await self._collect_results(sport)
-                    all_data["games"].extend(results)
-                
-                if collect_type in ["livescores", "all"]:
-                    livescores = await self._collect_livescores(sport)
-                    all_data["livescores"].extend(livescores)
-                
-                if collect_type in ["teams", "all"]:
+                if collect_type in ("all", "teams"):
                     teams = await self._collect_teams(sport)
                     all_data["teams"].extend(teams)
                     
+                if collect_type in ("all", "livescores"):
+                    live = await self._collect_livescores(sport)
+                    all_data["livescores"].extend(live)
+                    
             except Exception as e:
                 logger.error(f"[SportsDB] Error collecting {sport}: {e}")
-                errors.append(f"{sport}: {str(e)}")
         
-        total_records = sum(len(v) for v in all_data.values())
+        total = len(all_data["games"]) + len(all_data["teams"]) + len(all_data["livescores"])
         
         return CollectorResult(
-            success=len(errors) == 0 or total_records > 0,
+            source="sportsdb",
+            success=total > 0,
             data=all_data,
-            records_count=total_records,
-            error="; ".join(errors) if errors else None,
-            metadata={
-                "sports_collected": sports_to_collect,
-                "collect_type": collect_type,
-            },
+            records_count=total,
         )
-    
+
     # =========================================================================
-    # SCHEDULE & EVENTS
+    # TEAMS COLLECTION (for Venues)
     # =========================================================================
     
-    async def _collect_schedule(
-        self,
-        sport_code: str,
-        days_ahead: int = 7,
-    ) -> List[Dict[str, Any]]:
-        """Collect upcoming game schedule using V2 API."""
+    async def _collect_teams(self, sport_code: str) -> List[Dict[str, Any]]:
+        """Collect team information using V2 API."""
+        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
+        if not league_id:
+            return []
+        
+        teams = []
+        
+        # Try V2 API first: /list/teams/{league_id}
+        data = await self._request_v2(f"/list/teams/{league_id}")
+        
+        if data and data.get("teams"):
+            for team_data in data["teams"]:
+                team = self._parse_team(team_data, sport_code)
+                if team:
+                    teams.append(team)
+            logger.info(f"[SportsDB] V2: Collected {len(teams)} teams for {sport_code}")
+        else:
+            # Fallback to V1
+            data = await self._request_v1(f"lookup_all_teams.php?id={league_id}")
+            if data and data.get("teams"):
+                for team_data in data["teams"]:
+                    team = self._parse_team(team_data, sport_code)
+                    if team:
+                        teams.append(team)
+                logger.info(f"[SportsDB] V1: Collected {len(teams)} teams for {sport_code}")
+        
+        return teams
+    
+    def _parse_team(self, team_data: Dict, sport_code: str) -> Optional[Dict[str, Any]]:
+        """Parse team data from API response."""
+        try:
+            return {
+                "external_id": f"sportsdb_{team_data.get('idTeam')}",
+                "name": team_data.get("strTeam"),
+                "abbreviation": (team_data.get("strTeamShort") or "")[:10],
+                "city": (team_data.get("strStadiumLocation") or "").split(",")[0].strip() or None,
+                "conference": team_data.get("strDivision"),
+                "division": team_data.get("strDivision"),
+                "logo_url": team_data.get("strTeamBadge") or team_data.get("strBadge"),
+                "sport_code": sport_code,
+                "stadium": team_data.get("strStadium"),
+            }
+        except Exception as e:
+            logger.debug(f"[SportsDB] Error parsing team: {e}")
+            return None
+
+    # =========================================================================
+    # SCHEDULE COLLECTION
+    # =========================================================================
+    
+    async def _collect_schedule(self, sport_code: str, days_ahead: int = 7) -> List[Dict[str, Any]]:
+        """Collect upcoming game schedule."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
             return []
         
         games = []
         
-        try:
-            # V2 API: Next events for league
-            endpoint = f"/schedule/next/league/{league_id}"
-            
-            data = await self.get(endpoint)
-            
-            # Handle different response structures
-            events = (
-                data.get("schedule") or 
-                data.get("events") or 
-                data.get("event") or
-                []
-            )
-            
-            # If events is a dict (single event), wrap in list
-            if isinstance(events, dict):
-                events = [events]
-            
-            logger.info(f"[SportsDB] {sport_code}: Fetched {len(events)} upcoming events")
-            
+        # Try V2 API first: /schedule/next/league/{league_id}
+        data = await self._request_v2(f"/schedule/next/league/{league_id}")
+        
+        if data:
+            events = data.get("schedule") or data.get("events") or []
             for event in events:
                 game = self._parse_event(event, sport_code)
                 if game:
                     games.append(game)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB] Failed to get schedule for {sport_code}: {e}")
-            
-            # Fallback to V1 API
-            try:
-                games = await self._collect_schedule_v1(sport_code)
-            except Exception as e2:
-                logger.error(f"[SportsDB] V1 fallback also failed: {e2}")
+            logger.info(f"[SportsDB] V2: Collected {len(games)} upcoming games for {sport_code}")
+        else:
+            # Fallback to V1
+            data = await self._request_v1(f"eventsnextleague.php?id={league_id}")
+            if data and data.get("events"):
+                for event in data["events"]:
+                    game = self._parse_event(event, sport_code)
+                    if game:
+                        games.append(game)
+                logger.info(f"[SportsDB] V1: Collected {len(games)} upcoming games for {sport_code}")
         
         return games
     
-    async def _collect_schedule_v1(self, sport_code: str) -> List[Dict[str, Any]]:
-        """Fallback: Collect schedule using V1 API."""
-        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
-        if not league_id:
-            return []
-        
-        games = []
-        
-        try:
-            # V1 API endpoint
-            url = f"{self.v1_base_url}/eventsnextleague.php?id={league_id}"
-            
-            client = await self.get_client()
-            response = await client.get(url, headers={"Accept": "application/json"})
-            response.raise_for_status()
-            data = response.json()
-            
-            events = data.get("events") or []
-            logger.info(f"[SportsDB V1] {sport_code}: Fetched {len(events)} events")
-            
-            for event in events:
-                game = self._parse_event(event, sport_code)
-                if game:
-                    games.append(game)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB V1] Schedule error: {e}")
-        
-        return games
-    
-    async def _collect_results(
-        self,
-        sport_code: str,
-        limit: int = 15,
-    ) -> List[Dict[str, Any]]:
+    async def _collect_results(self, sport_code: str, limit: int = 15) -> List[Dict[str, Any]]:
         """Collect recent game results."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
@@ -292,1053 +332,216 @@ class SportsDBCollector(BaseCollector):
         
         games = []
         
-        try:
-            # V2 API: Previous events for league
-            endpoint = f"/schedule/previous/league/{league_id}"
-            
-            data = await self.get(endpoint)
+        # Try V2 API first
+        data = await self._request_v2(f"/schedule/previous/league/{league_id}")
+        
+        if data:
             events = data.get("schedule") or data.get("events") or []
-            
-            logger.info(f"[SportsDB] {sport_code}: Fetched {len(events)} recent results")
-            
-            for event in events:
-                game = self._parse_event(event, sport_code, is_result=True)
+            for event in events[:limit]:
+                game = self._parse_event(event, sport_code)
                 if game:
                     games.append(game)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB] Failed to get results for {sport_code}: {e}")
-            
-            # Fallback to V1 API
-            try:
-                url = f"{self.v1_base_url}/eventspastleague.php?id={league_id}"
-                client = await self.get_client()
-                response = await client.get(url, headers={"Accept": "application/json"})
-                response.raise_for_status()
-                data = response.json()
-                
-                events = data.get("events") or []
-                for event in events:
-                    game = self._parse_event(event, sport_code, is_result=True)
+            logger.info(f"[SportsDB] V2: Collected {len(games)} past games for {sport_code}")
+        else:
+            # Fallback to V1
+            data = await self._request_v1(f"eventspastleague.php?id={league_id}")
+            if data and data.get("events"):
+                for event in data["events"][:limit]:
+                    game = self._parse_event(event, sport_code)
                     if game:
                         games.append(game)
-            except Exception as e2:
-                logger.error(f"[SportsDB V1] Results fallback failed: {e2}")
+                logger.info(f"[SportsDB] V1: Collected {len(games)} past games for {sport_code}")
         
         return games
     
+    def _parse_event(self, event: Dict, sport_code: str) -> Optional[Dict[str, Any]]:
+        """Parse event data."""
+        try:
+            date_str = event.get("dateEvent", "")
+            time_str = event.get("strTime", "00:00:00") or "00:00:00"
+            
+            if not date_str:
+                return None
+            
+            try:
+                if "+" in time_str:
+                    time_str = time_str.split("+")[0]
+                time_str = time_str.replace("Z", "").strip() or "00:00:00"
+                dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+                scheduled_time = dt.replace(tzinfo=timezone.utc)
+            except:
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    scheduled_time = dt.replace(tzinfo=timezone.utc)
+                except:
+                    return None
+            
+            home_score = None
+            away_score = None
+            if event.get("intHomeScore") not in (None, "", "null"):
+                try:
+                    home_score = int(event["intHomeScore"])
+                except:
+                    pass
+            if event.get("intAwayScore") not in (None, "", "null"):
+                try:
+                    away_score = int(event["intAwayScore"])
+                except:
+                    pass
+            
+            status_str = event.get("strStatus", "") or ""
+            status = STATUS_MAP.get(status_str, "scheduled")
+            
+            return {
+                "external_id": f"sportsdb_{event.get('idEvent')}",
+                "sport_code": sport_code,
+                "home_team": event.get("strHomeTeam"),
+                "away_team": event.get("strAwayTeam"),
+                "scheduled_time": scheduled_time,
+                "status": status,
+                "home_score": home_score,
+                "away_score": away_score,
+                "venue": event.get("strVenue"),
+                "season": event.get("strSeason"),
+                "round": event.get("intRound"),
+            }
+        except Exception as e:
+            logger.debug(f"[SportsDB] Error parsing event: {e}")
+            return None
+
     # =========================================================================
     # LIVESCORES
     # =========================================================================
     
     async def _collect_livescores(self, sport_code: str) -> List[Dict[str, Any]]:
-        """Collect live scores (premium feature)."""
+        """Collect live scores (Premium V2 only)."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
-        sport_name = SPORTSDB_SPORT_NAMES.get(sport_code)
-        
-        if not league_id or not sport_name:
+        if not league_id:
             return []
         
         livescores = []
         
-        try:
-            # V2 API: Livescores by league
-            endpoint = f"/livescore/{league_id}"
-            
-            data = await self.get(endpoint)
-            events = data.get("livescore") or data.get("events") or []
-            
-            if events:
-                logger.info(f"[SportsDB] {sport_code}: {len(events)} live games")
-            
-            for event in events:
-                live = self._parse_livescore(event, sport_code)
-                if live:
-                    livescores.append(live)
-                    
-        except Exception as e:
-            # Livescores may not be available for all sports/times
-            logger.debug(f"[SportsDB] No livescores for {sport_code}: {e}")
+        # V2 only for livescores
+        data = await self._request_v2(f"/livescore/{league_id}")
+        
+        if data and data.get("events"):
+            for event in data["events"]:
+                score = {
+                    "external_id": f"sportsdb_{event.get('idEvent')}",
+                    "sport_code": sport_code,
+                    "home_team": event.get("strHomeTeam"),
+                    "away_team": event.get("strAwayTeam"),
+                    "home_score": int(event.get("intHomeScore", 0) or 0),
+                    "away_score": int(event.get("intAwayScore", 0) or 0),
+                    "status": event.get("strStatus", ""),
+                    "progress": event.get("strProgress", ""),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                livescores.append(score)
+            logger.info(f"[SportsDB] Collected {len(livescores)} live scores for {sport_code}")
         
         return livescores
     
     async def collect_all_livescores(self) -> CollectorResult:
-        """Collect all current livescores across all sports."""
+        """Collect live scores for all sports."""
         all_livescores = []
-        errors = []
         
-        try:
-            # V2 API: All livescores
-            endpoint = "/livescore/all"
-            
-            data = await self.get(endpoint)
-            events = data.get("livescore") or data.get("events") or []
-            
-            logger.info(f"[SportsDB] Fetched {len(events)} total livescores")
-            
-            for event in events:
-                # Determine sport from event data
-                sport_code = self._get_sport_from_event(event)
-                live = self._parse_livescore(event, sport_code or "UNKNOWN")
-                if live:
-                    all_livescores.append(live)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB] Failed to get all livescores: {e}")
-            errors.append(str(e))
+        for sport_code in SPORTSDB_LEAGUE_IDS.keys():
+            scores = await self._collect_livescores(sport_code)
+            all_livescores.extend(scores)
+            await asyncio.sleep(0.2)
         
         return CollectorResult(
-            success=len(all_livescores) > 0,
-            data=all_livescores,
+            source="sportsdb_live",
+            success=True,
+            data={"livescores": all_livescores},
             records_count=len(all_livescores),
-            error="; ".join(errors) if errors else None,
         )
-    
-    # =========================================================================
-    # TEAMS
-    # =========================================================================
-    
-    async def _collect_teams(self, sport_code: str) -> List[Dict[str, Any]]:
-        """Collect team information for a league."""
-        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
-        if not league_id:
-            return []
-        
-        teams = []
-        
-        try:
-            # V2 API: Teams by league
-            endpoint = f"/list/teams/{league_id}"
-            
-            data = await self.get(endpoint)
-            
-            # Handle different response structures
-            teams_data = data.get("teams") or data.get("team") or []
-            
-            # If teams_data is a dict (single team), wrap in list
-            if isinstance(teams_data, dict):
-                teams_data = [teams_data]
-            
-            logger.info(f"[SportsDB] {sport_code}: Fetched {len(teams_data)} teams")
-            
-            for team_item in teams_data:
-                team = self._parse_team(team_item, sport_code)
-                if team:
-                    teams.append(team)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB] Failed to get teams for {sport_code}: {e}")
-            
-            # Fallback to V1 API
-            try:
-                url = f"{self.v1_base_url}/lookup_all_teams.php?id={league_id}"
-                client = await self.get_client()
-                response = await client.get(url, headers={"Accept": "application/json"})
-                response.raise_for_status()
-                data = response.json()
-                
-                teams_data = data.get("teams") or []
-                logger.info(f"[SportsDB V1] {sport_code}: Fetched {len(teams_data)} teams")
-                
-                for team_item in teams_data:
-                    team = self._parse_team(team_item, sport_code)
-                    if team:
-                        teams.append(team)
-            except Exception as e2:
-                logger.error(f"[SportsDB V1] Teams fallback failed: {e2}")
-        
-        return teams
-    
-    # =========================================================================
-    # HISTORICAL DATA
-    # =========================================================================
-    
-    async def collect_historical(
-        self,
-        sport_code: str = None,
-        season: str = None,
-        seasons_back: int = 10,
-    ) -> CollectorResult:
-        """
-        Collect historical game results by season.
-        
-        Args:
-            sport_code: Sport to collect (or all if None)
-            season: Specific season (e.g., "2024" for NFL, "2023-2024" for NBA) or None for recent
-            seasons_back: Number of seasons to collect if season is None (default: 10 years)
-            
-        Returns:
-            CollectorResult with historical games
-        """
-        sports_to_collect = (
-            [sport_code] if sport_code 
-            else list(SPORTSDB_LEAGUE_IDS.keys())
-        )
-        
-        all_games = []
-        errors = []
-        
-        for sport in sports_to_collect:
-            if sport not in SPORTSDB_LEAGUE_IDS:
-                continue
-                
-            try:
-                if season:
-                    # Collect specific season
-                    games = await self._collect_season_events(sport, season)
-                    all_games.extend(games)
-                else:
-                    # Collect multiple seasons
-                    seasons = self._get_recent_seasons(sport, seasons_back)
-                    for s in seasons:
-                        try:
-                            games = await self._collect_season_events(sport, s)
-                            all_games.extend(games)
-                            await asyncio.sleep(0.5)  # Rate limit
-                        except Exception as e:
-                            logger.warning(f"[SportsDB] Season {s} error: {e}")
-                            
-            except Exception as e:
-                logger.error(f"[SportsDB] Historical error for {sport}: {e}")
-                errors.append(f"{sport}: {str(e)}")
-        
-        logger.info(f"[SportsDB Historical] Total: {len(all_games)} games collected")
-        
-        return CollectorResult(
-            success=len(all_games) > 0,
-            data=all_games,
-            records_count=len(all_games),
-            error="; ".join(errors) if errors else None,
-            metadata={"seasons_collected": seasons_back},
-        )
-    
-    async def _collect_season_events(
-        self,
-        sport_code: str,
-        season: str,
-    ) -> List[Dict[str, Any]]:
-        """Collect all events for a specific season using V1 API."""
-        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
-        if not league_id:
-            return []
-        
-        games = []
-        
-        try:
-            # V1 API: Events by season (more reliable for historical)
-            url = f"{self.v1_base_url}/eventsseason.php?id={league_id}&s={season}"
-            
-            client = await self.get_client()
-            response = await client.get(url, headers={"Accept": "application/json"})
-            response.raise_for_status()
-            data = response.json()
-            
-            events = data.get("events") or []
-            logger.info(f"[SportsDB] {sport_code} {season}: {len(events)} events")
-            
-            for event in events:
-                game = self._parse_event(event, sport_code, is_result=True)
-                if game:
-                    games.append(game)
-                    
-        except Exception as e:
-            logger.error(f"[SportsDB] Season {season} error: {e}")
-        
-        return games
-    
-    def _get_recent_seasons(self, sport_code: str, count: int = 5) -> List[str]:
-        """Generate list of recent season strings."""
-        seasons = []
-        current_year = datetime.now().year
-        
-        # Different sports have different season formats
-        # NFL, MLB use single year (2024, 2025)
-        # NBA, NHL, NCAAB, NCAAF span years (2024-2025)
-        if sport_code in ["MLB"]:
-            # MLB uses single calendar year
-            for i in range(count):
-                year = current_year - i
-                seasons.append(str(year))
-        elif sport_code in ["NFL"]:
-            # NFL uses single year but offset (2024 season plays in fall 2024 through early 2025)
-            for i in range(count):
-                year = current_year - i
-                seasons.append(str(year))
-        elif sport_code in ["NBA", "NHL", "NCAAB", "NCAAF", "WNBA", "CFL"]:
-            # These sports span calendar years (e.g., 2024-2025)
-            for i in range(count):
-                year = current_year - 1 - i  # Current season is previous year to current
-                seasons.append(f"{year}-{year+1}")
-        else:
-            # Default to single year
-            for i in range(count):
-                year = current_year - i
-                seasons.append(str(year))
-        
-        return seasons
-    
-    # =========================================================================
-    # PARSING METHODS
-    # =========================================================================
-    
-    def _parse_event(
-        self,
-        event: Dict[str, Any],
-        sport_code: str,
-        is_result: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """Parse TheSportsDB event to normalized game record."""
-        try:
-            event_id = event.get("idEvent")
-            if not event_id:
-                return None
-            
-            # Get teams
-            home_team_name = event.get("strHomeTeam") or event.get("strTeam1")
-            away_team_name = event.get("strAwayTeam") or event.get("strTeam2")
-            
-            if not home_team_name or not away_team_name:
-                return None
-            
-            # Get scores
-            home_score = event.get("intHomeScore")
-            away_score = event.get("intAwayScore")
-            
-            # Parse scores to int
-            try:
-                home_score = int(home_score) if home_score and home_score != "" else None
-            except (ValueError, TypeError):
-                home_score = None
-            try:
-                away_score = int(away_score) if away_score and away_score != "" else None
-            except (ValueError, TypeError):
-                away_score = None
-            
-            # Get status
-            status_raw = event.get("strStatus") or event.get("strProgress") or ""
-            status = STATUS_MAP.get(status_raw, "scheduled")
-            
-            # If we have scores and it's a result, mark as final
-            if is_result and home_score is not None and away_score is not None:
-                status = "final"
-            
-            # Parse date
-            date_str = event.get("dateEvent") or event.get("strDate")
-            time_str = event.get("strTime") or event.get("strTimeLocal") or "00:00"
-            
-            if date_str:
-                try:
-                    # Handle different date formats
-                    if "T" in str(date_str):
-                        game_date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
-                    else:
-                        # Combine date and time
-                        datetime_str = f"{date_str} {time_str}"
-                        game_date = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
-                except Exception:
-                    game_date = datetime.now()
-            else:
-                game_date = datetime.now()
-            
-            # Get venue
-            venue_name = event.get("strVenue") or ""
-            
-            return {
-                "sport_code": sport_code,
-                "external_id": f"sportsdb_{event_id}",
-                "name": event.get("strEvent") or f"{away_team_name} @ {home_team_name}",
-                "home_team": {
-                    "id": event.get("idHomeTeam"),
-                    "name": home_team_name,
-                    "abbreviation": self._get_abbreviation(home_team_name),
-                },
-                "away_team": {
-                    "id": event.get("idAwayTeam"),
-                    "name": away_team_name,
-                    "abbreviation": self._get_abbreviation(away_team_name),
-                },
-                "venue": {
-                    "name": venue_name,
-                },
-                "game_date": game_date.isoformat(),
-                "status": status,
-                "home_score": home_score,
-                "away_score": away_score,
-                "season": event.get("strSeason"),
-                "round": event.get("intRound"),
-            }
-            
-        except Exception as e:
-            logger.warning(f"[SportsDB] Failed to parse event: {e}")
-            return None
-    
-    def _parse_livescore(
-        self,
-        event: Dict[str, Any],
-        sport_code: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Parse livescore event."""
-        try:
-            event_id = event.get("idEvent") or event.get("idLiveScore")
-            if not event_id:
-                return None
-            
-            home_team = event.get("strHomeTeam")
-            away_team = event.get("strAwayTeam")
-            
-            if not home_team or not away_team:
-                return None
-            
-            # Get scores
-            home_score = event.get("intHomeScore")
-            away_score = event.get("intAwayScore")
-            
-            try:
-                home_score = int(home_score) if home_score else 0
-            except (ValueError, TypeError):
-                home_score = 0
-            try:
-                away_score = int(away_score) if away_score else 0
-            except (ValueError, TypeError):
-                away_score = 0
-            
-            # Get progress/status
-            progress = event.get("strProgress") or event.get("strStatus") or ""
-            status = STATUS_MAP.get(progress, "in_progress")
-            
-            return {
-                "sport_code": sport_code,
-                "external_id": f"sportsdb_{event_id}",
-                "home_team": home_team,
-                "away_team": away_team,
-                "home_score": home_score,
-                "away_score": away_score,
-                "status": status,
-                "progress": progress,
-                "clock": event.get("strEventTime") or "",
-                "league": event.get("strLeague"),
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-            
-        except Exception as e:
-            logger.warning(f"[SportsDB] Failed to parse livescore: {e}")
-            return None
-    
-    def _parse_team(
-        self,
-        team: Dict[str, Any],
-        sport_code: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Parse team data to normalized record."""
-        try:
-            team_id = team.get("idTeam")
-            team_name = team.get("strTeam")
-            
-            if not team_name:
-                return None
-            
-            return {
-                "sport_code": sport_code,
-                "external_id": f"sportsdb_{team_id}" if team_id else None,
-                "name": team_name,
-                "abbreviation": team.get("strTeamShort") or self._get_abbreviation(team_name),
-                "city": team.get("strStadiumLocation"),
-                "stadium": team.get("strStadium"),
-                "logo_url": team.get("strBadge") or team.get("strTeamBadge"),
-                "banner_url": team.get("strTeamBanner"),
-                "description": team.get("strDescriptionEN"),
-                "founded": team.get("intFormedYear"),
-                "website": team.get("strWebsite"),
-            }
-            
-        except Exception as e:
-            logger.warning(f"[SportsDB] Failed to parse team: {e}")
-            return None
-    
-    def _get_abbreviation(self, team_name: str) -> str:
-        """Generate team abbreviation from name."""
-        if not team_name:
-            return "UNK"
-        
-        # Common abbreviations
-        abbrevs = {
-            "New England Patriots": "NE",
-            "Kansas City Chiefs": "KC",
-            "San Francisco 49ers": "SF",
-            "Los Angeles Lakers": "LAL",
-            "Los Angeles Clippers": "LAC",
-            "Los Angeles Rams": "LAR",
-            "Los Angeles Chargers": "LAC",
-            "Los Angeles Dodgers": "LAD",
-            "Los Angeles Angels": "LAA",
-            "New York Yankees": "NYY",
-            "New York Mets": "NYM",
-            "New York Giants": "NYG",
-            "New York Jets": "NYJ",
-            "New York Knicks": "NYK",
-            "New York Rangers": "NYR",
-            "New York Islanders": "NYI",
-        }
-        
-        if team_name in abbrevs:
-            return abbrevs[team_name]
-        
-        # Split and take first letter of significant words
-        words = team_name.split()
-        if len(words) >= 2:
-            return (words[0][0] + words[-1][0]).upper()
-        return team_name[:3].upper()
-    
-    def _get_sport_from_event(self, event: Dict[str, Any]) -> Optional[str]:
-        """Determine sport code from event data."""
-        sport = event.get("strSport")
-        league = event.get("strLeague")
-        
-        if sport == "American Football" or "NFL" in str(league):
-            return "NFL"
-        elif sport == "Basketball" or "NBA" in str(league):
-            return "NBA"
-        elif sport == "Ice Hockey" or "NHL" in str(league):
-            return "NHL"
-        elif sport == "Baseball" or "MLB" in str(league):
-            return "MLB"
-        
-        return None
-    
-    # =========================================================================
-    # DATABASE OPERATIONS
-    # =========================================================================
-    
-    async def save_to_database(
-        self,
-        data: Dict[str, List[Dict]],
-        session: AsyncSession,
-    ) -> int:
-        """
-        Save collected data to database.
-        
-        Args:
-            data: Collected data with games, livescores, teams
-            session: Database session
-            
-        Returns:
-            Total records saved/updated
-        """
-        total_saved = 0
-        
-        # Save teams first
-        if data.get("teams"):
-            saved = await self._save_teams(data["teams"], session)
-            total_saved += saved
-        
-        # Save games
-        if data.get("games"):
-            saved = await self._save_games(data["games"], session)
-            total_saved += saved
-        
-        # Update from livescores
-        if data.get("livescores"):
-            updated = await self._update_livescores(data["livescores"], session)
-            total_saved += updated
-        
-        return total_saved
-    
-    async def _save_teams(
-        self,
-        teams_data: List[Dict[str, Any]],
-        session: AsyncSession,
-    ) -> int:
-        """Save team records to database."""
-        saved_count = 0
-        
-        for team_data in teams_data:
-            try:
-                sport_code = team_data["sport_code"]
-                
-                # Get sport
-                sport_result = await session.execute(
-                    select(Sport).where(Sport.code == sport_code)
-                )
-                sport = sport_result.scalar_one_or_none()
-                
-                if not sport:
-                    continue
-                
-                team_name = team_data.get("name")
-                if not team_name:
-                    continue
-                
-                # Check if team exists
-                result = await session.execute(
-                    select(Team).where(
-                        and_(
-                            Team.sport_id == sport.id,
-                            Team.name == team_name,
-                        )
-                    )
-                )
-                team = result.scalar_one_or_none()
-                
-                if not team:
-                    # Create new team
-                    team = Team(
-                        sport_id=sport.id,
-                        external_id=team_data.get("external_id"),
-                        name=team_name,
-                        abbreviation=team_data.get("abbreviation"),
-                        is_active=True,
-                    )
-                    session.add(team)
-                    saved_count += 1
-                else:
-                    # Update existing
-                    if team_data.get("external_id") and not team.external_id:
-                        team.external_id = team_data["external_id"]
-                    if team_data.get("abbreviation"):
-                        team.abbreviation = team_data["abbreviation"]
-                        
-            except Exception as e:
-                logger.error(f"[SportsDB] Error saving team: {e}")
-                continue
-        
-        await session.commit()
-        return saved_count
-    
-    async def _save_games(
-        self,
-        games_data: List[Dict[str, Any]],
-        session: AsyncSession,
-    ) -> int:
-        """Save game records to database."""
-        saved_count = 0
-        
-        for game_data in games_data:
-            try:
-                sport_code = game_data["sport_code"]
-                
-                # Get sport
-                sport_result = await session.execute(
-                    select(Sport).where(Sport.code == sport_code)
-                )
-                sport = sport_result.scalar_one_or_none()
-                
-                if not sport:
-                    continue
-                
-                # Get or create teams
-                home_team = await self._get_or_create_team(
-                    session,
-                    sport.id,
-                    game_data["home_team"],
-                )
-                away_team = await self._get_or_create_team(
-                    session,
-                    sport.id,
-                    game_data["away_team"],
-                )
-                
-                if not home_team or not away_team:
-                    continue
-                
-                # Check if game exists by external_id
-                external_id = game_data.get("external_id")
-                existing = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
-                )
-                game = existing.scalars().first()
-                
-                if game:
-                    # Update existing game
-                    if game_data.get("home_score") is not None:
-                        game.home_score = game_data["home_score"]
-                    if game_data.get("away_score") is not None:
-                        game.away_score = game_data["away_score"]
-                    if game_data.get("status"):
-                        game.status = GameStatus(game_data["status"])
-                else:
-                    # Parse scheduled date
-                    game_date_str = game_data.get("game_date")
-                    if game_date_str:
-                        try:
-                            if isinstance(game_date_str, datetime):
-                                scheduled_dt = game_date_str
-                            else:
-                                scheduled_dt = datetime.fromisoformat(
-                                    game_date_str.replace("Z", "+00:00")
-                                )
-                            # Remove timezone info for naive datetime
-                            if scheduled_dt.tzinfo is not None:
-                                scheduled_dt = scheduled_dt.replace(tzinfo=None)
-                        except Exception:
-                            scheduled_dt = datetime.now()
-                    else:
-                        scheduled_dt = datetime.now()
-                    
-                    # Check for duplicate by teams and date (within 12 hours)
-                    date_start = scheduled_dt - timedelta(hours=12)
-                    date_end = scheduled_dt + timedelta(hours=12)
-                    
-                    dup_check = await session.execute(
-                        select(Game).where(
-                            and_(
-                                Game.sport_id == sport.id,
-                                Game.home_team_id == home_team.id,
-                                Game.away_team_id == away_team.id,
-                                Game.scheduled_at >= date_start,
-                                Game.scheduled_at <= date_end,
-                            )
-                        )
-                    )
-                    existing_game = dup_check.scalars().first()
-                    
-                    if existing_game:
-                        # Update existing
-                        if game_data.get("home_score") is not None:
-                            existing_game.home_score = game_data["home_score"]
-                        if game_data.get("away_score") is not None:
-                            existing_game.away_score = game_data["away_score"]
-                        if game_data.get("status"):
-                            existing_game.status = GameStatus(game_data["status"])
-                        if external_id and not existing_game.external_id:
-                            existing_game.external_id = external_id
-                    else:
-                        # Create new game
-                        game = Game(
-                            sport_id=sport.id,
-                            external_id=external_id,
-                            home_team_id=home_team.id,
-                            away_team_id=away_team.id,
-                            scheduled_at=scheduled_dt,
-                            status=GameStatus(game_data.get("status", "scheduled")),
-                            home_score=game_data.get("home_score"),
-                            away_score=game_data.get("away_score"),
-                        )
-                        session.add(game)
-                        saved_count += 1
-                        
-            except Exception as e:
-                logger.error(f"[SportsDB] Error saving game: {e}")
-                continue
-        
-        await session.commit()
-        return saved_count
-    
-    async def _update_livescores(
-        self,
-        livescores: List[Dict[str, Any]],
-        session: AsyncSession,
-    ) -> int:
-        """Update games with livescore data."""
-        updated_count = 0
-        
-        for live in livescores:
-            try:
-                external_id = live.get("external_id")
-                if not external_id:
-                    continue
-                
-                # Find game by external_id
-                result = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
-                )
-                game = result.scalars().first()
-                
-                if game:
-                    game.home_score = live.get("home_score")
-                    game.away_score = live.get("away_score")
-                    
-                    status = live.get("status", "in_progress")
-                    game.status = GameStatus(status)
-                    
-                    updated_count += 1
-                    
-            except Exception as e:
-                logger.error(f"[SportsDB] Error updating livescore: {e}")
-                continue
-        
-        await session.commit()
-        return updated_count
-    
-    async def _get_or_create_team(
-        self,
-        session: AsyncSession,
-        sport_id: UUID,
-        team_data: Dict[str, Any],
-    ) -> Optional[Team]:
-        """Get or create team record."""
-        team_name = team_data.get("name")
-        if not team_name:
-            return None
-        
-        # Try by name first
-        result = await session.execute(
-            select(Team).where(
-                and_(
-                    Team.sport_id == sport_id,
-                    Team.name == team_name,
-                )
-            )
-        )
-        team = result.scalar_one_or_none()
-        
-        if team:
-            return team
-        
-        # Try by abbreviation
-        abbreviation = team_data.get("abbreviation")
-        if abbreviation:
-            result = await session.execute(
-                select(Team).where(
-                    and_(
-                        Team.sport_id == sport_id,
-                        Team.abbreviation == abbreviation,
-                    )
-                )
-            )
-            team = result.scalar_one_or_none()
-            if team:
-                return team
-        
-        # Create new team
-        external_id = team_data.get("id")
-        team = Team(
-            sport_id=sport_id,
-            external_id=f"sportsdb_{external_id}" if external_id else abbreviation,
-            name=team_name,
-            abbreviation=abbreviation or team_name[:3].upper(),
-            is_active=True,
-        )
-        session.add(team)
-        await session.flush()
-        
-        return team
-    
-    async def save_historical_to_database(
-        self,
-        games_data: List[Dict[str, Any]],
-        session: AsyncSession,
-    ) -> Tuple[int, int]:
-        """
-        Save historical game data to database.
-        
-        Returns:
-            Tuple of (saved_count, updated_count)
-        """
-        saved_count = 0
-        updated_count = 0
-        
-        for game_data in games_data:
-            try:
-                result = await self._save_single_game(game_data, session)
-                if result == "saved":
-                    saved_count += 1
-                elif result == "updated":
-                    updated_count += 1
-                    
-            except Exception as e:
-                logger.error(f"[SportsDB] Error saving historical game: {e}")
-                continue
-        
-        await session.commit()
-        logger.info(f"[SportsDB Historical] Saved: {saved_count}, Updated: {updated_count}")
-        
-        return saved_count, updated_count
-    
-    async def _save_single_game(
-        self,
-        game_data: Dict[str, Any],
-        session: AsyncSession,
-    ) -> Optional[str]:
-        """Save a single game record. Returns 'saved', 'updated', or None."""
-        sport_code = game_data.get("sport_code")
-        
-        # Get sport
-        sport_result = await session.execute(
-            select(Sport).where(Sport.code == sport_code)
-        )
-        sport = sport_result.scalar_one_or_none()
-        
-        if not sport:
-            return None
-        
-        # Get or create teams
-        home_team = await self._get_or_create_team(
-            session, sport.id, game_data["home_team"]
-        )
-        away_team = await self._get_or_create_team(
-            session, sport.id, game_data["away_team"]
-        )
-        
-        if not home_team or not away_team:
-            return None
-        
-        # Parse date
-        game_date_str = game_data.get("game_date")
-        if game_date_str:
-            try:
-                if isinstance(game_date_str, datetime):
-                    scheduled_dt = game_date_str
-                else:
-                    scheduled_dt = datetime.fromisoformat(
-                        game_date_str.replace("Z", "+00:00")
-                    )
-                if scheduled_dt.tzinfo is not None:
-                    scheduled_dt = scheduled_dt.replace(tzinfo=None)
-            except Exception:
-                scheduled_dt = datetime.now()
-        else:
-            return None
-        
-        # Check for existing game
-        external_id = game_data.get("external_id")
-        
-        # First check by external_id
-        if external_id:
-            existing = await session.execute(
-                select(Game).where(Game.external_id == external_id)
-            )
-            game = existing.scalars().first()
-            
-            if game:
-                # Update scores
-                if game_data.get("home_score") is not None:
-                    game.home_score = game_data["home_score"]
-                if game_data.get("away_score") is not None:
-                    game.away_score = game_data["away_score"]
-                if game_data.get("status"):
-                    game.status = GameStatus(game_data["status"])
-                return "updated"
-        
-        # Check by teams and date
-        date_start = scheduled_dt - timedelta(hours=12)
-        date_end = scheduled_dt + timedelta(hours=12)
-        
-        existing = await session.execute(
-            select(Game).where(
-                and_(
-                    Game.sport_id == sport.id,
-                    Game.home_team_id == home_team.id,
-                    Game.away_team_id == away_team.id,
-                    Game.scheduled_at >= date_start,
-                    Game.scheduled_at <= date_end,
-                )
-            )
-        )
-        game = existing.scalars().first()
-        
-        if game:
-            # Update existing
-            if game_data.get("home_score") is not None:
-                game.home_score = game_data["home_score"]
-            if game_data.get("away_score") is not None:
-                game.away_score = game_data["away_score"]
-            if game_data.get("status"):
-                game.status = GameStatus(game_data["status"])
-            if external_id and not game.external_id:
-                game.external_id = external_id
-            return "updated"
-        
-        # Create new game
-        game = Game(
-            sport_id=sport.id,
-            external_id=external_id,
-            home_team_id=home_team.id,
-            away_team_id=away_team.id,
-            scheduled_at=scheduled_dt,
-            status=GameStatus(game_data.get("status", "final")),
-            home_score=game_data.get("home_score"),
-            away_score=game_data.get("away_score"),
-        )
-        session.add(game)
-        
-        return "saved"
-    
-    # =========================================================================
-    # VALIDATION
-    # =========================================================================
-    
-    async def validate(self, data: Any) -> bool:
-        """Validate collected data."""
-        if not isinstance(data, dict):
-            return False
-        
-        # Check for at least some valid data
-        games = data.get("games", [])
-        teams = data.get("teams", [])
-        livescores = data.get("livescores", [])
-        
-        return len(games) > 0 or len(teams) > 0 or len(livescores) > 0
-    
+
     # =========================================================================
     # VENUES COLLECTION
     # =========================================================================
     
     async def collect_venues(self, sport_code: str) -> Dict[str, Any]:
         """
-        Collect venue/stadium information from TheSportsDB.
+        Collect venue/stadium information.
         
-        TheSportsDB provides venue data through team lookups.
+        Venues come from team data (strStadium field).
         """
-        from app.models import Venue
-        
         venues = []
         
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
             logger.warning(f"[SportsDB] Unknown sport code: {sport_code}")
-            return {"venues": []}
+            return {"venues": [], "sport_code": sport_code}
         
-        try:
-            # Get all teams in league - they include venue info
-            url = f"{self.v1_base_url}/lookup_all_teams.php?id={league_id}"
+        # Get teams (venues are part of team data)
+        # Try V2 first
+        data = await self._request_v2(f"/list/teams/{league_id}")
+        
+        if not data or not data.get("teams"):
+            # Fallback to V1
+            data = await self._request_v1(f"lookup_all_teams.php?id={league_id}")
+        
+        if data and data.get("teams"):
+            teams = data["teams"]
+            logger.info(f"[SportsDB] Found {len(teams)} teams for {sport_code}")
             
-            data = await self.get(url)
+            seen_venues = set()
             
-            if data:
-                teams = data.get("teams", []) or []
+            for team in teams:
+                venue_name = team.get("strStadium")
+                if not venue_name or venue_name in seen_venues:
+                    continue
                 
-                seen_venues = set()
+                seen_venues.add(venue_name)
                 
-                for team in teams:
-                    venue_name = team.get("strStadium")
-                    if not venue_name or venue_name in seen_venues:
-                        continue
-                    
-                    seen_venues.add(venue_name)
-                    
-                    # Parse capacity
-                    capacity = None
-                    capacity_str = team.get("intStadiumCapacity")
-                    if capacity_str:
-                        try:
-                            capacity = int(str(capacity_str).replace(",", ""))
-                        except:
-                            pass
-                    
-                    # Parse location
-                    location = team.get("strStadiumLocation", "")
-                    city = location.split(",")[0].strip() if location else None
-                    state = location.split(",")[1].strip() if location and "," in location else None
-                    
-                    # Check if dome
-                    stadium_desc = team.get("strStadiumDescription", "")
-                    is_dome = self._is_dome(venue_name, stadium_desc)
-                    
-                    venues.append({
-                        "name": venue_name,
-                        "city": city,
-                        "state": state,
-                        "country": team.get("strCountry", "USA"),
-                        "capacity": capacity,
-                        "is_dome": is_dome,
-                        "team_name": team.get("strTeam"),
-                        "external_id": f"sportsdb_{team.get('idTeam')}",
-                    })
+                # Parse capacity
+                capacity = None
+                capacity_str = team.get("intStadiumCapacity")
+                if capacity_str:
+                    try:
+                        capacity = int(str(capacity_str).replace(",", ""))
+                    except:
+                        pass
                 
-                logger.info(f"[SportsDB] Collected {len(venues)} venues for {sport_code}")
+                # Parse location
+                location = team.get("strStadiumLocation", "") or ""
+                city = location.split(",")[0].strip() if location else None
+                state = location.split(",")[1].strip() if location and "," in location else None
+                
+                # Parse coordinates
+                latitude = None
+                longitude = None
+                try:
+                    if team.get("strStadiumLatitude"):
+                        latitude = float(team["strStadiumLatitude"])
+                    if team.get("strStadiumLongitude"):
+                        longitude = float(team["strStadiumLongitude"])
+                except:
+                    pass
+                
+                # Check if dome
+                stadium_desc = team.get("strStadiumDescription", "") or ""
+                is_dome = self._is_dome(venue_name, stadium_desc)
+                
+                venues.append({
+                    "name": venue_name,
+                    "city": city,
+                    "state": state,
+                    "country": team.get("strCountry", "USA"),
+                    "capacity": capacity,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "is_dome": is_dome,
+                    "team_name": team.get("strTeam"),
+                    "external_id": f"sportsdb_{team.get('idTeam')}",
+                    "sport_code": sport_code,
+                })
             
-        except Exception as e:
-            logger.error(f"[SportsDB] Error collecting venues: {e}")
+            logger.info(f"[SportsDB] Collected {len(venues)} venues for {sport_code}")
+        else:
+            logger.warning(f"[SportsDB] No team data returned for {sport_code}")
         
         return {"venues": venues, "sport_code": sport_code}
     
@@ -1349,11 +552,12 @@ class SportsDBCollector(BaseCollector):
             "carrier dome", "lucas oil", "at&t stadium",
             "u.s. bank stadium", "sofi stadium", "allegiant stadium",
             "mercedes-benz stadium", "nrg stadium", "ford field",
-            "caesars superdome", "state farm stadium"
+            "caesars superdome", "state farm stadium",
+            "arena", "center", "garden",
         ]
         
-        venue_lower = venue_name.lower() if venue_name else ""
-        desc_lower = description.lower() if description else ""
+        venue_lower = (venue_name or "").lower()
+        desc_lower = (description or "").lower()
         
         for dome in known_domes:
             if dome in venue_lower or dome in desc_lower:
@@ -1370,7 +574,14 @@ class SportsDBCollector(BaseCollector):
         session: AsyncSession
     ) -> int:
         """Save venues to database."""
-        from app.models import Venue
+        try:
+            from app.models import Venue
+        except ImportError:
+            try:
+                from app.models.venue_models import Venue
+            except ImportError:
+                logger.error("[SportsDB] Venue model not found")
+                return 0
         
         saved_count = 0
         
@@ -1380,27 +591,30 @@ class SportsDBCollector(BaseCollector):
                 if not venue_name:
                     continue
                 
-                # Check if venue exists
                 existing = await session.execute(
                     select(Venue).where(Venue.name == venue_name)
                 )
                 venue = existing.scalar_one_or_none()
                 
                 if venue:
-                    # Update
                     venue.city = venue_data.get("city") or venue.city
                     venue.state = venue_data.get("state") or venue.state
                     venue.country = venue_data.get("country") or venue.country
                     venue.capacity = venue_data.get("capacity") or venue.capacity
                     venue.is_dome = venue_data.get("is_dome", venue.is_dome)
+                    if venue_data.get("latitude"):
+                        venue.latitude = venue_data["latitude"]
+                    if venue_data.get("longitude"):
+                        venue.longitude = venue_data["longitude"]
                 else:
-                    # Create new
                     venue = Venue(
-                        name=venue_name,
-                        city=venue_data.get("city"),
-                        state=venue_data.get("state"),
-                        country=venue_data.get("country", "USA"),
+                        name=venue_name[:200],
+                        city=(venue_data.get("city") or "")[:100] or None,
+                        state=(venue_data.get("state") or "")[:50] or None,
+                        country=(venue_data.get("country") or "USA")[:50],
                         capacity=venue_data.get("capacity"),
+                        latitude=venue_data.get("latitude"),
+                        longitude=venue_data.get("longitude"),
                         is_dome=venue_data.get("is_dome", False),
                     )
                     session.add(venue)
@@ -1410,9 +624,257 @@ class SportsDBCollector(BaseCollector):
                 logger.debug(f"[SportsDB] Error saving venue: {e}")
                 continue
         
-        await session.commit()
-        logger.info(f"[SportsDB] Saved {saved_count} venues")
+        try:
+            await session.commit()
+            logger.info(f"[SportsDB] Saved {saved_count} new venues")
+        except Exception as e:
+            logger.error(f"[SportsDB] Error committing venues: {e}")
+            await session.rollback()
+            
         return saved_count
+
+    # =========================================================================
+    # HISTORICAL DATA
+    # =========================================================================
+    
+    async def collect_historical(
+        self,
+        sport_code: str,
+        seasons_back: int = 10,
+        **kwargs,
+    ) -> CollectorResult:
+        """Collect historical game data."""
+        all_games = []
+        current_year = datetime.now().year
+        
+        for year_offset in range(seasons_back):
+            season_year = current_year - year_offset
+            
+            if sport_code in ["NFL", "NCAAF", "MLB"]:
+                season = f"{season_year}"
+            elif sport_code in ["NBA", "NHL", "NCAAB"]:
+                season = f"{season_year - 1}-{season_year}"
+            else:
+                season = f"{season_year}"
+            
+            games = await self._collect_season_games(sport_code, season)
+            all_games.extend(games)
+            await asyncio.sleep(0.5)
+        
+        return CollectorResult(
+            source="sportsdb_history",
+            success=len(all_games) > 0,
+            data={"games": all_games},
+            records_count=len(all_games),
+        )
+    
+    async def _collect_season_games(self, sport_code: str, season: str) -> List[Dict[str, Any]]:
+        """Collect all games for a season."""
+        league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
+        if not league_id:
+            return []
+        
+        games = []
+        
+        # Try V2 first
+        data = await self._request_v2(f"/schedule/league/{league_id}/season/{season}")
+        
+        if not data or not data.get("schedule"):
+            # Fallback to V1
+            data = await self._request_v1(f"eventsseason.php?id={league_id}&s={season}")
+        
+        if data:
+            events = data.get("schedule") or data.get("events") or []
+            for event in events:
+                game = self._parse_event(event, sport_code)
+                if game:
+                    games.append(game)
+            logger.info(f"[SportsDB] Collected {len(games)} games for {sport_code} season {season}")
+        
+        return games
+    
+    async def collect_past_games(self, sport_code: str, days_back: int = 30) -> List[Dict[str, Any]]:
+        """Collect recently completed games."""
+        return await self._collect_results(sport_code, limit=50)
+
+    # =========================================================================
+    # DATABASE SAVE METHODS
+    # =========================================================================
+    
+    async def save_games_to_database(self, games: List[Dict[str, Any]], session: AsyncSession) -> int:
+        """Save games to database."""
+        saved_count = 0
+        
+        for game_data in games:
+            try:
+                sport_code = game_data.get("sport_code")
+                
+                sport_result = await session.execute(
+                    select(Sport).where(Sport.code == sport_code)
+                )
+                sport = sport_result.scalar_one_or_none()
+                if not sport:
+                    continue
+                
+                home_team_name = game_data.get("home_team", "")
+                away_team_name = game_data.get("away_team", "")
+                
+                home_result = await session.execute(
+                    select(Team).where(
+                        and_(Team.sport_id == sport.id, Team.name.ilike(f"%{home_team_name}%"))
+                    )
+                )
+                home_team = home_result.scalar_one_or_none()
+                
+                away_result = await session.execute(
+                    select(Team).where(
+                        and_(Team.sport_id == sport.id, Team.name.ilike(f"%{away_team_name}%"))
+                    )
+                )
+                away_team = away_result.scalar_one_or_none()
+                
+                if not home_team or not away_team:
+                    continue
+                
+                external_id = game_data.get("external_id")
+                existing = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                game = existing.scalar_one_or_none()
+                
+                status_str = game_data.get("status", "scheduled")
+                status_result = await session.execute(
+                    select(GameStatus).where(GameStatus.name == status_str)
+                )
+                status = status_result.scalar_one_or_none()
+                
+                if game:
+                    if status:
+                        game.status_id = status.id
+                    game.home_score = game_data.get("home_score")
+                    game.away_score = game_data.get("away_score")
+                else:
+                    game = Game(
+                        external_id=external_id,
+                        sport_id=sport.id,
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        scheduled_time=game_data.get("scheduled_time"),
+                        status_id=status.id if status else None,
+                        home_score=game_data.get("home_score"),
+                        away_score=game_data.get("away_score"),
+                        season=game_data.get("season"),
+                    )
+                    session.add(game)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[SportsDB] Error saving game: {e}")
+                continue
+        
+        try:
+            await session.commit()
+            logger.info(f"[SportsDB] Saved {saved_count} games")
+        except Exception as e:
+            logger.error(f"[SportsDB] Error committing games: {e}")
+            await session.rollback()
+            
+        return saved_count
+    
+    async def save_teams_to_database(self, teams: List[Dict[str, Any]], session: AsyncSession) -> int:
+        """Save teams to database."""
+        saved_count = 0
+        
+        for team_data in teams:
+            try:
+                sport_code = team_data.get("sport_code")
+                
+                sport_result = await session.execute(
+                    select(Sport).where(Sport.code == sport_code)
+                )
+                sport = sport_result.scalar_one_or_none()
+                if not sport:
+                    continue
+                
+                team_name = team_data.get("name")
+                existing = await session.execute(
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
+                )
+                team = existing.scalar_one_or_none()
+                
+                if team:
+                    team.abbreviation = team_data.get("abbreviation") or team.abbreviation
+                    team.city = team_data.get("city") or team.city
+                    team.conference = team_data.get("conference") or team.conference
+                    team.division = team_data.get("division") or team.division
+                    team.logo_url = team_data.get("logo_url") or team.logo_url
+                else:
+                    team = Team(
+                        name=team_name,
+                        abbreviation=(team_data.get("abbreviation") or "")[:10],
+                        sport_id=sport.id,
+                        city=team_data.get("city"),
+                        conference=team_data.get("conference"),
+                        division=team_data.get("division"),
+                        logo_url=team_data.get("logo_url"),
+                        external_id=team_data.get("external_id"),
+                    )
+                    session.add(team)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[SportsDB] Error saving team: {e}")
+                continue
+        
+        try:
+            await session.commit()
+            logger.info(f"[SportsDB] Saved {saved_count} teams")
+        except Exception as e:
+            logger.error(f"[SportsDB] Error committing teams: {e}")
+            await session.rollback()
+            
+        return saved_count
+    
+    async def save_historical_to_database(self, games: List[Dict[str, Any]], session: AsyncSession) -> Tuple[int, int]:
+        """Save historical games."""
+        saved = await self.save_games_to_database(games, session)
+        return saved, 0
+    
+    async def _update_livescores(self, data: Dict[str, Any], session: AsyncSession) -> bool:
+        """Update live scores in database."""
+        livescores = data.get("livescores", [])
+        
+        for score_data in livescores:
+            try:
+                external_id = score_data.get("external_id")
+                game_result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                game = game_result.scalar_one_or_none()
+                
+                if game:
+                    game.home_score = score_data.get("home_score")
+                    game.away_score = score_data.get("away_score")
+            except:
+                pass
+        
+        try:
+            await session.commit()
+            return True
+        except:
+            await session.rollback()
+            return False
+    
+    async def has_data_available(self, sport_code: str = None) -> bool:
+        """Check if data is available."""
+        sports = [sport_code] if sport_code else list(SPORTSDB_LEAGUE_IDS.keys())[:1]
+        for sport in sports:
+            league_id = SPORTSDB_LEAGUE_IDS.get(sport)
+            if league_id:
+                data = await self._request_v2(f"/schedule/next/league/{league_id}")
+                if data:
+                    return True
+        return False
 
 
 # Create singleton instance
@@ -1422,4 +884,4 @@ sportsdb_collector = SportsDBCollector()
 try:
     collector_manager.register("sportsdb", sportsdb_collector)
 except:
-    pass  # Already registered
+    pass

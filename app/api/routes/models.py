@@ -382,10 +382,85 @@ async def execute_training(
     use_gpu: bool,
     hyperparameters: Optional[dict]
 ):
-    """Background task to execute model training"""
-    # This would integrate with the ML training service
-    # Implementation details in services/ml/training_service.py
-    pass
+    """
+    Background task to execute model training.
+    
+    This function is called asynchronously after the training run is created.
+    It uses the TrainingService to orchestrate the actual training.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Import training service
+        from app.services.ml.training_service import get_training_service
+        from app.core.database import db_manager
+        from app.models import TrainingRun, TaskStatus
+        from sqlalchemy import select
+        
+        logger.info(f"Starting training: {sport_code} {bet_type} {framework}")
+        
+        # Get training service
+        service = get_training_service()
+        
+        # Run training
+        result = await service.train_model(
+            sport_code=sport_code,
+            bet_type=bet_type,
+            framework=framework,
+            max_runtime_secs=max_runtime,
+            save_to_db=True,  # Will create/update model records
+        )
+        
+        # Update the original training run with results
+        await db_manager.initialize()
+        async with db_manager.session() as session:
+            query = select(TrainingRun).where(TrainingRun.id == training_run_id)
+            db_result = await session.execute(query)
+            training_run = db_result.scalar_one_or_none()
+            
+            if training_run:
+                if result.success:
+                    training_run.status = TaskStatus.SUCCESS
+                    training_run.validation_metrics = {
+                        "auc": result.auc,
+                        "accuracy": result.accuracy,
+                        "log_loss": result.log_loss,
+                        "training_samples": result.training_samples,
+                        "feature_count": result.feature_count,
+                    }
+                else:
+                    training_run.status = TaskStatus.FAILED
+                    training_run.error_message = result.error_message
+                
+                training_run.completed_at = datetime.utcnow()
+                training_run.training_duration_seconds = int(result.training_duration_seconds)
+                await session.commit()
+        
+        logger.info(f"Training complete: {sport_code} {bet_type} - Success: {result.success}")
+        
+    except Exception as e:
+        logger.exception(f"Training failed: {e}")
+        
+        # Update training run as failed
+        try:
+            from app.core.database import db_manager
+            from app.models import TrainingRun, TaskStatus
+            from sqlalchemy import select
+            
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                query = select(TrainingRun).where(TrainingRun.id == training_run_id)
+                db_result = await session.execute(query)
+                training_run = db_result.scalar_one_or_none()
+                
+                if training_run:
+                    training_run.status = TaskStatus.FAILED
+                    training_run.error_message = str(e)
+                    training_run.completed_at = datetime.utcnow()
+                    await session.commit()
+        except:
+            pass
 
 
 @router.get("/training/{run_id}", response_model=TrainingRunResponse)

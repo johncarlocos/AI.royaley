@@ -343,6 +343,26 @@ __all__ = [
     'DailyPredictionReport',
     'create_ultimate_system',
     'create_minimal_system',
+    # Training Service
+    'TrainingService',
+    'TrainingResult',
+    'get_training_service',
+    'train_model_task',
 ]
 
-__version__ = '2.3.0'  # Added Deep Learning + Quantum ML
+# Training Service (lazy import to avoid circular dependencies)
+try:
+    from .training_service import (
+        TrainingService,
+        TrainingResult,
+        get_training_service,
+        train_model_task,
+    )
+except ImportError:
+    # Training service may not be available in all contexts
+    TrainingService = None
+    TrainingResult = None
+    get_training_service = None
+    train_model_task = None
+
+__version__ = '2.4.0'  # Added Training Service

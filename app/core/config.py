@@ -128,6 +128,8 @@ class Settings(BaseSettings):
     AUTOGLUON_TIME_LIMIT: int = 3600
     AUTOGLUON_PRESETS: str = "best_quality"
     MODEL_STORAGE_PATH: str = "models/"
+    FEATURES_PATH: str = "/nvme1n1-disk/features/"
+    DATASETS_PATH: str = "/nvme1n1-disk/datasets/"
     
     # Betting Configuration
     KELLY_FRACTION: float = 0.25

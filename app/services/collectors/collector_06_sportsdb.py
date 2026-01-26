@@ -737,7 +737,13 @@ class SportsDBCollector(BaseCollector):
         """Save games - auto-creates teams if they don't exist."""
         saved = 0
         skipped_no_sport = 0
+        skipped_no_team = 0
         teams_created = 0
+        
+        # Debug: show first game's team names
+        if games:
+            g0 = games[0]
+            print(f"[DEBUG] First game: {g0.get('home_team')} vs {g0.get('away_team')} ({g0.get('sport_code')})")
         
         for g in games:
             try:
@@ -751,13 +757,24 @@ class SportsDBCollector(BaseCollector):
                 home_name = g.get("home_team", "")
                 away_name = g.get("away_team", "")
                 
+                if not home_name or not away_name:
+                    skipped_no_team += 1
+                    continue
+                
                 # Get or create home team
                 home_result = await session.execute(
                     select(Team).where(and_(Team.sport_id == sport.id, Team.name == home_name))
                 )
                 home_team = home_result.scalar_one_or_none()
                 
-                if not home_team and home_name:
+                if not home_team:
+                    # Try partial match (contains)
+                    home_result = await session.execute(
+                        select(Team).where(and_(Team.sport_id == sport.id, Team.name.ilike(f"%{home_name}%"))).limit(1)
+                    )
+                    home_team = home_result.scalar_one_or_none()
+                
+                if not home_team:
                     # Auto-create team
                     home_team = Team(
                         name=home_name,
@@ -774,7 +791,14 @@ class SportsDBCollector(BaseCollector):
                 )
                 away_team = away_result.scalar_one_or_none()
                 
-                if not away_team and away_name:
+                if not away_team:
+                    # Try partial match (contains)
+                    away_result = await session.execute(
+                        select(Team).where(and_(Team.sport_id == sport.id, Team.name.ilike(f"%{away_name}%"))).limit(1)
+                    )
+                    away_team = away_result.scalar_one_or_none()
+                
+                if not away_team:
                     # Auto-create team
                     away_team = Team(
                         name=away_name,
@@ -786,6 +810,7 @@ class SportsDBCollector(BaseCollector):
                     teams_created += 1
                 
                 if not home_team or not away_team:
+                    skipped_no_team += 1
                     continue
                 
                 ext_id = g.get("external_id")
@@ -811,8 +836,8 @@ class SportsDBCollector(BaseCollector):
                 logger.debug(f"[SportsDB] Game save error: {e}")
         
         await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_sport} no sport)")
-        print(f"[SportsDB] Saved {saved} games, created {teams_created} teams")
+        logger.info(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_sport} no sport, {skipped_no_team} no team)")
+        print(f"[SportsDB] Saved {saved} games, created {teams_created} teams (skipped: {skipped_no_team} missing teams)")
         return saved
     
     async def save_historical_to_database(self, games: List[Dict], session: AsyncSession) -> Tuple[int, int]:

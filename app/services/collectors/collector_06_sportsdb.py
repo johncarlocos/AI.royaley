@@ -887,6 +887,14 @@ class SportsDBCollector(BaseCollector):
     
     async def collect_past_games(self, sport_code: str, days_back: int = 30) -> List[Dict]:
         return await self._collect_past_games(sport_code)
+    
+    async def collect_upcoming(self, sport_code: str) -> List[Dict]:
+        """Collect upcoming games for a sport."""
+        return await self._collect_schedule(sport_code)
+    
+    async def collect_past(self, sport_code: str) -> List[Dict]:
+        """Collect recent results for a sport."""
+        return await self._collect_past_games(sport_code)
 
 
 # Singleton

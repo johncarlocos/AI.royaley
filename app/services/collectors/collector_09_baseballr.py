@@ -979,9 +979,9 @@ class BaseballRCollector(BaseCollector):
         games_data: List[Dict[str, Any]],
         session: AsyncSession,
     ) -> int:
-        """Save game records to database."""
+        """Save game records to database with proper duplicate handling."""
         saved_count = 0
-        batch_count = 0
+        updated_count = 0
         
         # Get MLB sport
         sport_result = await session.execute(
@@ -993,8 +993,51 @@ class BaseballRCollector(BaseCollector):
             logger.error("[baseballR] MLB sport not found")
             return 0
         
+        # Pre-load all existing MLB game external_ids to avoid duplicate checks
+        existing_ids_result = await session.execute(
+            select(Game.external_id).where(
+                and_(
+                    Game.sport_id == sport.id,
+                    Game.external_id.isnot(None),
+                    Game.external_id.like("mlb_%")
+                )
+            )
+        )
+        existing_external_ids = set(row[0] for row in existing_ids_result.fetchall() if row[0])
+        logger.info(f"[baseballR] Found {len(existing_external_ids)} existing MLB games in database")
+        
+        # Track processed external_ids within this batch
+        processed_external_ids = set()
+        batch_count = 0
+        
         for game_data in games_data:
             try:
+                external_id = game_data.get("external_id")
+                
+                # Skip if we've already processed this external_id in this batch
+                if external_id and external_id in processed_external_ids:
+                    continue
+                
+                # Skip if this game already exists in database
+                if external_id and external_id in existing_external_ids:
+                    # Optionally update the existing game
+                    if game_data.get("home_score") is not None or game_data.get("away_score") is not None:
+                        existing = await session.execute(
+                            select(Game).where(Game.external_id == external_id)
+                        )
+                        game = existing.scalars().first()
+                        if game:
+                            if game_data.get("home_score") is not None:
+                                game.home_score = game_data["home_score"]
+                            if game_data.get("away_score") is not None:
+                                game.away_score = game_data["away_score"]
+                            if game_data.get("status"):
+                                game.status = GameStatus(game_data["status"])
+                            updated_count += 1
+                    if external_id:
+                        processed_external_ids.add(external_id)
+                    continue
+                
                 # Get or create teams
                 home_team = await self._get_or_create_team(
                     session, sport.id, game_data["home_team"]
@@ -1006,24 +1049,6 @@ class BaseballRCollector(BaseCollector):
                 if not home_team or not away_team:
                     continue
                 
-                external_id = game_data.get("external_id")
-                
-                # Check if game exists by external_id
-                existing = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
-                )
-                game = existing.scalars().first()
-                
-                if game:
-                    # Update scores only
-                    if game_data.get("home_score") is not None:
-                        game.home_score = game_data["home_score"]
-                    if game_data.get("away_score") is not None:
-                        game.away_score = game_data["away_score"]
-                    if game_data.get("status"):
-                        game.status = GameStatus(game_data["status"])
-                    continue  # Skip to next game
-                
                 # Parse date
                 game_date_str = game_data.get("game_date")
                 if isinstance(game_date_str, datetime):
@@ -1034,9 +1059,9 @@ class BaseballRCollector(BaseCollector):
                 if scheduled_dt.tzinfo:
                     scheduled_dt = scheduled_dt.replace(tzinfo=None)
                 
-                # Check for duplicates by teams and date
-                date_start = scheduled_dt - timedelta(hours=6)
-                date_end = scheduled_dt + timedelta(hours=6)
+                # Check for duplicates by teams and date (2-hour window for doubleheaders)
+                date_start = scheduled_dt - timedelta(hours=2)
+                date_end = scheduled_dt + timedelta(hours=2)
                 
                 dup_check = await session.execute(
                     select(Game).where(
@@ -1059,6 +1084,7 @@ class BaseballRCollector(BaseCollector):
                         existing_game.away_score = game_data["away_score"]
                     if external_id and not existing_game.external_id:
                         existing_game.external_id = external_id
+                    updated_count += 1
                 else:
                     # Create new game
                     game = Game(
@@ -1073,19 +1099,31 @@ class BaseballRCollector(BaseCollector):
                     )
                     session.add(game)
                     saved_count += 1
-                    batch_count += 1
                     
-                    # Flush in batches to catch duplicates early
-                    if batch_count >= 500:
-                        await session.flush()
-                        logger.info(f"[baseballR] Flushed batch, {saved_count} games so far")
-                        batch_count = 0
+                    # Add to our set so we don't try to insert it again
+                    if external_id:
+                        existing_external_ids.add(external_id)
+                
+                # Mark as processed
+                if external_id:
+                    processed_external_ids.add(external_id)
+                
+                # Flush in batches
+                batch_count += 1
+                if batch_count >= 500:
+                    await session.flush()
+                    logger.info(f"[baseballR] Progress: {saved_count} new, {updated_count} updated")
+                    batch_count = 0
                         
             except Exception as e:
                 logger.debug(f"[baseballR] Error saving game: {e}")
         
-        logger.info(f"[baseballR] Saved {saved_count} games")
-        return saved_count
+        # Final flush
+        if batch_count > 0:
+            await session.flush()
+        
+        logger.info(f"[baseballR] Saved {saved_count} new games, updated {updated_count} existing")
+        return saved_count + updated_count
     
     async def _get_or_create_team(
         self,

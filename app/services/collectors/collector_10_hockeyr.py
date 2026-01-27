@@ -928,15 +928,19 @@ class HockeyRCollector(BaseCollector):
             if not home_team or not away_team:
                 continue
             
-            # Parse scheduled time
+            # Parse scheduled time - convert to naive UTC datetime for PostgreSQL
             scheduled_str = game_data.get("scheduled_at")
             if scheduled_str:
                 try:
+                    # Parse ISO format with timezone
                     scheduled_at = datetime.fromisoformat(scheduled_str.replace("Z", "+00:00"))
+                    # Convert to naive UTC (remove timezone info for PostgreSQL compatibility)
+                    if scheduled_at.tzinfo is not None:
+                        scheduled_at = scheduled_at.replace(tzinfo=None)
                 except:
-                    scheduled_at = datetime.now()
+                    scheduled_at = datetime.utcnow()
             else:
-                scheduled_at = datetime.now()
+                scheduled_at = datetime.utcnow()
             
             # Map status
             status_map = {

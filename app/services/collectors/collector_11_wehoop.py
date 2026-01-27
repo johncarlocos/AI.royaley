@@ -177,19 +177,27 @@ class WehoopCollector(BaseCollector):
                 total_records += len(games)
                 logger.info(f"[wehoop] Collected {len(games)} games")
             
-            # Collect rosters
-            if collect_type in ["all", "rosters"]:
+            # Rosters - DISABLED (WNBA Stats API is unreliable/slow)
+            # ESPN roster endpoint structure is inconsistent
+            # For player data, use a dedicated player collector or manual import
+            if collect_type == "rosters":  # Only if explicitly requested
                 rosters = await self._collect_rosters(years)
                 data["rosters"] = rosters
                 total_records += len(rosters)
                 logger.info(f"[wehoop] Collected {len(rosters)} roster entries")
+            else:
+                logger.info("[wehoop] Skipping rosters (WNBA Stats API unreliable)")
+                data["rosters"] = []
             
-            # Collect player stats from rosters with stats
-            if collect_type in ["all", "player_stats"]:
+            # Player stats - DISABLED (requires rosters first)
+            if collect_type == "player_stats":  # Only if explicitly requested
                 player_stats = await self._collect_player_stats(years)
                 data["player_stats"] = player_stats
                 total_records += len(player_stats)
                 logger.info(f"[wehoop] Collected {len(player_stats)} player stats")
+            else:
+                logger.info("[wehoop] Skipping player_stats (depends on rosters)")
+                data["player_stats"] = []
             
             # Collect team stats from standings
             if collect_type in ["all", "team_stats"]:

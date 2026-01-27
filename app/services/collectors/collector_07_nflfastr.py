@@ -1549,7 +1549,6 @@ class NFLFastRCollector(BaseCollector):
     ) -> int:
         """Save team aggregate statistics to database."""
         from app.models import Team, TeamStats, Sport
-        from collections import defaultdict
         
         saved_count = 0
         
@@ -1561,31 +1560,29 @@ class NFLFastRCollector(BaseCollector):
             sport = sport_result.scalar_one_or_none()
             
             if not sport:
+                logger.warning("[nflfastR] NFL sport not found")
                 return 0
             
-            # Aggregate stats by team
-            team_aggregates = defaultdict(lambda: defaultdict(float))
-            team_games = defaultdict(int)
+            # EPA stat types from _collect_team_stats / get_team_epa
+            epa_stat_types = [
+                "pass_epa_per_play",
+                "rush_epa_per_play", 
+                "total_epa_per_play",
+                "success_rate",
+                "pass_rate",
+                "plays",
+            ]
             
+            # Process each team's stat record
             for stat_row in team_stats_data:
-                team_abbr = stat_row.get("recent_team") or stat_row.get("team")
+                team_abbr = stat_row.get("team")
                 if not team_abbr:
                     continue
                 
-                # Aggregate various stats
-                for stat_type in ["passing_yards", "rushing_yards", "receiving_yards", "points"]:
-                    value = stat_row.get(stat_type)
-                    if value is not None:
-                        try:
-                            if not pd.isna(value):
-                                team_aggregates[team_abbr][stat_type] += float(value)
-                        except:
-                            pass
+                # Get season for uniqueness
+                season = stat_row.get("season", 0)
                 
-                team_games[team_abbr] += 1
-            
-            # Save team stats
-            for team_abbr, stats in team_aggregates.items():
+                # Find team
                 team_result = await session.execute(
                     select(Team).where(
                         and_(
@@ -1599,37 +1596,42 @@ class NFLFastRCollector(BaseCollector):
                 if not team:
                     continue
                 
-                games_played = team_games.get(team_abbr, 1)
-                
-                for stat_type, total_value in stats.items():
+                # Save each EPA stat type
+                for stat_type in epa_stat_types:
+                    value = stat_row.get(stat_type)
+                    if value is None:
+                        continue
+                    
                     try:
+                        # Make stat_type unique by season
+                        full_stat_type = f"{stat_type}_{season}"
+                        
                         # Check if exists
                         existing = await session.execute(
                             select(TeamStats).where(
                                 and_(
                                     TeamStats.team_id == team.id,
-                                    TeamStats.stat_type == stat_type,
+                                    TeamStats.stat_type == full_stat_type,
                                 )
                             )
                         )
                         team_stat = existing.scalar_one_or_none()
                         
                         if team_stat:
-                            team_stat.value = total_value
-                            team_stat.games_played = games_played
+                            team_stat.value = float(value)
                             team_stat.computed_at = datetime.utcnow()
                         else:
                             team_stat = TeamStats(
                                 team_id=team.id,
-                                stat_type=stat_type,
-                                value=total_value,
-                                games_played=games_played,
+                                stat_type=full_stat_type,
+                                value=float(value),
+                                games_played=int(stat_row.get("plays", 0)),
                             )
                             session.add(team_stat)
                             saved_count += 1
                             
                     except Exception as e:
-                        logger.debug(f"[nflfastR] Error saving team stat: {e}")
+                        logger.debug(f"[nflfastR] Error saving team stat {stat_type}: {e}")
             
             await session.commit()
             logger.info(f"[nflfastR] Saved {saved_count} team stats")
@@ -1638,7 +1640,6 @@ class NFLFastRCollector(BaseCollector):
             logger.error(f"[nflfastR] Error saving team stats: {e}")
         
         return saved_count
-
 
 # =============================================================================
 # SINGLETON & REGISTRATION

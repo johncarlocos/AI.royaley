@@ -1499,6 +1499,171 @@ async def import_wehoop_team_stats() -> ImportResult:
 
 
 # =============================================================================
+# HOOPR IMPORTS (NBA + NCAAB)
+# =============================================================================
+
+async def import_hoopr(sports: List[str] = None) -> ImportResult:
+    """Import NBA and NCAAB current season data from hoopR/ESPN API."""
+    result = ImportResult(source="hoopr")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = [current_year]
+        leagues = ["NBA", "NCAAB"]
+        
+        data = await hoopr_collector.collect(years=years, leagues=leagues, collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                await hoopr_collector.save_to_database(data.data, session)
+                result.records = data.records_count
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_hoopr_history(years_back: int = 10) -> ImportResult:
+    """Import NBA and NCAAB historical data from hoopR/ESPN API (10 years)."""
+    result = ImportResult(source="hoopr_history")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        # NBA season spans two years (Oct-Jun), so use calendar year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        leagues = ["NBA", "NCAAB"]
+        
+        logger.info(f"[hoopR] Collecting {len(years)} seasons: {min(years)} to {max(years)}")
+        
+        data = await hoopr_collector.collect(years=years, leagues=leagues, collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                await hoopr_collector.save_to_database(data.data, session)
+                result.records = data.records_count
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_hoopr_nba(years_back: int = 10) -> ImportResult:
+    """Import NBA only data from hoopR/ESPN API (10 years)."""
+    result = ImportResult(source="hoopr_nba")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        
+        logger.info(f"[hoopR] Collecting NBA data for {len(years)} seasons: {min(years)} to {max(years)}")
+        
+        data = await hoopr_collector.collect(years=years, leagues=["NBA"], collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                await hoopr_collector.save_to_database(data.data, session)
+                result.records = data.records_count
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_hoopr_ncaab(years_back: int = 10) -> ImportResult:
+    """Import NCAAB only data from hoopR/ESPN API (10 years)."""
+    result = ImportResult(source="hoopr_ncaab")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        
+        logger.info(f"[hoopR] Collecting NCAAB data for {len(years)} seasons: {min(years)} to {max(years)}")
+        
+        data = await hoopr_collector.collect(years=years, leagues=["NCAAB"], collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                await hoopr_collector.save_to_database(data.data, session)
+                result.records = data.records_count
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_hoopr_players() -> ImportResult:
+    """Import NBA and NCAAB players from hoopR/ESPN API."""
+    result = ImportResult(source="nba_players")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 4, current_year + 1))  # 5 years of players
+        
+        data = await hoopr_collector.collect(years=years, leagues=["NBA", "NCAAB"], collect_type="rosters")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await hoopr_collector._save_rosters(session, data.data.get("rosters", []))
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_hoopr_team_stats() -> ImportResult:
+    """Import NBA and NCAAB team stats from hoopR/ESPN API."""
+    result = ImportResult(source="nba_team_stats")
+    try:
+        from app.services.collectors import hoopr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 9, current_year + 1))  # 10 years
+        
+        data = await hoopr_collector.collect(years=years, leagues=["NBA", "NCAAB"], collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await hoopr_collector._save_team_stats(session, data.data.get("team_stats", []))
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1514,6 +1679,7 @@ IMPORT_MAP = {
     "baseballr": import_baseballr,
     "hockeyr": import_hockeyr,
     "wehoop": import_wehoop,
+    "hoopr": import_hoopr,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1525,6 +1691,7 @@ IMPORT_MAP = {
     "baseballr_history": import_baseballr_history,
     "hockeyr_history": import_hockeyr_history,
     "wehoop_history": import_wehoop_history,
+    "hoopr_history": import_hoopr_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1543,6 +1710,10 @@ IMPORT_MAP = {
     "wnba_players": import_wehoop_players,
     "wnba_rosters": import_wehoop_rosters,
     "wnba_team_stats": import_wehoop_team_stats,
+    "nba_players": import_hoopr_players,
+    "nba_team_stats": import_hoopr_team_stats,
+    "hoopr_nba": import_hoopr_nba,
+    "hoopr_ncaab": import_hoopr_ncaab,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,
     "sportsdb_standings": import_sportsdb_standings,
@@ -1560,10 +1731,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "weather_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "weather_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -1611,7 +1782,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab"]:
                 result = await func(years_back=seasons)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
@@ -1620,7 +1791,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "nfl_players", "ncaaf_players", "mlb_players", 
                            "mlb_rosters", "mlb_team_stats",
                            "nhl_players", "nhl_rosters", "nhl_team_stats",
-                           "wnba_players", "wnba_rosters", "wnba_team_stats"]:
+                           "wnba_players", "wnba_rosters", "wnba_team_stats",
+                           "nba_players", "nba_team_stats"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)
@@ -1689,6 +1861,7 @@ def show_status():
     console.print("  • baseballr     → games, teams (MLB)")
     console.print("  • hockeyr       → games, teams (NHL)")
     console.print("  • wehoop        → games, teams (WNBA)")
+    console.print("  • hoopr         → games, teams (NBA, NCAAB)")
     
     console.print("\n[green]✅ HISTORICAL DATA (--historical):[/green]")
     console.print("  • pinnacle_history  → games (archived)")
@@ -1700,6 +1873,9 @@ def show_status():
     console.print("  • baseballr_history → games (2016-present)")
     console.print("  • hockeyr_history   → games (2016-present)")
     console.print("  • wehoop_history    → games (2016-present)")
+    console.print("  • hoopr_history     → games (2016-present, NBA + NCAAB)")
+    console.print("  • hoopr_nba         → games (2016-present, NBA only)")
+    console.print("  • hoopr_ncaab       → games (2016-present, NCAAB only)")
     
     console.print("\n[cyan]⚡ SPECIALIZED DATA:[/cyan]")
     console.print("  • injuries      → injuries (from ESPN)")

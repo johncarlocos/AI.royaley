@@ -1033,7 +1033,7 @@ class NFLFastRCollector(BaseCollector):
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "NFL")
         )
-        sport = sport_result.scalar_one_or_none()
+        sport = sport_result.scalars().first()
         
         if not sport:
             logger.error("[nflfastR] NFL sport not found")
@@ -1085,13 +1085,13 @@ class NFLFastRCollector(BaseCollector):
                         )
                     )
                 )
-                team = team_result.scalar_one_or_none()
+                team = team_result.scalars().first()
             
-            # Check if player exists
+            # Check if player exists (use first() to handle duplicates)
             existing = await session.execute(
                 select(Player).where(Player.external_id == external_id)
             )
-            player = existing.scalar_one_or_none()
+            player = existing.scalars().first()
             
             if player:
                 # Update existing player
@@ -1231,7 +1231,7 @@ class NFLFastRCollector(BaseCollector):
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "NFL")
         )
-        sport = sport_result.scalar_one_or_none()
+        sport = sport_result.scalars().first()
         
         if not sport:
             logger.error("[nflfastR] NFL sport not found in database")
@@ -1352,7 +1352,7 @@ class NFLFastRCollector(BaseCollector):
                     )
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         
@@ -1366,7 +1366,7 @@ class NFLFastRCollector(BaseCollector):
                     )
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         
@@ -1428,7 +1428,7 @@ class NFLFastRCollector(BaseCollector):
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "NFL")
         )
-        sport = sport_result.scalar_one_or_none()
+        sport = sport_result.scalars().first()
         
         if not sport:
             logger.error("[nflfastR] NFL sport not found")
@@ -1465,13 +1465,13 @@ class NFLFastRCollector(BaseCollector):
                         )
                     )
                 )
-                team = team_result.scalar_one_or_none()
+                team = team_result.scalars().first()
             
-            # Check if player exists
+            # Check if player exists (use first() to handle duplicates)
             existing = await session.execute(
                 select(Player).where(Player.external_id == external_id)
             )
-            player = existing.scalar_one_or_none()
+            player = existing.scalars().first()
             
             is_new_player = player is None
             
@@ -1545,7 +1545,7 @@ class NFLFastRCollector(BaseCollector):
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "NFL")
         )
-        sport = sport_result.scalar_one_or_none()
+        sport = sport_result.scalars().first()
         
         if not sport:
             logger.warning("[nflfastR] NFL sport not found")
@@ -1579,7 +1579,7 @@ class NFLFastRCollector(BaseCollector):
                     )
                 )
             )
-            team = team_result.scalar_one_or_none()
+            team = team_result.scalars().first()
             
             if not team:
                 continue
@@ -1602,7 +1602,7 @@ class NFLFastRCollector(BaseCollector):
                         )
                     )
                 )
-                team_stat = existing.scalar_one_or_none()
+                team_stat = existing.scalars().first()
                 
                 if team_stat:
                     team_stat.value = float(value)

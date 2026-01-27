@@ -301,6 +301,44 @@ ODDS_API_SPORT_KEYS = {
     "WNBA": "basketball_wnba",
     "NHL": "icehockey_nhl",
     "MLB": "baseball_mlb",
-    "ATP": "tennis_atp_singles",
-    "WTA": "tennis_wta_singles",
+    # Tennis - tournament-specific keys (API only returns data during active tournaments)
+    # Remove ATP/WTA from main collection since they require tournament-specific keys
+}
+
+# Tennis tournaments (use separately with collect_tennis method)
+ODDS_API_TENNIS_TOURNAMENTS = {
+    "ATP": [
+        "tennis_atp_aus_open_singles",
+        "tennis_atp_french_open",
+        "tennis_atp_wimbledon",
+        "tennis_atp_us_open",
+        "tennis_atp_indian_wells",
+        "tennis_atp_miami_open",
+        "tennis_atp_madrid_open",
+        "tennis_atp_italian_open",
+        "tennis_atp_canadian_open",
+        "tennis_atp_cincinnati_open",
+        "tennis_atp_shanghai_masters",
+        "tennis_atp_paris_masters",
+        "tennis_atp_monte_carlo_masters",
+        "tennis_atp_qatar_open",
+        "tennis_atp_dubai",
+        "tennis_atp_china_open",
+    ],
+    "WTA": [
+        "tennis_wta_aus_open_singles",
+        "tennis_wta_french_open",
+        "tennis_wta_wimbledon",
+        "tennis_wta_us_open",
+        "tennis_wta_indian_wells",
+        "tennis_wta_miami_open",
+        "tennis_wta_madrid_open",
+        "tennis_wta_italian_open",
+        "tennis_wta_canadian_open",
+        "tennis_wta_cincinnati_open",
+        "tennis_wta_qatar_open",
+        "tennis_wta_dubai",
+        "tennis_wta_china_open",
+        "tennis_wta_wuhan_open",
+    ],
 }

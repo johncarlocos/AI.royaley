@@ -162,13 +162,20 @@ class HockeyRCollector(BaseCollector):
     """
     
     def __init__(self):
-        super().__init__("hockeyR")
-        self._client: Optional[httpx.AsyncClient] = None
+        super().__init__(
+            name="hockeyR",
+            base_url=NHL_WEB_API,
+            rate_limit=100,
+            rate_window=60,
+            timeout=60.0,
+            max_retries=3,
+        )
+        self._custom_client: Optional[httpx.AsyncClient] = None
         
     async def get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
+        """Get or create HTTP client with custom settings."""
+        if self._custom_client is None or self._custom_client.is_closed:
+            self._custom_client = httpx.AsyncClient(
                 timeout=60.0,
                 follow_redirects=True,
                 headers={
@@ -176,13 +183,13 @@ class HockeyRCollector(BaseCollector):
                     "Accept": "application/json",
                 }
             )
-        return self._client
+        return self._custom_client
     
     async def close(self):
         """Close HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        if self._custom_client and not self._custom_client.is_closed:
+            await self._custom_client.aclose()
+            self._custom_client = None
     
     async def __aenter__(self):
         return self

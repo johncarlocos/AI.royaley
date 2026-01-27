@@ -1197,6 +1197,15 @@ class BaseballRCollector(BaseCollector):
         saved_count = 0
         batch_count = 0
         
+        def safe_int(val):
+            """Safely convert value to int or None."""
+            if val is None or val == '':
+                return None
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return None
+        
         # Get MLB sport
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "MLB")
@@ -1207,6 +1216,15 @@ class BaseballRCollector(BaseCollector):
             logger.error("[baseballR] MLB sport not found")
             return 0
         
+        # Pre-load existing player external_ids to avoid duplicates
+        existing_ids_result = await session.execute(
+            select(Player.external_id).where(
+                Player.external_id.like("mlb_%")
+            )
+        )
+        existing_player_ids = set(row[0] for row in existing_ids_result.fetchall() if row[0])
+        logger.info(f"[baseballR] Found {len(existing_player_ids)} existing MLB players")
+        
         for roster_entry in rosters_data:
             player_id = roster_entry.get("mlb_id")
             if not player_id:
@@ -1214,6 +1232,7 @@ class BaseballRCollector(BaseCollector):
             
             external_id = f"mlb_{player_id}"
             player_name = roster_entry.get("name", "Unknown")
+            jersey_num = safe_int(roster_entry.get("jersey_number"))
             
             # Get team
             team_abbr = roster_entry.get("team")
@@ -1229,31 +1248,31 @@ class BaseballRCollector(BaseCollector):
                 )
                 team = team_result.scalars().first()
             
-            # Check if player exists
-            existing = await session.execute(
-                select(Player).where(Player.external_id == external_id)
-            )
-            player = existing.scalars().first()
-            
-            if player:
+            if external_id in existing_player_ids:
                 # Update existing player
-                player.name = player_name
-                player.position = roster_entry.get("position")
-                player.jersey_number = roster_entry.get("jersey_number")
-                if team:
-                    player.team_id = team.id
-                player.is_active = True
+                existing = await session.execute(
+                    select(Player).where(Player.external_id == external_id)
+                )
+                player = existing.scalars().first()
+                if player:
+                    player.name = player_name
+                    player.position = roster_entry.get("position")
+                    player.jersey_number = jersey_num
+                    if team:
+                        player.team_id = team.id
+                    player.is_active = True
             else:
                 # Create new player
                 player = Player(
                     external_id=external_id,
                     name=player_name,
                     position=roster_entry.get("position"),
-                    jersey_number=roster_entry.get("jersey_number"),
+                    jersey_number=jersey_num,
                     team_id=team.id if team else None,
                     is_active=True,
                 )
                 session.add(player)
+                existing_player_ids.add(external_id)
                 saved_count += 1
             
             # Flush in batches
@@ -1262,6 +1281,10 @@ class BaseballRCollector(BaseCollector):
                 await session.flush()
                 logger.info(f"[baseballR] Flushed batch, {saved_count} new players so far")
                 batch_count = 0
+        
+        # Final flush
+        if batch_count > 0:
+            await session.flush()
         
         logger.info(f"[baseballR] Saved {saved_count} players from rosters")
         return saved_count

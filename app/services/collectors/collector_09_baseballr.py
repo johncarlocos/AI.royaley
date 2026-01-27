@@ -579,46 +579,113 @@ class BaseballRCollector(BaseCollector):
         
         client = await self.get_client()
         
-        # Get stats for each team's roster
+        # First, get all current rosters to have player IDs
+        all_players = {}
+        
         for team_id, team_info in MLB_TEAMS.items():
-            for year in years:
-                try:
-                    # Get team stats for the season
-                    url = (f"{MLB_API_BASE}/teams/{team_id}/stats"
-                           f"?season={year}"
-                           f"&group=hitting,pitching"
-                           f"&stats=season")
-                    
-                    response = await client.get(url, timeout=30.0)
-                    response.raise_for_status()
-                    
+            try:
+                url = f"{MLB_API_BASE}/teams/{team_id}/roster?rosterType=fullSeason"
+                response = await client.get(url, timeout=30.0)
+                
+                if response.status_code == 200:
                     data = response.json()
-                    
-                    for stat_group in data.get("stats", []):
-                        group_type = stat_group.get("group", {}).get("displayName")
-                        
-                        for split in stat_group.get("splits", []):
-                            player = split.get("player", {})
-                            stats = split.get("stat", {})
-                            
-                            if not player:
-                                continue
-                            
-                            stat_record = {
-                                "player_name": player.get("fullName"),
-                                "player_id": player.get("id"),
+                    for player in data.get("roster", []):
+                        person = player.get("person", {})
+                        player_id = person.get("id")
+                        if player_id:
+                            all_players[player_id] = {
+                                "name": person.get("fullName"),
                                 "team": team_info["abbr"],
-                                "season": year,
-                                "stat_type": "batting" if group_type == "hitting" else "pitching",
+                                "position": player.get("position", {}).get("abbreviation"),
                             }
-                            stat_record.update(stats)
-                            player_stats.append(stat_record)
+                
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                logger.debug(f"[baseballR] Roster {team_info['abbr']} error: {e}")
+        
+        logger.info(f"[baseballR] Found {len(all_players)} players for stat collection")
+        
+        # Get stats for each player (limit to most recent years for speed)
+        recent_years = [y for y in years if y >= datetime.now().year - 3]
+        
+        for player_id, player_info in list(all_players.items())[:500]:  # Limit for speed
+            for year in recent_years:
+                try:
+                    # Get batting stats
+                    url = f"{MLB_API_BASE}/people/{player_id}/stats?stats=season&season={year}&group=hitting"
+                    response = await client.get(url, timeout=15.0)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        for stat_group in data.get("stats", []):
+                            for split in stat_group.get("splits", []):
+                                stats = split.get("stat", {})
+                                if stats.get("gamesPlayed", 0) > 0:
+                                    player_stats.append({
+                                        "player_name": player_info["name"],
+                                        "player_id": player_id,
+                                        "team": split.get("team", {}).get("abbreviation") or player_info["team"],
+                                        "season": year,
+                                        "stat_type": "batting",
+                                        "games": stats.get("gamesPlayed"),
+                                        "at_bats": stats.get("atBats"),
+                                        "hits": stats.get("hits"),
+                                        "doubles": stats.get("doubles"),
+                                        "triples": stats.get("triples"),
+                                        "home_runs": stats.get("homeRuns"),
+                                        "runs": stats.get("runs"),
+                                        "rbi": stats.get("rbi"),
+                                        "walks": stats.get("baseOnBalls"),
+                                        "strikeouts": stats.get("strikeOuts"),
+                                        "stolen_bases": stats.get("stolenBases"),
+                                        "batting_avg": stats.get("avg"),
+                                        "obp": stats.get("obp"),
+                                        "slg": stats.get("slg"),
+                                        "ops": stats.get("ops"),
+                                    })
+                    
+                    # Get pitching stats
+                    url = f"{MLB_API_BASE}/people/{player_id}/stats?stats=season&season={year}&group=pitching"
+                    response = await client.get(url, timeout=15.0)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        for stat_group in data.get("stats", []):
+                            for split in stat_group.get("splits", []):
+                                stats = split.get("stat", {})
+                                if stats.get("gamesPitched", 0) > 0:
+                                    player_stats.append({
+                                        "player_name": player_info["name"],
+                                        "player_id": player_id,
+                                        "team": split.get("team", {}).get("abbreviation") or player_info["team"],
+                                        "season": year,
+                                        "stat_type": "pitching",
+                                        "games": stats.get("gamesPitched"),
+                                        "games_started": stats.get("gamesStarted"),
+                                        "wins": stats.get("wins"),
+                                        "losses": stats.get("losses"),
+                                        "saves": stats.get("saves"),
+                                        "innings_pitched": stats.get("inningsPitched"),
+                                        "hits_allowed": stats.get("hits"),
+                                        "runs_allowed": stats.get("runs"),
+                                        "earned_runs": stats.get("earnedRuns"),
+                                        "walks": stats.get("baseOnBalls"),
+                                        "strikeouts": stats.get("strikeOuts"),
+                                        "home_runs_allowed": stats.get("homeRuns"),
+                                        "era": stats.get("era"),
+                                        "whip": stats.get("whip"),
+                                    })
                     
                     # Rate limiting
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.05)
                     
                 except Exception as e:
-                    logger.debug(f"[baseballR] API stats {team_info['abbr']} {year} error: {e}")
+                    logger.debug(f"[baseballR] Player {player_id} stats error: {e}")
+            
+            # Progress logging
+            if len(player_stats) % 100 == 0 and len(player_stats) > 0:
+                logger.info(f"[baseballR] Collected {len(player_stats)} player stat records...")
         
         return player_stats
     
@@ -914,6 +981,7 @@ class BaseballRCollector(BaseCollector):
     ) -> int:
         """Save game records to database."""
         saved_count = 0
+        batch_count = 0
         
         # Get MLB sport
         sport_result = await session.execute(
@@ -940,70 +1008,78 @@ class BaseballRCollector(BaseCollector):
                 
                 external_id = game_data.get("external_id")
                 
-                # Check if game exists
+                # Check if game exists by external_id
                 existing = await session.execute(
                     select(Game).where(Game.external_id == external_id)
                 )
                 game = existing.scalars().first()
                 
                 if game:
-                    # Update scores
+                    # Update scores only
                     if game_data.get("home_score") is not None:
                         game.home_score = game_data["home_score"]
                     if game_data.get("away_score") is not None:
                         game.away_score = game_data["away_score"]
                     if game_data.get("status"):
                         game.status = GameStatus(game_data["status"])
+                    continue  # Skip to next game
+                
+                # Parse date
+                game_date_str = game_data.get("game_date")
+                if isinstance(game_date_str, datetime):
+                    scheduled_dt = game_date_str
                 else:
-                    # Parse date
-                    game_date_str = game_data.get("game_date")
-                    if isinstance(game_date_str, datetime):
-                        scheduled_dt = game_date_str
-                    else:
-                        scheduled_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
-                    
-                    if scheduled_dt.tzinfo:
-                        scheduled_dt = scheduled_dt.replace(tzinfo=None)
-                    
-                    # Check for duplicates
-                    date_start = scheduled_dt - timedelta(hours=6)
-                    date_end = scheduled_dt + timedelta(hours=6)
-                    
-                    dup_check = await session.execute(
-                        select(Game).where(
-                            and_(
-                                Game.sport_id == sport.id,
-                                Game.home_team_id == home_team.id,
-                                Game.away_team_id == away_team.id,
-                                Game.scheduled_at >= date_start,
-                                Game.scheduled_at <= date_end,
-                            )
+                    scheduled_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
+                
+                if scheduled_dt.tzinfo:
+                    scheduled_dt = scheduled_dt.replace(tzinfo=None)
+                
+                # Check for duplicates by teams and date
+                date_start = scheduled_dt - timedelta(hours=6)
+                date_end = scheduled_dt + timedelta(hours=6)
+                
+                dup_check = await session.execute(
+                    select(Game).where(
+                        and_(
+                            Game.sport_id == sport.id,
+                            Game.home_team_id == home_team.id,
+                            Game.away_team_id == away_team.id,
+                            Game.scheduled_at >= date_start,
+                            Game.scheduled_at <= date_end,
                         )
                     )
-                    existing_game = dup_check.scalars().first()
+                )
+                existing_game = dup_check.scalars().first()
+                
+                if existing_game:
+                    # Update existing game
+                    if game_data.get("home_score") is not None:
+                        existing_game.home_score = game_data["home_score"]
+                    if game_data.get("away_score") is not None:
+                        existing_game.away_score = game_data["away_score"]
+                    if external_id and not existing_game.external_id:
+                        existing_game.external_id = external_id
+                else:
+                    # Create new game
+                    game = Game(
+                        sport_id=sport.id,
+                        external_id=external_id,
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        scheduled_at=scheduled_dt,
+                        status=GameStatus(game_data.get("status", "scheduled")),
+                        home_score=game_data.get("home_score"),
+                        away_score=game_data.get("away_score"),
+                    )
+                    session.add(game)
+                    saved_count += 1
+                    batch_count += 1
                     
-                    if existing_game:
-                        # Update existing
-                        if game_data.get("home_score") is not None:
-                            existing_game.home_score = game_data["home_score"]
-                        if game_data.get("away_score") is not None:
-                            existing_game.away_score = game_data["away_score"]
-                        if external_id and not existing_game.external_id:
-                            existing_game.external_id = external_id
-                    else:
-                        # Create new
-                        game = Game(
-                            sport_id=sport.id,
-                            external_id=external_id,
-                            home_team_id=home_team.id,
-                            away_team_id=away_team.id,
-                            scheduled_at=scheduled_dt,
-                            status=GameStatus(game_data.get("status", "scheduled")),
-                            home_score=game_data.get("home_score"),
-                            away_score=game_data.get("away_score"),
-                        )
-                        session.add(game)
-                        saved_count += 1
+                    # Flush in batches to catch duplicates early
+                    if batch_count >= 500:
+                        await session.flush()
+                        logger.info(f"[baseballR] Flushed batch, {saved_count} games so far")
+                        batch_count = 0
                         
             except Exception as e:
                 logger.debug(f"[baseballR] Error saving game: {e}")

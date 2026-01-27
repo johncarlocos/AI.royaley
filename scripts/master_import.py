@@ -217,45 +217,75 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
 
 
 async def import_pinnacle(sports: List[str] = None) -> ImportResult:
-    """Import Pinnacle odds with line movements and closing lines."""
+    """Import Pinnacle odds with line movements and closing lines.
+    
+    Fills: odds, odds_movements, sportsbooks tables
+    Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
+    """
     result = ImportResult(source="pinnacle")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 supported sports
+        ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        sports_to_collect = sports if sports else ALL_SPORTS
+        
         await db_manager.initialize()
         
-        for sport in sports:
+        logger.info(f"[Pinnacle] Starting collection for {len(sports_to_collect)} sports")
+        
+        for sport in sports_to_collect:
             try:
                 data = await pinnacle_collector.collect(sport_code=sport)
                 if data.success:
                     result.records += data.records_count
                     async with db_manager.session() as session:
-                        # Save odds
-                        await pinnacle_collector.save_to_database(data.data, session)
+                        # Save odds to database
+                        saved = await pinnacle_collector.save_to_database(data.data, session)
+                        logger.info(f"[Pinnacle] {sport}: Saved {saved} odds records")
+                        
                         # Track line movements
                         movements = await pinnacle_collector.track_line_movements(data.data, session)
                         result.records += movements
+                        logger.info(f"[Pinnacle] {sport}: Tracked {movements} line movements")
+                else:
+                    logger.warning(f"[Pinnacle] {sport}: No data collected")
             except Exception as e:
-                result.errors.append(f"{sport}: {str(e)[:50]}")
+                error_msg = f"{sport}: {str(e)[:50]}"
+                result.errors.append(error_msg)
+                logger.error(f"[Pinnacle] {error_msg}")
+        
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
+        logger.error(f"[Pinnacle] Fatal error: {e}")
     return result
 
 
-async def import_pinnacle_history(sports: List[str] = None, pages: int = 50) -> ImportResult:
-    """Import historical Pinnacle game results."""
+async def import_pinnacle_history(sports: List[str] = None, pages: int = 100) -> ImportResult:
+    """Import historical Pinnacle game results (scores/outcomes only, NOT historical odds).
+    
+    Fills: games table with historical results for ML training labels
+    Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
+    
+    IMPORTANT: This provides game RESULTS for ML training, not historical odds.
+    Historical odds can only be built by running collect() continuously over time.
+    """
     result = ImportResult(source="pinnacle_history")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 supported sports
+        ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        sports_to_collect = sports if sports else ALL_SPORTS
+        
         await db_manager.initialize()
         
-        for sport in sports:
+        logger.info(f"[Pinnacle History] Starting collection for {len(sports_to_collect)} sports (max {pages} pages each)")
+        
+        for sport in sports_to_collect:
             try:
                 data = await pinnacle_collector.collect_historical(
                     sport_code=sport, 
@@ -264,35 +294,61 @@ async def import_pinnacle_history(sports: List[str] = None, pages: int = 50) -> 
                 if data.success:
                     result.records += data.records_count
                     async with db_manager.session() as session:
-                        await pinnacle_collector.save_historical_to_database(data.data, session)
+                        saved, updated = await pinnacle_collector.save_historical_to_database(
+                            data.data, sport, session
+                        )
+                        logger.info(f"[Pinnacle History] {sport}: {saved} new, {updated} updated games")
+                else:
+                    logger.warning(f"[Pinnacle History] {sport}: No data collected")
             except Exception as e:
-                result.errors.append(f"{sport}: {str(e)[:50]}")
+                error_msg = f"{sport}: {str(e)[:50]}"
+                result.errors.append(error_msg)
+                logger.error(f"[Pinnacle History] {error_msg}")
+        
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
+        logger.error(f"[Pinnacle History] Fatal error: {e}")
     return result
 
 
 async def import_pinnacle_closing_lines(sports: List[str] = None) -> ImportResult:
-    """Capture closing lines from Pinnacle for completed games."""
+    """Capture closing lines from Pinnacle for games that have started.
+    
+    Fills: closing_lines table (benchmark for CLV calculation)
+    Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
+    
+    Run this periodically to capture final lines before game starts.
+    """
     result = ImportResult(source="closing_lines")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 supported sports
+        ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        sports_to_collect = sports if sports else ALL_SPORTS
+        
         await db_manager.initialize()
         
-        for sport in sports:
+        logger.info(f"[Closing Lines] Capturing closing lines for {len(sports_to_collect)} sports")
+        
+        for sport in sports_to_collect:
             try:
                 async with db_manager.session() as session:
                     saved = await pinnacle_collector.capture_closing_lines(sport, session)
                     result.records += saved
+                    if saved > 0:
+                        logger.info(f"[Closing Lines] {sport}: Captured {saved} closing lines")
             except Exception as e:
-                result.errors.append(f"{sport}: {str(e)[:50]}")
-        result.success = result.records >= 0
+                error_msg = f"{sport}: {str(e)[:50]}"
+                result.errors.append(error_msg)
+                logger.error(f"[Closing Lines] {error_msg}")
+        
+        result.success = result.records >= 0  # Success even if no new lines captured
     except Exception as e:
         result.errors.append(str(e)[:100])
+        logger.error(f"[Closing Lines] Fatal error: {e}")
     return result
 
 
@@ -842,7 +898,7 @@ ALL_SOURCES = list(IMPORT_MAP.keys())
 # MAIN IMPORT RUNNER
 # =============================================================================
 
-async def run_import(sources: List[str], sports: List[str] = None, pages: int = 50, days: int = 30, seasons: int = 10):
+async def run_import(sources: List[str], sports: List[str] = None, pages: int = 100, days: int = 30, seasons: int = 10):
     """Run data import for specified sources."""
     console.print(f"\n[bold blue]{'='*60}[/bold blue]")
     console.print(f"[bold]ROYALEY DATA IMPORT[/bold]")
@@ -998,7 +1054,7 @@ def main():
     parser.add_argument("--source", "-s", help="Specific source")
     parser.add_argument("--sport", help="Specific sport")
     parser.add_argument("--sports", help="Comma-separated sports")
-    parser.add_argument("--pages", "-p", type=int, default=50, help="Pinnacle history pages")
+    parser.add_argument("--pages", "-p", type=int, default=100, help="Pinnacle history pages per sport (100 events/page)")
     parser.add_argument("--days", "-d", type=int, default=30, help="Days back for history")
     parser.add_argument("--seasons", type=int, default=10, help="Seasons back (default: 10)")
     parser.add_argument("--interval", "-i", type=int, default=30, help="Daemon interval (min)")

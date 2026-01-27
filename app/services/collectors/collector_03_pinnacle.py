@@ -799,42 +799,62 @@ class PinnacleCollector(BaseCollector):
     async def collect_historical(
         self,
         sport_code: str = None,
-        max_pages: int = 50,
+        max_pages: int = 100,
     ) -> CollectorResult:
         """
         Collect historical game results from Pinnacle archive.
         
         This provides OUTCOME labels (who won, scores, margins) for ML training.
-        Note: Archive has results but NOT historical odds.
+        
+        IMPORTANT: Archive has game RESULTS but NOT historical odds.
+        The RapidAPI Pinnacle endpoint only provides current/future odds.
+        To build historical odds data, you must run collect() continuously over time.
         
         Args:
-            sport_code: Specific sport (NFL, NBA, etc.) or None for all
+            sport_code: Specific sport (NFL, NBA, etc.) or None for all 10 sports
             max_pages: Maximum pages to fetch per sport (100 events/page)
             
         Returns:
             CollectorResult with historical game results
         """
-        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 supported sports
+        ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        
+        sports = [sport_code.upper()] if sport_code else ALL_SPORTS
         all_results = []
         errors = []
         
+        logger.info(f"[Pinnacle] Starting historical collection for {len(sports)} sports")
+        print(f"[Pinnacle] 📜 Collecting historical data for: {', '.join(sports)}")
+        print(f"[Pinnacle] ⚠️  Note: Archive contains game RESULTS only, not historical odds")
+        
         for sport in sports:
             try:
+                print(f"[Pinnacle] 📊 Fetching {sport} archive (up to {max_pages} pages)...")
                 events = await self._fetch_archive(sport, max_pages)
                 results = [self._parse_historical_event(e) for e in events]
                 results = [r for r in results if r is not None]
                 all_results.extend(results)
-                logger.info(f"Pinnacle history: {sport} - {len(results)} games")
+                logger.info(f"[Pinnacle] ✅ {sport}: {len(results)} historical games")
+                print(f"[Pinnacle] ✅ {sport}: {len(results)} historical games")
             except Exception as e:
                 errors.append(f"{sport}: {str(e)}")
-                logger.error(f"Error collecting {sport} history: {e}")
+                logger.error(f"[Pinnacle] ❌ Error collecting {sport} history: {e}")
+                print(f"[Pinnacle] ❌ {sport} error: {e}")
+        
+        logger.info(f"[Pinnacle] Historical collection complete: {len(all_results)} total games")
+        print(f"[Pinnacle] 🏁 Total: {len(all_results)} historical games from {len(sports) - len(errors)} sports")
         
         return CollectorResult(
             success=len(all_results) > 0,
             data=all_results,
             records_count=len(all_results),
             error="; ".join(errors) if errors else None,
-            metadata={"type": "historical", "sports": sports}
+            metadata={
+                "type": "historical", 
+                "sports": sports,
+                "note": "Contains game results only, not historical odds"
+            }
         )
     
     async def _fetch_archive(self, sport_code: str, max_pages: int) -> List[Dict[str, Any]]:
@@ -1010,11 +1030,16 @@ class PinnacleCollector(BaseCollector):
         Detects:
         - Steam moves (sharp money causing rapid line movement)
         - Reverse line movement (line moves opposite to public betting)
+        
+        Tracks movements for: spread, total, AND moneyline
         """
         movements_saved = 0
         
         if not odds_data:
             return 0
+        
+        # Get Pinnacle sportsbook for filtering
+        pinnacle_book = await self._get_or_create_pinnacle_sportsbook(session)
         
         for odds_record in odds_data:
             try:
@@ -1031,28 +1056,27 @@ class PinnacleCollector(BaseCollector):
                 if not game:
                     continue
                 
-                # Get previous odds for this game (from last hour)
-                one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+                bet_type = odds_record.get("bet_type")
                 
+                # Get previous Pinnacle odds for this game and bet_type
                 prev_result = await session.execute(
                     select(Odds).where(
                         and_(
                             Odds.game_id == game.id,
-                            Odds.created_at < one_hour_ago,
+                            Odds.sportsbook_id == pinnacle_book.id,
+                            Odds.bet_type == bet_type,
                         )
-                    ).order_by(Odds.created_at.desc()).limit(1)
+                    ).order_by(Odds.recorded_at.desc()).limit(1)
                 )
                 prev_odds = prev_result.scalar_one_or_none()
                 
                 if not prev_odds:
                     continue
                 
-                bet_type = odds_record.get("bet_type")
-                
                 # Check spread movement
                 if bet_type == "spread":
                     current_spread = odds_record.get("home_line")
-                    prev_spread = prev_odds.spread_home
+                    prev_spread = prev_odds.home_line  # FIXED: was spread_home
                     
                     if current_spread is not None and prev_spread is not None:
                         movement = current_spread - prev_spread
@@ -1074,7 +1098,7 @@ class PinnacleCollector(BaseCollector):
                             movements_saved += 1
                 
                 # Check total movement
-                if bet_type == "total":
+                elif bet_type == "total":
                     current_total = odds_record.get("total")
                     prev_total = prev_odds.total
                     
@@ -1090,6 +1114,32 @@ class PinnacleCollector(BaseCollector):
                                 previous_line=prev_total,
                                 current_line=current_total,
                                 movement=movement,
+                                is_steam=is_steam,
+                                is_reverse=False,
+                                detected_at=datetime.utcnow(),
+                            )
+                            session.add(movement_record)
+                            movements_saved += 1
+                
+                # Check moneyline movement (convert odds to implied prob for comparison)
+                elif bet_type == "moneyline":
+                    current_ml = odds_record.get("home_odds")
+                    prev_ml = prev_odds.home_odds  # FIXED: was ml_home
+                    
+                    if current_ml is not None and prev_ml is not None:
+                        # Calculate movement in terms of odds shift
+                        movement = current_ml - prev_ml
+                        
+                        # Significant if odds moved 10+ points
+                        if abs(movement) >= 10:
+                            is_steam = abs(movement) >= 20
+                            
+                            movement_record = OddsMovement(
+                                game_id=game.id,
+                                bet_type="moneyline",
+                                previous_line=float(prev_ml),
+                                current_line=float(current_ml),
+                                movement=float(movement),
                                 is_steam=is_steam,
                                 is_reverse=False,
                                 detected_at=datetime.utcnow(),
@@ -1117,10 +1167,15 @@ class PinnacleCollector(BaseCollector):
         
         This should run periodically to capture the final lines before game start.
         Closing lines are the benchmark for CLV (Closing Line Value) calculation.
+        
+        Uses the most recent Pinnacle odds before game start as the closing line.
         """
         saved_count = 0
         
         try:
+            # Get Pinnacle sportsbook
+            pinnacle_book = await self._get_or_create_pinnacle_sportsbook(session)
+            
             # Get sport
             sport_result = await session.execute(
                 select(Sport).where(Sport.code == sport_code)
@@ -1130,15 +1185,15 @@ class PinnacleCollector(BaseCollector):
             if not sport:
                 return 0
             
-            # Find games that started in last 2 hours without closing lines
-            two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+            # Find games that started in last 4 hours without closing lines
+            four_hours_ago = datetime.utcnow() - timedelta(hours=4)
             now = datetime.utcnow()
             
             games_result = await session.execute(
                 select(Game).where(
                     and_(
                         Game.sport_id == sport.id,
-                        Game.scheduled_at >= two_hours_ago,
+                        Game.scheduled_at >= four_hours_ago,
                         Game.scheduled_at <= now,
                     )
                 )
@@ -1154,30 +1209,63 @@ class PinnacleCollector(BaseCollector):
                     if existing.scalar_one_or_none():
                         continue
                     
-                    # Get most recent Pinnacle odds before game start
-                    odds_result = await session.execute(
+                    # Get most recent Pinnacle spread odds before game start
+                    spread_result = await session.execute(
                         select(Odds).where(
                             and_(
                                 Odds.game_id == game.id,
-                                Odds.created_at < game.scheduled_at,
+                                Odds.sportsbook_id == pinnacle_book.id,
+                                Odds.bet_type == "spread",
+                                Odds.recorded_at < game.scheduled_at,
                             )
-                        ).order_by(Odds.created_at.desc()).limit(1)
+                        ).order_by(Odds.recorded_at.desc()).limit(1)
                     )
-                    final_odds = odds_result.scalar_one_or_none()
+                    spread_odds = spread_result.scalar_one_or_none()
                     
-                    if not final_odds:
+                    # Get most recent Pinnacle total odds before game start
+                    total_result = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.sportsbook_id == pinnacle_book.id,
+                                Odds.bet_type == "total",
+                                Odds.recorded_at < game.scheduled_at,
+                            )
+                        ).order_by(Odds.recorded_at.desc()).limit(1)
+                    )
+                    total_odds = total_result.scalar_one_or_none()
+                    
+                    # Get most recent Pinnacle moneyline odds before game start
+                    ml_result = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.sportsbook_id == pinnacle_book.id,
+                                Odds.bet_type == "moneyline",
+                                Odds.recorded_at < game.scheduled_at,
+                            )
+                        ).order_by(Odds.recorded_at.desc()).limit(1)
+                    )
+                    ml_odds = ml_result.scalar_one_or_none()
+                    
+                    # Need at least one bet type
+                    if not any([spread_odds, total_odds, ml_odds]):
                         continue
                     
-                    # Create closing line record
+                    # Create closing line record with all bet types
                     closing_line = ClosingLine(
                         game_id=game.id,
-                        spread_home=final_odds.spread_home,
-                        spread_away=final_odds.spread_away,
-                        total=final_odds.total,
-                        moneyline_home=final_odds.ml_home,
-                        moneyline_away=final_odds.ml_away,
+                        spread_home=spread_odds.home_line if spread_odds else None,  # FIXED
+                        spread_away=spread_odds.away_line if spread_odds else None,  # FIXED
+                        total=total_odds.total if total_odds else None,
+                        moneyline_home=ml_odds.home_odds if ml_odds else None,  # FIXED
+                        moneyline_away=ml_odds.away_odds if ml_odds else None,  # FIXED
                         source="pinnacle",
-                        recorded_at=final_odds.created_at,
+                        recorded_at=max(
+                            spread_odds.recorded_at if spread_odds else datetime.min,
+                            total_odds.recorded_at if total_odds else datetime.min,
+                            ml_odds.recorded_at if ml_odds else datetime.min,
+                        ) if any([spread_odds, total_odds, ml_odds]) else datetime.utcnow(),
                     )
                     session.add(closing_line)
                     saved_count += 1

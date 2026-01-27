@@ -23,8 +23,10 @@ Tables filled by each source:
     pinnacle      → odds, odds_movements, closing_lines, sportsbooks
     weather       → weather_data
     sportsdb      → games, teams, venues
-    nflfastr      → games, teams, players, player_stats, team_stats
-    cfbfastr      → games, teams, players, player_stats, team_stats
+    nflfastr      → games, teams, players, player_stats, team_stats (NFL)
+    cfbfastr      → games, teams, players, player_stats, team_stats (NCAAF)
+    baseballr     → games, teams, players, player_stats, team_stats (MLB)
+    hockeyr       → games, teams, players, player_stats, team_stats (NHL)
 """
 
 import asyncio
@@ -1194,6 +1196,157 @@ async def import_baseballr_team_stats() -> ImportResult:
 
 
 # =============================================================================
+# HOCKEYR IMPORTS (NHL)
+# =============================================================================
+
+async def import_hockeyr(sports: List[str] = None) -> ImportResult:
+    """Import NHL current season data from hockeyR/NHL API."""
+    result = ImportResult(source="hockeyr")
+    try:
+        from app.services.collectors import hockeyr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        # NHL season spans two calendar years (Oct-June)
+        if datetime.now().month >= 10:
+            years = [current_year]
+        else:
+            years = [current_year - 1]
+        
+        data = await hockeyr_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await hockeyr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_hockeyr_history(years_back: int = 10) -> ImportResult:
+    """Import NHL historical data from hockeyR/NHL API (10 years)."""
+    result = ImportResult(source="hockeyr_history")
+    try:
+        from app.services.collectors import hockeyr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        # NHL season format: 2015 means 2015-16 season
+        if datetime.now().month >= 10:
+            end_year = current_year
+        else:
+            end_year = current_year - 1
+        
+        years = list(range(end_year - years_back + 1, end_year + 1))
+        
+        logger.info(f"[hockeyR] Collecting {len(years)} seasons: {min(years)}-{min(years)+1} to {max(years)}-{max(years)+1}")
+        
+        data = await hockeyr_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await hockeyr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_hockeyr_players() -> ImportResult:
+    """Import NHL players and stats from hockeyR/NHL API."""
+    result = ImportResult(source="nhl_players")
+    try:
+        from app.services.collectors import hockeyr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 10:
+            years = list(range(current_year - 2, current_year + 1))
+        else:
+            years = list(range(current_year - 3, current_year))
+        
+        data = await hockeyr_collector.collect(years=years, collect_type="player_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await hockeyr_collector.save_player_stats_to_database(
+                    data.data.get("player_stats", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_hockeyr_rosters() -> ImportResult:
+    """Import NHL rosters from hockeyR/NHL API."""
+    result = ImportResult(source="nhl_rosters")
+    try:
+        from app.services.collectors import hockeyr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 10:
+            years = [current_year]
+        else:
+            years = [current_year - 1]
+        
+        data = await hockeyr_collector.collect(years=years, collect_type="rosters")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await hockeyr_collector.save_rosters_to_database(
+                    data.data.get("rosters", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_hockeyr_team_stats() -> ImportResult:
+    """Import NHL team stats from hockeyR/NHL API."""
+    result = ImportResult(source="nhl_team_stats")
+    try:
+        from app.services.collectors import hockeyr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 10:
+            years = list(range(current_year - 9, current_year + 1))
+        else:
+            years = list(range(current_year - 10, current_year))
+        
+        logger.info(f"[hockeyR] Collecting NHL team stats for {min(years)}-{max(years)+1}...")
+        
+        data = await hockeyr_collector.collect(years=years, collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await hockeyr_collector.save_team_stats_to_database(
+                    data.data.get("team_stats", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1207,6 +1360,7 @@ IMPORT_MAP = {
     "nflfastr": import_nflfastr,
     "cfbfastr": import_cfbfastr,
     "baseballr": import_baseballr,
+    "hockeyr": import_hockeyr,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1216,6 +1370,7 @@ IMPORT_MAP = {
     "nflfastr_history": import_nflfastr_history,
     "cfbfastr_history": import_cfbfastr_history,
     "baseballr_history": import_baseballr_history,
+    "hockeyr_history": import_hockeyr_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1228,6 +1383,9 @@ IMPORT_MAP = {
     "mlb_players": import_baseballr_players,
     "mlb_rosters": import_baseballr_rosters,
     "mlb_team_stats": import_baseballr_team_stats,
+    "nhl_players": import_hockeyr_players,
+    "nhl_rosters": import_hockeyr_rosters,
+    "nhl_team_stats": import_hockeyr_team_stats,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,
     "sportsdb_standings": import_sportsdb_standings,
@@ -1245,10 +1403,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "weather_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "weather_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -1296,14 +1454,15 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history"]:
                 result = await func(years_back=seasons)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
             elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
                            "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
                            "nfl_players", "ncaaf_players", "mlb_players", 
-                           "mlb_rosters", "mlb_team_stats"]:
+                           "mlb_rosters", "mlb_team_stats",
+                           "nhl_players", "nhl_rosters", "nhl_team_stats"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

@@ -1241,5 +1241,5 @@ class HockeyRCollector(BaseCollector):
 
 hockeyr_collector = HockeyRCollector()
 
-# Register with collector manager
-collector_manager.register("hockeyr", hockeyr_collector)
+# Register with collector manager (uses collector.name internally)
+collector_manager.register(hockeyr_collector)

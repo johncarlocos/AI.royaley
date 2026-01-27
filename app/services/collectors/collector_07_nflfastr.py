@@ -1420,6 +1420,8 @@ class NFLFastRCollector(BaseCollector):
         - position, position_group
         - team (abbreviation)
         - Various stats: completions, passing_yards, rushing_yards, etc.
+        
+        Note: Stats are only added for NEW players to avoid duplicates.
         """
         from app.models import Player, PlayerStats, Team, Sport
         from collections import defaultdict
@@ -1477,8 +1479,10 @@ class NFLFastRCollector(BaseCollector):
                 )
                 player = existing.scalar_one_or_none()
                 
+                is_new_player = player is None
+                
                 if player:
-                    # Update
+                    # Update existing player info only (skip stats - already imported)
                     player.name = player_name
                     player.position = stat_row.get("position") or stat_row.get("position_group")
                     if team:
@@ -1497,31 +1501,32 @@ class NFLFastRCollector(BaseCollector):
                     await session.flush()  # Get player.id
                     saved_players += 1
                 
-                # Save individual stats
-                stat_types = [
-                    "completions", "attempts", "passing_yards", "passing_tds", 
-                    "interceptions", "sacks", "sack_yards", "sack_fumbles",
-                    "rushing_yards", "rushing_tds", "rushing_fumbles",
-                    "receptions", "targets", "receiving_yards", "receiving_tds",
-                    "fantasy_points", "fantasy_points_ppr"
-                ]
-                
-                for stat_type in stat_types:
-                    value = stat_row.get(stat_type)
-                    if value is not None:
-                        try:
-                            # Skip NaN values
-                            if pd.isna(value):
-                                continue
-                            stat_record = PlayerStats(
-                                player_id=player.id,
-                                stat_type=stat_type,
-                                value=float(value),
-                            )
-                            session.add(stat_record)
-                            saved_stats += 1
-                        except:
-                            pass
+                # Only save stats for NEW players to avoid duplicates
+                if is_new_player:
+                    stat_types = [
+                        "completions", "attempts", "passing_yards", "passing_tds", 
+                        "interceptions", "sacks", "sack_yards", "sack_fumbles",
+                        "rushing_yards", "rushing_tds", "rushing_fumbles",
+                        "receptions", "targets", "receiving_yards", "receiving_tds",
+                        "fantasy_points", "fantasy_points_ppr"
+                    ]
+                    
+                    for stat_type in stat_types:
+                        value = stat_row.get(stat_type)
+                        if value is not None:
+                            try:
+                                # Skip NaN values
+                                if pd.isna(value):
+                                    continue
+                                stat_record = PlayerStats(
+                                    player_id=player.id,
+                                    stat_type=stat_type,
+                                    value=float(value),
+                                )
+                                session.add(stat_record)
+                                saved_stats += 1
+                            except:
+                                pass
                         
             except Exception as e:
                 logger.debug(f"[nflfastR] Error saving player: {e}")

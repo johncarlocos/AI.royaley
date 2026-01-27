@@ -1047,6 +1047,23 @@ class HoopRCollector(BaseCollector):
         await session.flush()
         return saved
 
+    # =========================================================================
+    # VALIDATION METHOD (Required by BaseCollector)
+    # =========================================================================
+    
+    async def validate(self, data: Any) -> bool:
+        """Validate collected basketball data."""
+        if data is None:
+            return False
+        if not isinstance(data, dict):
+            return False
+        
+        # Check that we have at least some data
+        has_teams = len(data.get("teams", [])) > 0
+        has_games = len(data.get("games", [])) > 0
+        
+        return has_teams or has_games
+
 
 # =============================================================================
 # SINGLETON INSTANCE

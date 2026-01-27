@@ -1538,6 +1538,7 @@ class NFLFastRCollector(BaseCollector):
             logger.info(f"[nflfastR] Saved {saved_players} players, {saved_stats} stats")
             
         except Exception as e:
+            await session.rollback()
             logger.error(f"[nflfastR] Error saving players: {e}")
         
         return saved_players
@@ -1637,6 +1638,7 @@ class NFLFastRCollector(BaseCollector):
             logger.info(f"[nflfastR] Saved {saved_count} team stats")
             
         except Exception as e:
+            await session.rollback()
             logger.error(f"[nflfastR] Error saving team stats: {e}")
         
         return saved_count

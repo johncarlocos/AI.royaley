@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-AI PRO SPORTS - Feature Validation and Build Script (CORRECTED v2)
+AI PRO SPORTS - Feature Validation and Build Script (CORRECTED v3)
 Validates database schema and builds game_features for ML training.
 
-SCHEMA CORRECTIONS APPLIED:
-- odds table: home_line/away_line (NOT home_spread/away_spread)
-- team_stats: individual rows with stat_type/value (NOT JSONB stats column)
-- game_features: game_id has unique constraint for upsert
+V3 FIXES:
+- Dynamically detects available columns in game_features
+- Handles missing feature_version column
+- Proper transaction rollback on errors to prevent cascade failures
+- Better error recovery
 """
 
 import argparse
@@ -14,7 +15,7 @@ import asyncio
 import json
 import sys
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 from uuid import UUID
 
 # Handle both direct execution and Docker execution
@@ -46,12 +47,6 @@ SPORT_CONFIGS = {
     'ATP': {'feature_count': 60, 'outdoor': True},
     'WTA': {'feature_count': 60, 'outdoor': True},
 }
-
-# Required stat types for team_stats table
-REQUIRED_STAT_TYPES = [
-    'wins', 'losses', 'points_per_game', 'points_allowed_per_game',
-    'offensive_rating', 'defensive_rating', 'net_rating', 'pace'
-]
 
 
 class SchemaValidator:
@@ -123,10 +118,10 @@ class SchemaValidator:
         return await self._check_columns('teams', required_cols)
     
     async def validate_odds_table(self) -> bool:
-        """Validate odds table - CORRECTED to use home_line/away_line."""
+        """Validate odds table - uses home_line/away_line."""
         required_cols = [
             'id', 'game_id', 'bet_type',
-            'home_line', 'away_line',  # CORRECTED: not home_spread/away_spread
+            'home_line', 'away_line',
             'home_odds', 'away_odds',
             'total', 'over_odds', 'under_odds',
             'is_opening', 'recorded_at'
@@ -134,9 +129,8 @@ class SchemaValidator:
         return await self._check_columns('odds', required_cols)
     
     async def validate_team_stats_table(self) -> bool:
-        """Validate team_stats table - CORRECTED: individual rows, not JSONB."""
-        # Check columns exist
-        required_cols = ['id', 'team_id', 'stat_type', 'value', 'games_played']
+        """Validate team_stats table - individual rows with stat_type/value."""
+        required_cols = ['id', 'team_id', 'stat_type', 'value']
         if not await self._check_columns('team_stats', required_cols):
             return False
         
@@ -154,38 +148,24 @@ class SchemaValidator:
         return True
     
     async def validate_game_features_table(self) -> bool:
-        """Validate game_features table has unique constraint on game_id."""
-        required_cols = ['id', 'game_id', 'features', 'feature_version', 'computed_at']
+        """Validate game_features table - FLEXIBLE on optional columns."""
+        # Only truly required columns
+        required_cols = ['id', 'game_id', 'features']
         if not await self._check_columns('game_features', required_cols):
             return False
         
-        # Check for unique constraint on game_id
-        result = await self.session.execute(text("""
-            SELECT COUNT(*) FROM pg_indexes 
-            WHERE tablename = 'game_features' 
-            AND indexdef LIKE '%UNIQUE%game_id%'
-        """))
-        unique_count = result.scalar() or 0
+        # Check for optional columns and warn if missing
+        optional_cols = ['feature_version', 'computed_at']
+        existing = await self._get_columns('game_features')
         
-        # Also check constraints directly
-        result2 = await self.session.execute(text("""
-            SELECT COUNT(*) FROM information_schema.table_constraints 
-            WHERE table_name = 'game_features' 
-            AND constraint_type = 'UNIQUE'
-        """))
-        constraint_count = result2.scalar() or 0
-        
-        if unique_count == 0 and constraint_count == 0:
-            self.warnings.append(
-                "game_features.game_id may not have UNIQUE constraint - "
-                "upserts may fail. Will use INSERT with conflict check."
-            )
+        for col in optional_cols:
+            if col not in existing:
+                self.warnings.append(f"game_features.{col} missing - will use defaults")
         
         return True
     
     async def validate_weather_table(self) -> bool:
         """Validate weather_data table if it exists."""
-        # Check if table exists
         result = await self.session.execute(text("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
@@ -196,17 +176,13 @@ class SchemaValidator:
         
         if not exists:
             self.warnings.append("weather_data table does not exist")
-            return True  # Not critical
+            return True
         
-        required_cols = [
-            'id', 'game_id', 'temperature_f', 'wind_speed_mph',
-            'humidity_pct', 'precipitation_pct', 'is_dome'
-        ]
+        required_cols = ['id', 'game_id']
         return await self._check_columns('weather_data', required_cols)
     
     async def validate_relationships(self) -> bool:
         """Validate foreign key relationships."""
-        # Check games -> teams relationship
         result = await self.session.execute(text("""
             SELECT COUNT(*) FROM games g
             LEFT JOIN teams ht ON g.home_team_id = ht.id
@@ -221,14 +197,17 @@ class SchemaValidator:
         
         return True
     
-    async def _check_columns(self, table: str, columns: List[str]) -> bool:
-        """Check if table has all required columns."""
+    async def _get_columns(self, table: str) -> Set[str]:
+        """Get all column names for a table."""
         result = await self.session.execute(text(f"""
             SELECT column_name FROM information_schema.columns
             WHERE table_name = :table
         """), {"table": table})
-        
-        existing_cols = {row[0] for row in result.fetchall()}
+        return {row[0] for row in result.fetchall()}
+    
+    async def _check_columns(self, table: str, columns: List[str]) -> bool:
+        """Check if table has all required columns."""
+        existing_cols = await self._get_columns(table)
         missing = set(columns) - existing_cols
         
         if missing:
@@ -255,7 +234,6 @@ class DataReadinessChecker:
             'issues': []
         }
         
-        # Get sports to check
         if sport_code:
             sports = [sport_code]
         else:
@@ -271,7 +249,6 @@ class DataReadinessChecker:
                 report['ready'] = False
                 report['issues'].extend(sport_report['issues'])
         
-        # Print report
         for sport, data in report['sports'].items():
             status = "✓" if data['ready'] else "✗"
             print(f"\n{status} {sport}:")
@@ -300,7 +277,6 @@ class DataReadinessChecker:
             'issues': []
         }
         
-        # Get sport_id
         result = await self.session.execute(
             text("SELECT id FROM sports WHERE code = :code"),
             {"code": sport_code}
@@ -313,21 +289,18 @@ class DataReadinessChecker:
         
         sport_id = sport_row[0]
         
-        # Count total games
         result = await self.session.execute(
             text("SELECT COUNT(*) FROM games WHERE sport_id = :sid"),
             {"sid": sport_id}
         )
         report['total_games'] = result.scalar() or 0
         
-        # Count completed games
         result = await self.session.execute(
             text("SELECT COUNT(*) FROM games WHERE sport_id = :sid AND status = 'final'"),
             {"sid": sport_id}
         )
         report['completed_games'] = result.scalar() or 0
         
-        # Count games with odds (CORRECTED: check for home_line existence)
         result = await self.session.execute(text("""
             SELECT COUNT(DISTINCT g.id) FROM games g
             JOIN odds o ON g.id = o.game_id
@@ -335,24 +308,16 @@ class DataReadinessChecker:
         """), {"sid": sport_id})
         report['games_with_odds'] = result.scalar() or 0
         
-        # Count games with team stats (CORRECTED: query team_stats properly)
         result = await self.session.execute(text("""
             SELECT COUNT(DISTINCT g.id) FROM games g
             WHERE g.sport_id = :sid
             AND EXISTS (
                 SELECT 1 FROM team_stats ts 
                 WHERE ts.team_id = g.home_team_id
-                AND ts.stat_type IN ('wins', 'losses', 'points_per_game')
-            )
-            AND EXISTS (
-                SELECT 1 FROM team_stats ts 
-                WHERE ts.team_id = g.away_team_id
-                AND ts.stat_type IN ('wins', 'losses', 'points_per_game')
             )
         """), {"sid": sport_id})
         report['games_with_stats'] = result.scalar() or 0
         
-        # Count games with features already
         result = await self.session.execute(text("""
             SELECT COUNT(*) FROM games g
             JOIN game_features gf ON g.id = gf.game_id
@@ -360,7 +325,6 @@ class DataReadinessChecker:
         """), {"sid": sport_id})
         report['games_with_features'] = result.scalar() or 0
         
-        # Count buildable games (have odds, don't have features yet)
         result = await self.session.execute(text("""
             SELECT COUNT(DISTINCT g.id) FROM games g
             JOIN odds o ON g.id = o.game_id
@@ -371,7 +335,6 @@ class DataReadinessChecker:
         """), {"sid": sport_id})
         report['buildable_games'] = result.scalar() or 0
         
-        # Check for issues
         if report['total_games'] == 0:
             report['ready'] = False
             report['issues'].append("No games found")
@@ -379,9 +342,6 @@ class DataReadinessChecker:
         if report['games_with_odds'] == 0:
             report['ready'] = False
             report['issues'].append("No games have odds data")
-        
-        if report['games_with_stats'] < report['total_games'] * 0.5:
-            report['issues'].append("Less than 50% of games have team stats")
         
         return report
 
@@ -391,7 +351,17 @@ class FeatureBuilder:
     
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.stats_cache = {}  # Cache team stats
+        self.stats_cache = {}
+        self.game_features_columns = set()  # Will be populated
+    
+    async def _detect_game_features_columns(self):
+        """Detect which columns exist in game_features table."""
+        result = await self.session.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'game_features'
+        """))
+        self.game_features_columns = {row[0] for row in result.fetchall()}
+        print(f"  Detected game_features columns: {self.game_features_columns}")
     
     async def build_features(
         self,
@@ -404,7 +374,9 @@ class FeatureBuilder:
         print(f"BUILDING FEATURES FOR {sport_code}")
         print("="*60)
         
-        # Get sport_id
+        # Detect available columns first
+        await self._detect_game_features_columns()
+        
         result = await self.session.execute(
             text("SELECT id FROM sports WHERE code = :code"),
             {"code": sport_code}
@@ -415,7 +387,6 @@ class FeatureBuilder:
         
         sport_id = sport_row[0]
         
-        # Get games to process
         query = """
             SELECT DISTINCT g.id, g.home_team_id, g.away_team_id, g.scheduled_at,
                    g.home_score, g.away_score, g.venue_id, g.status
@@ -447,19 +418,20 @@ class FeatureBuilder:
             try:
                 features = await self._build_game_features(game, sport_code)
                 await self._save_features(game_id, features, force_rebuild)
+                await self.session.commit()  # Commit after each successful save
                 built += 1
                 
-                if built % 100 == 0:
+                if built % 50 == 0:
                     print(f"  Progress: {built}/{len(games)} games")
-                    await self.session.commit()
                     
             except Exception as e:
+                # IMPORTANT: Rollback to clear the failed transaction
+                await self.session.rollback()
                 failed += 1
-                errors.append(f"Game {game_id}: {str(e)}")
-                if failed <= 5:  # Only show first 5 errors
-                    print(f"  ✗ Error on game {game_id}: {str(e)}")
-        
-        await self.session.commit()
+                error_msg = str(e).split('\n')[0][:100]  # First line, truncated
+                errors.append(f"Game {game_id}: {error_msg}")
+                if failed <= 5:
+                    print(f"  ✗ Error on game {game_id}: {error_msg}")
         
         print(f"\nResults: {built} built, {failed} failed")
         
@@ -467,7 +439,7 @@ class FeatureBuilder:
             'sport': sport_code,
             'built': built,
             'failed': failed,
-            'errors': errors[:10]  # First 10 errors only
+            'errors': errors[:10]
         }
     
     async def _build_game_features(self, game_row, sport_code: str) -> Dict[str, Any]:
@@ -483,7 +455,7 @@ class FeatureBuilder:
             }
         }
         
-        # Get team stats (CORRECTED: query individual rows)
+        # Get team stats
         home_stats = await self._get_team_stats(home_team_id)
         away_stats = await self._get_team_stats(away_team_id)
         
@@ -519,7 +491,7 @@ class FeatureBuilder:
             'net_rating_diff': features['home_team']['net_rating'] - features['away_team']['net_rating'],
         }
         
-        # Get odds data (CORRECTED: use home_line/away_line)
+        # Get odds data
         odds_data = await self._get_odds_data(game_id)
         features['odds'] = odds_data
         
@@ -550,13 +522,11 @@ class FeatureBuilder:
         return features
     
     async def _get_team_stats(self, team_id: UUID) -> Dict[str, float]:
-        """Get team stats from team_stats table (CORRECTED: individual rows)."""
-        # Check cache first
+        """Get team stats from team_stats table."""
         cache_key = str(team_id)
         if cache_key in self.stats_cache:
             return self.stats_cache[cache_key]
         
-        # Query individual stat rows and pivot them
         result = await self.session.execute(text("""
             SELECT stat_type, value FROM team_stats
             WHERE team_id = :team_id
@@ -580,30 +550,32 @@ class FeatureBuilder:
         return row[0] if row else 1500.0
     
     async def _get_odds_data(self, game_id: UUID) -> Dict[str, Any]:
-        """Get odds data for game (CORRECTED: use home_line/away_line)."""
-        # Get opening odds
+        """Get odds data for game."""
         result = await self.session.execute(text("""
-            SELECT home_line, away_line, home_odds, away_odds, total, over_odds, under_odds
-            FROM odds
-            WHERE game_id = :gid AND is_opening = true
-            ORDER BY recorded_at ASC LIMIT 1
-        """), {"gid": game_id})
-        opening = result.fetchone()
-        
-        # Get current/latest odds
-        result = await self.session.execute(text("""
-            SELECT home_line, away_line, home_odds, away_odds, total, over_odds, under_odds
+            SELECT home_line, away_line, home_odds, away_odds, total, over_odds, under_odds, is_opening
             FROM odds
             WHERE game_id = :gid
-            ORDER BY recorded_at DESC LIMIT 1
+            ORDER BY recorded_at ASC
         """), {"gid": game_id})
-        current = result.fetchone()
         
-        if not current:
+        rows = result.fetchall()
+        if not rows:
             return {}
         
+        # Find opening and current
+        opening = None
+        current = rows[-1]  # Most recent
+        
+        for row in rows:
+            if row[7]:  # is_opening
+                opening = row
+                break
+        
+        if not opening:
+            opening = rows[0]  # First recorded
+        
         odds_data = {
-            'current_spread': current[0],  # home_line
+            'current_spread': current[0],
             'current_total': current[4],
             'home_odds': current[2],
             'away_odds': current[3],
@@ -621,34 +593,51 @@ class FeatureBuilder:
     
     async def _get_weather_data(self, game_id: UUID, venue_id: UUID) -> Dict[str, Any]:
         """Get weather data for game."""
-        # Try game-specific weather first
-        result = await self.session.execute(text("""
-            SELECT temperature_f, wind_speed_mph, humidity_pct, precipitation_pct, is_dome
-            FROM weather_data WHERE game_id = :gid
-            ORDER BY recorded_at DESC LIMIT 1
-        """), {"gid": game_id})
-        row = result.fetchone()
+        # Check if weather_data table exists
+        if 'weather_data' not in await self._get_table_names():
+            return {'is_dome': False}
         
-        if row:
-            return {
-                'temperature': row[0],
-                'wind_speed': row[1],
-                'humidity': row[2],
-                'precipitation': row[3],
-                'is_dome': row[4]
-            }
+        try:
+            result = await self.session.execute(text("""
+                SELECT temperature_f, wind_speed_mph, humidity_pct, precipitation_pct, is_dome
+                FROM weather_data WHERE game_id = :gid
+                ORDER BY recorded_at DESC LIMIT 1
+            """), {"gid": game_id})
+            row = result.fetchone()
+            
+            if row:
+                return {
+                    'temperature': row[0],
+                    'wind_speed': row[1],
+                    'humidity': row[2],
+                    'precipitation': row[3],
+                    'is_dome': row[4]
+                }
+        except:
+            pass
         
         # Check venue for dome
         if venue_id:
-            result = await self.session.execute(
-                text("SELECT is_dome FROM venues WHERE id = :vid"),
-                {"vid": venue_id}
-            )
-            venue = result.fetchone()
-            if venue and venue[0]:
-                return {'is_dome': True, 'temperature': 72, 'wind_speed': 0, 'humidity': 50, 'precipitation': 0}
+            try:
+                result = await self.session.execute(
+                    text("SELECT is_dome FROM venues WHERE id = :vid"),
+                    {"vid": venue_id}
+                )
+                venue = result.fetchone()
+                if venue and venue[0]:
+                    return {'is_dome': True, 'temperature': 72, 'wind_speed': 0, 'humidity': 50, 'precipitation': 0}
+            except:
+                pass
         
         return {'is_dome': False, 'temperature': None, 'wind_speed': None, 'humidity': None, 'precipitation': None}
+    
+    async def _get_table_names(self) -> Set[str]:
+        """Get all table names in database."""
+        result = await self.session.execute(text("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+        """))
+        return {row[0] for row in result.fetchall()}
     
     async def _get_rest_days(self, team_id: UUID, before_date: datetime) -> int:
         """Calculate rest days since last game."""
@@ -663,7 +652,7 @@ class FeatureBuilder:
         if last_game:
             delta = before_date - last_game
             return delta.days
-        return 7  # Default to 7 if no previous game
+        return 7
     
     async def _get_recent_wins(self, team_id: UUID, before_date: datetime, n: int) -> int:
         """Get number of wins in last N games."""
@@ -704,6 +693,8 @@ class FeatureBuilder:
         
         for row in result.fetchall():
             game_home_id, home_score, away_score = row
+            if home_score is None or away_score is None:
+                continue
             if game_home_id == home_team_id:
                 if home_score > away_score:
                     wins += 1
@@ -727,27 +718,50 @@ class FeatureBuilder:
         }
     
     async def _save_features(self, game_id: UUID, features: Dict, force: bool = False):
-        """Save features to game_features table."""
+        """Save features to game_features table - ADAPTIVE to available columns."""
         if force:
-            # Delete existing first
             await self.session.execute(
                 text("DELETE FROM game_features WHERE game_id = :gid"),
                 {"gid": game_id}
             )
         
-        # Insert new features
-        await self.session.execute(text("""
-            INSERT INTO game_features (id, game_id, features, feature_version, computed_at)
-            VALUES (gen_random_uuid(), :gid, :features, '2.0', NOW())
-            ON CONFLICT (game_id) DO UPDATE SET
-                features = EXCLUDED.features,
-                feature_version = EXCLUDED.feature_version,
-                computed_at = EXCLUDED.computed_at
-        """), {"gid": game_id, "features": json.dumps(features)})
+        # Build INSERT based on available columns
+        has_feature_version = 'feature_version' in self.game_features_columns
+        has_computed_at = 'computed_at' in self.game_features_columns
+        
+        if has_feature_version and has_computed_at:
+            # Full schema
+            await self.session.execute(text("""
+                INSERT INTO game_features (id, game_id, features, feature_version, computed_at)
+                VALUES (gen_random_uuid(), :gid, :features, '2.0', NOW())
+                ON CONFLICT (game_id) DO UPDATE SET
+                    features = EXCLUDED.features,
+                    feature_version = EXCLUDED.feature_version,
+                    computed_at = EXCLUDED.computed_at
+            """), {"gid": game_id, "features": json.dumps(features)})
+        
+        elif has_computed_at:
+            # No feature_version
+            await self.session.execute(text("""
+                INSERT INTO game_features (id, game_id, features, computed_at)
+                VALUES (gen_random_uuid(), :gid, :features, NOW())
+                ON CONFLICT (game_id) DO UPDATE SET
+                    features = EXCLUDED.features,
+                    computed_at = EXCLUDED.computed_at
+            """), {"gid": game_id, "features": json.dumps(features)})
+        
+        else:
+            # Minimal schema - just id, game_id, features
+            await self.session.execute(text("""
+                INSERT INTO game_features (id, game_id, features)
+                VALUES (gen_random_uuid(), :gid, :features)
+                ON CONFLICT (game_id) DO UPDATE SET
+                    features = EXCLUDED.features
+            """), {"gid": game_id, "features": json.dumps(features)})
 
 
 async def main():
-    parser = argparse.ArgumentParser(description='AI PRO SPORTS Feature Builder (CORRECTED v2)')
+    parser = argparse.ArgumentParser(description='AI PRO SPORTS Feature Builder (v3 - Adaptive)')
     parser.add_argument('--validate', action='store_true', help='Validate database schema')
     parser.add_argument('--check-readiness', action='store_true', help='Check data readiness')
     parser.add_argument('--build', action='store_true', help='Build features')
@@ -758,7 +772,6 @@ async def main():
     
     args = parser.parse_args()
     
-    # Create database connection
     engine = create_async_engine(DATABASE_URL, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     

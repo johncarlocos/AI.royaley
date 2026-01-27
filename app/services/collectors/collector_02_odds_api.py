@@ -653,8 +653,13 @@ class OddsCollector(BaseCollector):
         Returns:
             CollectorResult with historical odds records
         """
-        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        # Support all 10 sports
+        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
         markets = markets or ["spreads", "h2h", "totals"]
+        
+        # Tennis only supports h2h (moneyline)
+        TENNIS_SPORTS = ["ATP", "WTA"]
+        
         all_odds = []
         errors = []
         
@@ -662,10 +667,13 @@ class OddsCollector(BaseCollector):
             api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
             if not api_sport_key:
                 continue
+            
+            # Use only h2h for tennis
+            sport_markets = ["h2h"] if sport in TENNIS_SPORTS else markets
                 
             try:
                 odds = await self._fetch_historical_odds(
-                    api_sport_key, sport, days_back, markets
+                    api_sport_key, sport, days_back, sport_markets
                 )
                 all_odds.extend(odds)
                 logger.info(f"[OddsAPI Historical] {sport}: {len(odds)} odds records")
@@ -1070,6 +1078,123 @@ class OddsCollector(BaseCollector):
         if name1 in name2 or name2 in name1:
             return True
         return False
+    
+    async def track_line_movements(
+        self,
+        odds_data: List[Dict[str, Any]],
+        session,
+    ) -> int:
+        """
+        Track line movements by comparing current odds to previous odds.
+        
+        A line movement is detected when the spread, total, or moneyline changes
+        from the previous snapshot.
+        
+        Args:
+            odds_data: List of current odds records
+            session: Database session
+            
+        Returns:
+            Number of movements detected and saved
+        """
+        from app.models.models import OddsMovement, Odds, Game
+        from sqlalchemy import select, and_, desc
+        
+        movements_saved = 0
+        
+        # Group odds by game for comparison
+        game_odds = {}
+        for record in odds_data:
+            external_id = record.get("external_id")
+            if external_id:
+                if external_id not in game_odds:
+                    game_odds[external_id] = []
+                game_odds[external_id].append(record)
+        
+        for external_id, records in game_odds.items():
+            try:
+                # Find the game
+                game_result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                game = game_result.scalar_one_or_none()
+                
+                if not game:
+                    continue
+                
+                # Get the latest odds for this game
+                prev_odds_result = await session.execute(
+                    select(Odds)
+                    .where(Odds.game_id == game.id)
+                    .order_by(desc(Odds.recorded_at))
+                    .limit(1)
+                )
+                prev_odds = prev_odds_result.scalar_one_or_none()
+                
+                if not prev_odds:
+                    continue
+                
+                # Group current records by market type
+                for record in records:
+                    market_type = record.get("market_type")
+                    selection = record.get("selection")
+                    line = record.get("line")
+                    
+                    if not market_type or line is None:
+                        continue
+                    
+                    # Compare with previous odds
+                    previous_line = None
+                    movement = None
+                    
+                    if market_type == "spread":
+                        if selection == "home" and prev_odds.home_line is not None:
+                            previous_line = prev_odds.home_line
+                            if line != previous_line:
+                                movement = line - previous_line
+                        elif selection == "away" and prev_odds.away_line is not None:
+                            previous_line = prev_odds.away_line
+                            if line != previous_line:
+                                movement = line - previous_line
+                    
+                    elif market_type == "total":
+                        if prev_odds.total is not None:
+                            previous_line = prev_odds.total
+                            if line != previous_line:
+                                movement = line - previous_line
+                    
+                    # If movement detected, record it
+                    if movement is not None and abs(movement) >= 0.5:
+                        # Detect steam move (rapid movement in one direction)
+                        is_steam = abs(movement) >= 2.0
+                        
+                        # Detect reverse movement (movement against public betting)
+                        is_reverse = False  # Would need public betting data
+                        
+                        movement_record = OddsMovement(
+                            game_id=game.id,
+                            bet_type=market_type,
+                            previous_line=previous_line,
+                            current_line=line,
+                            movement=movement,
+                            is_steam=is_steam,
+                            is_reverse=is_reverse,
+                        )
+                        session.add(movement_record)
+                        movements_saved += 1
+                
+            except Exception as e:
+                logger.debug(f"Error tracking movement for {external_id}: {e}")
+                continue
+        
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.error(f"Error committing movements: {e}")
+            await session.rollback()
+        
+        logger.info(f"[OddsAPI] Tracked {movements_saved} line movements")
+        return movements_saved
 
 
 # Create and register collector instance

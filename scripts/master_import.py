@@ -159,13 +159,14 @@ async def import_espn_players(sports: List[str] = None) -> ImportResult:
 
 
 async def import_odds_api(sports: List[str] = None) -> ImportResult:
-    """Import odds from TheOddsAPI."""
+    """Import odds from TheOddsAPI for all 10 sports."""
     result = ImportResult(source="odds_api")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 sports supported by OddsAPI
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
         for sport in sports:
             try:
                 data = await odds_collector.collect(sport_code=sport)
@@ -173,7 +174,11 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
+                        # Save odds to database
                         await odds_collector.save_to_database(data.data, session)
+                        # Track line movements
+                        movements = await odds_collector.track_line_movements(data.data, session)
+                        result.records += movements
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
         result.success = result.records > 0
@@ -290,13 +295,14 @@ async def import_espn_history(sports: List[str] = None, days: int = 30) -> Impor
 
 
 async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> ImportResult:
-    """Import OddsAPI historical odds."""
+    """Import OddsAPI historical odds (requires paid subscription $119+/month)."""
     result = ImportResult(source="odds_api_history")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        # All 10 sports supported by OddsAPI
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
         await db_manager.initialize()
         
         for sport in sports:

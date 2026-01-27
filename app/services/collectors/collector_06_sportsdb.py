@@ -223,8 +223,8 @@ class SportsDBCollector(BaseCollector):
     # TEAMS COLLECTION
     # =========================================================================
     
-    async def _collect_teams(self, sport_code: str) -> List[Dict]:
-        """Collect teams - minimal data from /list."""
+    async def _collect_teams(self, sport_code: str, include_details: bool = False) -> List[Dict]:
+        """Collect teams - with optional full details including city."""
         league_id = SPORTSDB_LEAGUE_IDS.get(sport_code)
         if not league_id:
             return []
@@ -234,7 +234,7 @@ class SportsDBCollector(BaseCollector):
         
         result = []
         for t in teams:
-            result.append({
+            team_data = {
                 "external_id": f"sportsdb_{t.get('idTeam')}",
                 "sportsdb_id": t.get("idTeam"),
                 "name": t.get("strTeam"),
@@ -242,11 +242,131 @@ class SportsDBCollector(BaseCollector):
                 "country": t.get("strCountry"),
                 "logo_url": t.get("strBadge"),
                 "sport_code": sport_code,
-            })
+            }
+            
+            # Get full details including city if requested
+            if include_details:
+                details = await self._get_team_details(t.get("idTeam"))
+                if details:
+                    # Extract city from strLocation (format: "City, State" or just "City")
+                    loc = details.get("strLocation") or ""
+                    city = loc.split(",")[0].strip() if loc else None
+                    
+                    team_data.update({
+                        "city": city,
+                        "stadium": details.get("strStadium"),
+                        "conference": details.get("strDivision"),  # Sometimes division is conference
+                        "division": details.get("strDivision"),
+                    })
+                await asyncio.sleep(0.1)  # Rate limit
+            
+            result.append(team_data)
         
         logger.info(f"[SportsDB] {sport_code}: {len(result)} teams")
         print(f"[SportsDB] {sport_code}: {len(result)} teams")
         return result
+    
+    async def collect_teams_with_details(self, sport_code: str = None) -> Dict[str, Any]:
+        """Collect teams with full details including city (for weather)."""
+        sports = [sport_code] if sport_code else ML_SPORTS
+        all_teams = []
+        
+        for sport in sports:
+            teams = await self._collect_teams(sport, include_details=True)
+            all_teams.extend(teams)
+        
+        return {"teams": all_teams, "count": len(all_teams)}
+    
+    async def collect_all_livescores(self) -> CollectorResult:
+        """Collect live scores from all sports."""
+        all_live = []
+        for sport in ML_SPORTS:
+            try:
+                live = await self._collect_livescores(sport)
+                all_live.extend(live)
+            except Exception as e:
+                logger.warning(f"[SportsDB] {sport} livescore error: {e}")
+        
+        return CollectorResult(
+            success=True,
+            data={"livescores": all_live},
+            records_count=len(all_live)
+        )
+    
+    async def collect_standings(self, sport_code: str = None, season: str = None) -> Dict[str, Any]:
+        """Collect standings for all sports."""
+        sports = [sport_code] if sport_code else ML_SPORTS
+        all_standings = []
+        
+        # Default to current season
+        current_year = datetime.now().year
+        
+        for sport in sports:
+            league_id = SPORTSDB_LEAGUE_IDS.get(sport)
+            if not league_id:
+                continue
+            
+            # Get season format
+            if season:
+                season_str = season
+            else:
+                season_str = self._get_season_format(sport, current_year)
+            
+            try:
+                data = await self._v2(f"/lookup/table/{league_id}/{season_str}")
+                standings = self._get_list(data, "table", "standings")
+                
+                for s in standings:
+                    all_standings.append({
+                        "team_name": s.get("strTeam"),
+                        "team_id": s.get("idTeam"),
+                        "rank": s.get("intRank"),
+                        "played": s.get("intPlayed"),
+                        "wins": s.get("intWin"),
+                        "losses": s.get("intLoss"),
+                        "draws": s.get("intDraw"),
+                        "points": s.get("intPoints"),
+                        "goals_for": s.get("intGoalsFor"),
+                        "goals_against": s.get("intGoalsAgainst"),
+                        "sport_code": sport,
+                        "season": season_str,
+                    })
+                
+                print(f"[SportsDB] {sport} {season_str}: {len(standings)} standings")
+            except Exception as e:
+                logger.warning(f"[SportsDB] {sport} standings error: {e}")
+        
+        return {"standings": all_standings, "count": len(all_standings)}
+    
+    async def save_to_database(self, data: Dict[str, Any], session: AsyncSession) -> int:
+        """General save method - dispatches to specific save methods."""
+        total_saved = 0
+        
+        # Save teams
+        if "teams" in data and data["teams"]:
+            saved = await self.save_teams_to_database(data["teams"], session)
+            total_saved += saved
+        
+        # Save games
+        if "games" in data and data["games"]:
+            saved = await self.save_games_to_database(data["games"], session)
+            total_saved += saved
+        
+        # Save venues
+        if "venues" in data and data["venues"]:
+            saved = await self.save_venues_to_database(data["venues"], session)
+            total_saved += saved
+        
+        # Save players
+        if "players" in data and data["players"]:
+            saved = await self.save_players_to_database(data["players"], session)
+            total_saved += saved
+        
+        # Update livescores
+        if "livescores" in data and data["livescores"]:
+            await self._update_livescores(data, session)
+        
+        return total_saved
     
     async def _get_team_details(self, team_id: str) -> Optional[Dict]:
         """Get FULL team details including stadium."""
@@ -258,10 +378,63 @@ class SportsDBCollector(BaseCollector):
     # VENUES COLLECTION
     # =========================================================================
     
+    # City coordinates cache for geocoding
+    CITY_COORDS = {
+        "New York": (40.7128, -74.0060), "Los Angeles": (34.0522, -118.2437),
+        "Chicago": (41.8781, -87.6298), "Houston": (29.7604, -95.3698),
+        "Phoenix": (33.4484, -112.0740), "Philadelphia": (39.9526, -75.1652),
+        "San Antonio": (29.4241, -98.4936), "San Diego": (32.7157, -117.1611),
+        "Dallas": (32.7767, -96.7970), "San Francisco": (37.7749, -122.4194),
+        "Denver": (39.7392, -104.9903), "Seattle": (47.6062, -122.3321),
+        "Boston": (42.3601, -71.0589), "Atlanta": (33.7490, -84.3880),
+        "Miami": (25.7617, -80.1918), "Minneapolis": (44.9778, -93.2650),
+        "Cleveland": (41.4993, -81.6944), "Detroit": (42.3314, -83.0458),
+        "Tampa": (27.9506, -82.4572), "Baltimore": (39.2904, -76.6122),
+        "Pittsburgh": (40.4406, -79.9959), "Charlotte": (35.2271, -80.8431),
+        "Indianapolis": (39.7684, -86.1581), "Nashville": (36.1627, -86.7816),
+        "New Orleans": (29.9511, -90.0715), "Las Vegas": (36.1699, -115.1398),
+        "Kansas City": (39.0997, -94.5786), "Cincinnati": (39.1031, -84.5120),
+        "Green Bay": (44.5192, -88.0198), "Jacksonville": (30.3322, -81.6557),
+        "Buffalo": (42.8864, -78.8784), "Oakland": (37.8044, -122.2712),
+        "Milwaukee": (43.0389, -87.9065), "Toronto": (43.6532, -79.3832),
+        "Montreal": (45.5017, -73.5673), "Vancouver": (49.2827, -123.1207),
+        "Calgary": (51.0447, -114.0719), "Edmonton": (53.5461, -113.4938),
+        "Ottawa": (45.4215, -75.6972), "Winnipeg": (49.8951, -97.1384),
+        "Melbourne": (-37.8136, 144.9631), "Sydney": (-33.8688, 151.2093),
+        "London": (51.5074, -0.1278), "Paris": (48.8566, 2.3522),
+        "Arlington": (32.7357, -97.1081), "Foxborough": (42.0654, -71.2481),
+        "Glendale": (33.5387, -112.1860), "Inglewood": (33.9617, -118.3531),
+        "East Rutherford": (40.8128, -74.0742), "Landover": (38.9076, -76.8645),
+        "Orchard Park": (42.7738, -78.7870), "Paradise": (36.0908, -115.1836),
+        "Santa Clara": (37.4030, -121.9700), "Tuscaloosa": (33.2098, -87.5692),
+        "Auburn": (32.6099, -85.4808), "Clemson": (34.6834, -82.8374),
+        "Columbus": (39.9612, -82.9988), "Ann Arbor": (42.2808, -83.7430),
+        "Austin": (30.2672, -97.7431), "Norman": (35.2226, -97.4395),
+        "Baton Rouge": (30.4515, -91.1871), "Gainesville": (29.6516, -82.3248),
+        "Knoxville": (35.9606, -83.9207), "Madison": (43.0731, -89.4012),
+    }
+    
+    def _get_city_coords(self, city: str, state: str = None) -> Tuple[Optional[float], Optional[float]]:
+        """Get coordinates for a city from cache."""
+        if not city:
+            return None, None
+        
+        # Try exact match first
+        if city in self.CITY_COORDS:
+            return self.CITY_COORDS[city]
+        
+        # Try partial match
+        for cached_city, coords in self.CITY_COORDS.items():
+            if cached_city.lower() in city.lower() or city.lower() in cached_city.lower():
+                return coords
+        
+        return None, None
+    
     async def collect_venues(self, sport_code: str = None) -> Dict[str, Any]:
-        """Collect venues via /lookup/team for each team."""
+        """Collect venues via /lookup/team for each team, including lat/lon."""
         sports = [sport_code] if sport_code else ML_SPORTS
         all_venues = []
+        team_cities = []  # Track team-city mappings for updating teams
         
         for sport in sports:
             league_id = SPORTSDB_LEAGUE_IDS.get(sport)
@@ -285,11 +458,28 @@ class SportsDBCollector(BaseCollector):
                 if not details:
                     continue
                 
+                # Extract location info
+                loc = details.get("strLocation") or ""
+                city = loc.split(",")[0].strip() if loc else None
+                state = loc.split(",")[1].strip() if loc and "," in loc else None
+                
+                # Track team-city mapping
+                team_name = details.get("strTeam")
+                if team_name and city:
+                    team_cities.append({
+                        "team_name": team_name,
+                        "city": city,
+                        "sport_code": sport,
+                    })
+                
+                # Get stadium name
                 name = details.get("strStadium")
                 if not name or name in seen:
+                    await asyncio.sleep(0.1)
                     continue
                 seen.add(name)
                 
+                # Get capacity
                 cap = None
                 cap_str = details.get("intStadiumCapacity")
                 if cap_str:
@@ -298,9 +488,8 @@ class SportsDBCollector(BaseCollector):
                     except:
                         pass
                 
-                loc = details.get("strLocation") or ""
-                city = loc.split(",")[0].strip() if loc else None
-                state = loc.split(",")[1].strip() if loc and "," in loc else None
+                # Get lat/lon from city
+                lat, lon = self._get_city_coords(city, state)
                 
                 all_venues.append({
                     "name": name,
@@ -309,7 +498,9 @@ class SportsDBCollector(BaseCollector):
                     "country": details.get("strCountry", "USA"),
                     "capacity": cap,
                     "is_dome": self._is_dome(name),
-                    "team_name": details.get("strTeam"),
+                    "latitude": lat,
+                    "longitude": lon,
+                    "team_name": team_name,
                     "external_id": f"sportsdb_venue_{details.get('idVenue') or team_id}",
                     "sport_code": sport,
                 })
@@ -319,7 +510,7 @@ class SportsDBCollector(BaseCollector):
             logger.info(f"[SportsDB] {sport}: {venue_count} venues")
             print(f"[SportsDB] {sport}: {venue_count} venues")
         
-        return {"venues": all_venues, "count": len(all_venues)}
+        return {"venues": all_venues, "team_cities": team_cities, "count": len(all_venues)}
     
     def _is_dome(self, name: str) -> bool:
         check = (name or "").lower()
@@ -541,7 +732,7 @@ class SportsDBCollector(BaseCollector):
     # =========================================================================
     
     async def save_venues_to_database(self, venues: List[Dict], session: AsyncSession) -> int:
-        """Save venues."""
+        """Save venues with lat/lon and also update team cities."""
         try:
             from app.models import Venue
         except ImportError:
@@ -552,6 +743,7 @@ class SportsDBCollector(BaseCollector):
                 return 0
         
         saved = 0
+        updated = 0
         for v in venues:
             try:
                 name = v.get("name")
@@ -567,6 +759,12 @@ class SportsDBCollector(BaseCollector):
                     venue.country = v.get("country") or venue.country
                     venue.capacity = v.get("capacity") or venue.capacity
                     venue.is_dome = v.get("is_dome", venue.is_dome)
+                    # Update lat/lon if provided
+                    if v.get("latitude"):
+                        venue.latitude = v.get("latitude")
+                    if v.get("longitude"):
+                        venue.longitude = v.get("longitude")
+                    updated += 1
                 else:
                     venue = Venue(
                         name=name[:200],
@@ -575,6 +773,8 @@ class SportsDBCollector(BaseCollector):
                         country=(v.get("country") or "USA")[:50],
                         capacity=v.get("capacity"),
                         is_dome=v.get("is_dome", False),
+                        latitude=v.get("latitude"),
+                        longitude=v.get("longitude"),
                     )
                     session.add(venue)
                     saved += 1
@@ -582,9 +782,45 @@ class SportsDBCollector(BaseCollector):
                 logger.debug(f"[SportsDB] Venue save error: {e}")
         
         await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} new venues")
-        print(f"[SportsDB] Saved {saved} new venues")
-        return saved
+        logger.info(f"[SportsDB] Saved {saved} new venues, updated {updated}")
+        print(f"[SportsDB] Saved {saved} new venues, updated {updated}")
+        return saved + updated
+    
+    async def update_team_cities_from_venues(self, team_cities: List[Dict], session: AsyncSession) -> int:
+        """Update team cities from venue data."""
+        updated = 0
+        for tc in team_cities:
+            try:
+                team_name = tc.get("team_name")
+                city = tc.get("city")
+                sport_code = tc.get("sport_code")
+                
+                if not team_name or not city:
+                    continue
+                
+                # Get sport
+                sport_result = await session.execute(select(Sport).where(Sport.code == sport_code))
+                sport = sport_result.scalar_one_or_none()
+                if not sport:
+                    continue
+                
+                # Find team and update city
+                team_result = await session.execute(
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
+                )
+                team = team_result.scalar_one_or_none()
+                
+                if team and not team.city:
+                    team.city = city
+                    updated += 1
+                    
+            except Exception as e:
+                logger.debug(f"[SportsDB] Team city update error: {e}")
+        
+        await session.commit()
+        logger.info(f"[SportsDB] Updated {updated} team cities")
+        print(f"[SportsDB] Updated {updated} team cities")
+        return updated
     
     async def save_players_to_database(self, players: List[Dict], session: AsyncSession) -> int:
         """Save players - FIXED with better error handling."""
@@ -654,8 +890,9 @@ class SportsDBCollector(BaseCollector):
         return saved
     
     async def save_teams_to_database(self, teams: List[Dict], session: AsyncSession) -> int:
-        """Save teams."""
+        """Save teams with city data."""
         saved = 0
+        updated = 0
         for t in teams:
             try:
                 sport_code = t.get("sport_code")
@@ -674,8 +911,18 @@ class SportsDBCollector(BaseCollector):
                 team = existing.scalar_one_or_none()
                 
                 if team:
+                    # Update existing team
                     team.abbreviation = t.get("abbreviation") or team.abbreviation
                     team.logo_url = t.get("logo_url") or team.logo_url
+                    # Update city if provided and not already set
+                    if t.get("city") and not team.city:
+                        team.city = t.get("city")
+                    # Update conference/division if provided
+                    if t.get("conference"):
+                        team.conference = t.get("conference")
+                    if t.get("division"):
+                        team.division = t.get("division")
+                    updated += 1
                 else:
                     team = Team(
                         external_id=t.get("external_id") or f"sportsdb_{t.get('sportsdb_id')}",
@@ -683,6 +930,9 @@ class SportsDBCollector(BaseCollector):
                         abbreviation=(t.get("abbreviation") or "UNK")[:10],
                         sport_id=sport.id,
                         logo_url=t.get("logo_url"),
+                        city=t.get("city"),
+                        conference=t.get("conference"),
+                        division=t.get("division"),
                     )
                     session.add(team)
                     saved += 1
@@ -690,8 +940,9 @@ class SportsDBCollector(BaseCollector):
                 logger.debug(f"[SportsDB] Team save error: {e}")
         
         await session.commit()
-        logger.info(f"[SportsDB] Saved {saved} teams")
-        return saved
+        logger.info(f"[SportsDB] Saved {saved} new teams, updated {updated}")
+        print(f"[SportsDB] Saved {saved} new teams, updated {updated}")
+        return saved + updated
     
     async def save_games_to_database(self, games: List[Dict], session: AsyncSession) -> int:
         """Save games - auto-creates teams, handles duplicates properly."""

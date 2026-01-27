@@ -602,7 +602,11 @@ async def import_sportsdb_livescores() -> ImportResult:
 
 
 async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
-    """Import venues from TheSportsDB."""
+    """Import venues from TheSportsDB and update team cities.
+    
+    Fills: venues table (with lat/lon for weather)
+    Also updates: teams table (city field)
+    """
     result = ImportResult(source="venues")
     try:
         from app.services.collectors import sportsdb_collector
@@ -612,17 +616,37 @@ async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
         sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         await db_manager.initialize()
         
+        all_team_cities = []
+        
         for sport in sports:
             try:
                 venues_data = await sportsdb_collector.collect_venues(sport_code=sport)
-                if venues_data and venues_data.get("venues"):
-                    async with db_manager.session() as session:
-                        saved = await sportsdb_collector.save_venues_to_database(
-                            venues_data["venues"], session
-                        )
-                        result.records += saved
+                if venues_data:
+                    # Save venues
+                    if venues_data.get("venues"):
+                        async with db_manager.session() as session:
+                            saved = await sportsdb_collector.save_venues_to_database(
+                                venues_data["venues"], session
+                            )
+                            result.records += saved
+                    
+                    # Collect team cities for later update
+                    if venues_data.get("team_cities"):
+                        all_team_cities.extend(venues_data["team_cities"])
+                        
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        # Update team cities from collected data
+        if all_team_cities:
+            try:
+                async with db_manager.session() as session:
+                    updated = await sportsdb_collector.update_team_cities_from_venues(
+                        all_team_cities, session
+                    )
+                    logger.info(f"[Venues] Updated {updated} team cities")
+            except Exception as e:
+                logger.warning(f"[Venues] Team city update error: {e}")
         
         result.success = result.records >= 0
     except Exception as e:

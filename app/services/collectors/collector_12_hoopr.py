@@ -870,8 +870,9 @@ class HoopRCollector(BaseCollector):
             return None
     
     async def _save_teams(self, session: AsyncSession, teams: List[Dict[str, Any]]) -> int:
-        """Save teams to database."""
+        """Save teams to database with proper duplicate handling."""
         saved = 0
+        updated = 0
         
         for team_data in teams:
             try:
@@ -885,27 +886,42 @@ class HoopRCollector(BaseCollector):
                 if not sport:
                     continue
                 
-                # Check if team exists
                 external_id = team_data.get("external_id", "")
+                team_name = team_data.get("name", "")
+                
+                # Check if team exists by external_id
                 result = await session.execute(
                     select(Team).where(Team.external_id == external_id)
                 )
                 existing = result.scalar_one_or_none()
                 
+                # Also check by (sport_id, name) - the unique constraint
+                if not existing and team_name:
+                    result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name == team_name
+                            )
+                        )
+                    )
+                    existing = result.scalar_one_or_none()
+                
                 if existing:
-                    # Update
-                    existing.name = team_data.get("name", existing.name)
+                    # Update existing team
+                    existing.external_id = external_id  # Update external_id if found by name
                     existing.abbreviation = team_data.get("abbreviation", existing.abbreviation)
                     existing.city = team_data.get("city", existing.city)
                     existing.conference = team_data.get("conference", existing.conference)
                     existing.division = team_data.get("division", existing.division)
                     existing.logo_url = team_data.get("logo_url", existing.logo_url)
+                    updated += 1
                 else:
-                    # Create new
+                    # Create new team
                     team = Team(
                         sport_id=sport.id,
                         external_id=external_id,
-                        name=team_data.get("name", ""),
+                        name=team_name,
                         abbreviation=team_data.get("abbreviation", ""),
                         city=team_data.get("city", ""),
                         conference=team_data.get("conference", ""),
@@ -921,11 +937,14 @@ class HoopRCollector(BaseCollector):
                 continue
         
         await session.flush()
-        return saved
+        logger.info(f"[hoopR] Teams: {saved} new, {updated} updated")
+        return saved + updated
     
     async def _save_games(self, session: AsyncSession, games: List[Dict[str, Any]]) -> int:
-        """Save games to database."""
+        """Save games to database with proper duplicate handling."""
         saved = 0
+        updated = 0
+        skipped = 0
         
         for game_data in games:
             try:
@@ -939,21 +958,46 @@ class HoopRCollector(BaseCollector):
                 if not sport:
                     continue
                 
-                # Find teams
+                # Find home team - try external_id first, then by name
                 home_team_espn_id = f"espn_{league.lower()}_{game_data.get('home_team_id', '')}"
-                away_team_espn_id = f"espn_{league.lower()}_{game_data.get('away_team_id', '')}"
-                
                 home_result = await session.execute(
                     select(Team).where(Team.external_id == home_team_espn_id)
                 )
                 home_team = home_result.scalar_one_or_none()
                 
+                # Fallback: find by name
+                if not home_team and game_data.get("home_team_name"):
+                    home_result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name == game_data.get("home_team_name")
+                            )
+                        )
+                    )
+                    home_team = home_result.scalar_one_or_none()
+                
+                # Find away team - try external_id first, then by name
+                away_team_espn_id = f"espn_{league.lower()}_{game_data.get('away_team_id', '')}"
                 away_result = await session.execute(
                     select(Team).where(Team.external_id == away_team_espn_id)
                 )
                 away_team = away_result.scalar_one_or_none()
                 
+                # Fallback: find by name
+                if not away_team and game_data.get("away_team_name"):
+                    away_result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name == game_data.get("away_team_name")
+                            )
+                        )
+                    )
+                    away_team = away_result.scalar_one_or_none()
+                
                 if not home_team or not away_team:
+                    skipped += 1
                     continue
                 
                 # Check if game exists
@@ -978,6 +1022,7 @@ class HoopRCollector(BaseCollector):
                     existing.home_score = game_data.get("home_score")
                     existing.away_score = game_data.get("away_score")
                     existing.status = game_status
+                    updated += 1
                 else:
                     # Create new game
                     game = Game(
@@ -998,7 +1043,8 @@ class HoopRCollector(BaseCollector):
                 continue
         
         await session.flush()
-        return saved
+        logger.info(f"[hoopR] Games: {saved} new, {updated} updated, {skipped} skipped (no teams)")
+        return saved + updated
     
     async def _save_rosters(self, session: AsyncSession, rosters: List[Dict[str, Any]]) -> int:
         """Save roster/player data to database."""

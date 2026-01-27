@@ -742,21 +742,36 @@ async def import_nflfastr(sports: List[str] = None) -> ImportResult:
 
 
 async def import_nflfastr_history(years_back: int = 10) -> ImportResult:
-    """Import NFL historical data from nflfastR."""
+    """Import NFL historical data from nflfastR (games, players, player_stats, team_stats)."""
     result = ImportResult(source="nflfastr_history")
     try:
         from app.services.collectors import nflfastr_collector
         from app.core.database import db_manager
+        from rich.console import Console
         
+        console = Console()
         current_year = datetime.now().year
         years = list(range(current_year - years_back, current_year + 1))
         
-        data = await nflfastr_collector.collect(years=years, collect_type="all")
-        if data.success:
+        console.print(f"[bold blue]Collecting NFL data for {min(years)}-{max(years)} ({len(years)} seasons)...[/]")
+        
+        # Use collect_all for comprehensive data
+        data = await nflfastr_collector.collect_all(years=years)
+        
+        if data.success and data.data:
             result.records = data.records_count
             await db_manager.initialize()
             async with db_manager.session() as session:
-                await nflfastr_collector.save_to_database(data.data, session)
+                # Use save_all_to_database for comprehensive saving
+                save_results = await nflfastr_collector.save_all_to_database(data.data, session)
+                
+                console.print(f"[green]✅ Games saved: {save_results.get('games', 0)}[/]")
+                console.print(f"[green]✅ Players saved: {save_results.get('players', 0)}[/]")
+                console.print(f"[green]✅ Player stats saved: {save_results.get('player_stats', 0)}[/]")
+                console.print(f"[green]✅ Team stats saved: {save_results.get('team_stats', 0)}[/]")
+                
+                result.records = sum(save_results.values())
+        
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
@@ -782,27 +797,45 @@ async def import_nflfastr_pbp(years_back: int = 3) -> ImportResult:
 
 
 async def import_nflfastr_players() -> ImportResult:
-    """Import NFL players and stats from nflfastR."""
+    """Import NFL players (rosters + stats) from nflfastR."""
     result = ImportResult(source="nfl_players")
     try:
         from app.services.collectors import nflfastr_collector
         from app.core.database import db_manager
+        from rich.console import Console
         
+        console = Console()
         await db_manager.initialize()
         
-        # Collect player stats
         current_year = datetime.now().year
-        years = list(range(current_year - 3, current_year + 1))
+        years = list(range(current_year - 9, current_year + 1))  # 10 years of rosters
         
-        data = await nflfastr_collector.collect(years=years, collect_type="player_stats")
-        if data.success and data.data:
+        console.print(f"[bold blue]Collecting NFL rosters and player stats for {min(years)}-{max(years)}...[/]")
+        
+        total_saved = 0
+        
+        # 1. Collect and save rosters (player base info)
+        roster_data = await nflfastr_collector.collect_rosters(years=years)
+        if roster_data.success and roster_data.data:
+            async with db_manager.session() as session:
+                saved = await nflfastr_collector.save_rosters_to_database(
+                    roster_data.data.get("players", []), session
+                )
+                total_saved += saved
+                console.print(f"[green]✅ Players from rosters: {saved}[/]")
+        
+        # 2. Collect and save player stats
+        stats_data = await nflfastr_collector.collect(years=years, collect_type="player_stats")
+        if stats_data.success and stats_data.data:
             async with db_manager.session() as session:
                 saved = await nflfastr_collector.save_players_to_database(
-                    data.data.get("player_stats", []), session
+                    stats_data.data.get("player_stats", []), session
                 )
-                result.records = saved
+                total_saved += saved
+                console.print(f"[green]✅ Player stats records: {saved}[/]")
         
-        result.success = result.records >= 0
+        result.records = total_saved
+        result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
     return result
@@ -932,6 +965,68 @@ async def import_cfbfastr_players() -> ImportResult:
     return result
 
 
+async def import_nflfastr_team_stats() -> ImportResult:
+    """Import NFL team stats (EPA, success rates) from nflfastR."""
+    result = ImportResult(source="nfl_team_stats")
+    try:
+        from app.services.collectors import nflfastr_collector
+        from app.core.database import db_manager
+        from rich.console import Console
+        
+        console = Console()
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 9, current_year + 1))
+        
+        console.print(f"[bold blue]Collecting NFL team stats for {min(years)}-{max(years)}...[/]")
+        
+        data = await nflfastr_collector.collect(years=years, collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await nflfastr_collector.save_team_stats_to_database(
+                    data.data.get("team_stats", []), session
+                )
+                result.records = saved
+                console.print(f"[green]✅ Team stats saved: {saved}[/]")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_nflfastr_rosters() -> ImportResult:
+    """Import NFL rosters from nflfastR."""
+    result = ImportResult(source="nfl_rosters")
+    try:
+        from app.services.collectors import nflfastr_collector
+        from app.core.database import db_manager
+        from rich.console import Console
+        
+        console = Console()
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 9, current_year + 1))
+        
+        console.print(f"[bold blue]Collecting NFL rosters for {min(years)}-{max(years)}...[/]")
+        
+        data = await nflfastr_collector.collect_rosters(years=years)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await nflfastr_collector.save_rosters_to_database(
+                    data.data.get("players", []), session
+                )
+                result.records = saved
+                console.print(f"[green]✅ Players from rosters: {saved}[/]")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 # =============================================================================
 # SOURCE MAPPING
 # =============================================================================
@@ -959,6 +1054,8 @@ IMPORT_MAP = {
     "injuries": import_espn_injuries,
     "players": import_espn_players,
     "nfl_players": import_nflfastr_players,
+    "nfl_rosters": import_nflfastr_rosters,
+    "nfl_team_stats": import_nflfastr_team_stats,
     "ncaaf_players": import_cfbfastr_players,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,

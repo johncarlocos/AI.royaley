@@ -794,6 +794,304 @@ class NFLFastRCollector(BaseCollector):
         )
     
     # =========================================================================
+    # ROSTERS COLLECTION
+    # =========================================================================
+    
+    async def collect_rosters(
+        self,
+        years: List[int] = None,
+    ) -> CollectorResult:
+        """
+        Collect NFL rosters from nflverse.
+        
+        Args:
+            years: List of years (2002-present)
+            
+        Returns:
+            CollectorResult with roster data
+        """
+        current_year = datetime.now().year
+        if years is None:
+            years = list(range(current_year - 4, current_year + 1))
+        
+        all_players = []
+        errors = []
+        
+        for year in years:
+            try:
+                url = NFLVERSE_URLS["rosters"].format(year=year)
+                logger.info(f"[nflfastR] Downloading rosters for {year}...")
+                
+                df = await self._download_parquet(url)
+                
+                if df is None:
+                    # Try CSV fallback
+                    url_csv = url.replace(".parquet", ".csv")
+                    df = await self._download_csv(url_csv)
+                
+                if df is None:
+                    errors.append(f"Failed to download {year} rosters")
+                    continue
+                
+                for _, row in df.iterrows():
+                    player = self._parse_roster_row(row, year)
+                    if player:
+                        all_players.append(player)
+                
+                logger.info(f"[nflfastR] {year}: {len(df)} roster entries")
+                
+            except Exception as e:
+                logger.error(f"[nflfastR] Rosters {year} error: {e}")
+                errors.append(f"{year}: {str(e)[:50]}")
+        
+        return CollectorResult(
+            success=len(all_players) > 0,
+            data={"players": all_players},
+            records_count=len(all_players),
+            error="; ".join(errors) if errors else None,
+            metadata={"years": years, "type": "rosters"},
+        )
+    
+    def _parse_roster_row(self, row, year: int) -> Optional[Dict[str, Any]]:
+        """Parse a roster row to player dict."""
+        try:
+            player_id = row.get("gsis_id") or row.get("player_id")
+            if pd.isna(player_id) or not player_id:
+                return None
+            
+            return {
+                "player_id": player_id,
+                "player_name": row.get("player_name", "") or row.get("full_name", ""),
+                "first_name": row.get("first_name", ""),
+                "last_name": row.get("last_name", ""),
+                "position": row.get("position", ""),
+                "position_group": row.get("position_group", ""),
+                "team": row.get("team", ""),
+                "jersey_number": int(row.get("jersey_number")) if pd.notna(row.get("jersey_number")) else None,
+                "height": row.get("height", ""),
+                "weight": int(row.get("weight")) if pd.notna(row.get("weight")) else None,
+                "birth_date": str(row.get("birth_date")) if pd.notna(row.get("birth_date")) else None,
+                "college": row.get("college", ""),
+                "status": row.get("status", "ACT"),
+                "season": year,
+            }
+        except Exception as e:
+            return None
+    
+    async def collect_all(
+        self,
+        years: List[int] = None,
+    ) -> CollectorResult:
+        """
+        Collect ALL NFL data: games, rosters, player_stats, team_stats.
+        
+        Args:
+            years: List of years (default: last 10 years)
+            
+        Returns:
+            CollectorResult with comprehensive data
+        """
+        current_year = datetime.now().year
+        if years is None:
+            years = list(range(current_year - 9, current_year + 1))
+        
+        all_data = {
+            "games": [],
+            "players": [],
+            "player_stats": [],
+            "team_stats": [],
+        }
+        errors = []
+        
+        logger.info(f"[nflfastR] Collecting ALL data for {min(years)}-{max(years)}")
+        
+        try:
+            # 1. Collect games/schedules
+            logger.info("[nflfastR] Step 1/4: Collecting games...")
+            games = await self._collect_schedules(years)
+            all_data["games"] = games
+            logger.info(f"[nflfastR] Collected {len(games)} games")
+            
+            # 2. Collect rosters (players)
+            logger.info("[nflfastR] Step 2/4: Collecting rosters...")
+            roster_result = await self.collect_rosters(years)
+            if roster_result.success and roster_result.data:
+                all_data["players"] = roster_result.data.get("players", [])
+            logger.info(f"[nflfastR] Collected {len(all_data['players'])} roster entries")
+            
+            # 3. Collect player stats
+            logger.info("[nflfastR] Step 3/4: Collecting player stats...")
+            player_stats = await self._collect_player_stats(years)
+            all_data["player_stats"] = player_stats
+            logger.info(f"[nflfastR] Collected {len(player_stats)} player stat records")
+            
+            # 4. Collect team stats (EPA-based)
+            logger.info("[nflfastR] Step 4/4: Collecting team stats...")
+            team_stats = await self._collect_team_stats(years)
+            all_data["team_stats"] = team_stats
+            logger.info(f"[nflfastR] Collected {len(team_stats)} team stat records")
+            
+        except Exception as e:
+            logger.error(f"[nflfastR] collect_all error: {e}")
+            errors.append(str(e))
+        
+        total_records = sum(len(v) for v in all_data.values() if isinstance(v, list))
+        
+        return CollectorResult(
+            success=total_records > 0,
+            data=all_data,
+            records_count=total_records,
+            error="; ".join(errors) if errors else None,
+            metadata={"years": years, "type": "all"},
+        )
+    
+    async def save_all_to_database(
+        self,
+        data: Dict[str, List[Dict]],
+        session: AsyncSession,
+    ) -> Dict[str, int]:
+        """Save ALL collected data to database."""
+        results = {
+            "games": 0,
+            "players": 0,
+            "player_stats": 0,
+            "team_stats": 0,
+        }
+        
+        # 1. Save games
+        if data.get("games"):
+            results["games"] = await self._save_games(data["games"], session)
+            logger.info(f"[nflfastR] Saved {results['games']} games")
+        
+        # 2. Save rosters (players)
+        if data.get("players"):
+            results["players"] = await self.save_rosters_to_database(data["players"], session)
+            logger.info(f"[nflfastR] Saved {results['players']} players from rosters")
+        
+        # 3. Save player stats
+        if data.get("player_stats"):
+            saved = await self.save_players_to_database(data["player_stats"], session)
+            results["player_stats"] = saved
+            logger.info(f"[nflfastR] Saved {saved} player stats")
+        
+        # 4. Save team stats
+        if data.get("team_stats"):
+            results["team_stats"] = await self.save_team_stats_to_database(data["team_stats"], session)
+            logger.info(f"[nflfastR] Saved {results['team_stats']} team stats")
+        
+        return results
+    
+    async def save_rosters_to_database(
+        self,
+        roster_data: List[Dict[str, Any]],
+        session: AsyncSession,
+    ) -> int:
+        """Save roster data (players) to database."""
+        from app.models import Player, Team, Sport
+        
+        saved_count = 0
+        
+        try:
+            # Get NFL sport
+            sport_result = await session.execute(
+                select(Sport).where(Sport.code == "NFL")
+            )
+            sport = sport_result.scalar_one_or_none()
+            
+            if not sport:
+                logger.error("[nflfastR] NFL sport not found")
+                return 0
+            
+            # Process each roster entry
+            processed_ids = set()
+            
+            for player_data in roster_data:
+                try:
+                    player_id = player_data.get("player_id")
+                    if not player_id or player_id in processed_ids:
+                        continue
+                    
+                    processed_ids.add(player_id)
+                    external_id = f"nfl_{player_id}"
+                    
+                    # Get player name
+                    player_name = (
+                        player_data.get("player_name") or
+                        f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip() or
+                        "Unknown"
+                    )
+                    
+                    # Get team
+                    team_abbr = player_data.get("team")
+                    team = None
+                    if team_abbr:
+                        team_result = await session.execute(
+                            select(Team).where(
+                                and_(
+                                    Team.sport_id == sport.id,
+                                    Team.abbreviation == team_abbr
+                                )
+                            )
+                        )
+                        team = team_result.scalar_one_or_none()
+                    
+                    # Check if player exists
+                    existing = await session.execute(
+                        select(Player).where(Player.external_id == external_id)
+                    )
+                    player = existing.scalar_one_or_none()
+                    
+                    if player:
+                        # Update existing player
+                        player.name = player_name
+                        player.position = player_data.get("position")
+                        player.jersey_number = player_data.get("jersey_number")
+                        player.weight = player_data.get("weight")
+                        player.height = player_data.get("height")
+                        if team:
+                            player.team_id = team.id
+                        # Check status
+                        status = player_data.get("status", "ACT")
+                        player.is_active = status in ["ACT", "Active", "RES"]
+                    else:
+                        # Parse birth date
+                        birth_date = None
+                        birth_str = player_data.get("birth_date")
+                        if birth_str and birth_str != "nan":
+                            try:
+                                birth_date = datetime.strptime(birth_str[:10], "%Y-%m-%d").date()
+                            except:
+                                pass
+                        
+                        # Create new player
+                        status = player_data.get("status", "ACT")
+                        player = Player(
+                            external_id=external_id,
+                            name=player_name,
+                            position=player_data.get("position"),
+                            jersey_number=player_data.get("jersey_number"),
+                            height=player_data.get("height"),
+                            weight=player_data.get("weight"),
+                            birth_date=birth_date,
+                            team_id=team.id if team else None,
+                            is_active=status in ["ACT", "Active", "RES"],
+                        )
+                        session.add(player)
+                        saved_count += 1
+                        
+                except Exception as e:
+                    logger.debug(f"[nflfastR] Error saving roster player: {e}")
+                    continue
+            
+            await session.commit()
+            logger.info(f"[nflfastR] Saved {saved_count} players from rosters")
+            
+        except Exception as e:
+            logger.error(f"[nflfastR] Error saving rosters: {e}")
+        
+        return saved_count
+    
+    # =========================================================================
     # HELPER METHODS
     # =========================================================================
     
@@ -845,12 +1143,26 @@ class NFLFastRCollector(BaseCollector):
         data: Dict[str, List[Dict]],
         session: AsyncSession,
     ) -> int:
-        """Save collected data to database."""
+        """Save collected data to database (games, players, team_stats)."""
         total_saved = 0
         
+        # 1. Save games
         if data.get("games"):
             saved = await self._save_games(data["games"], session)
             total_saved += saved
+            logger.info(f"[nflfastR] Saved {saved} games")
+        
+        # 2. Save players and player_stats
+        if data.get("player_stats"):
+            saved = await self.save_players_to_database(data["player_stats"], session)
+            total_saved += saved
+            logger.info(f"[nflfastR] Saved {saved} players")
+        
+        # 3. Save team_stats
+        if data.get("team_stats"):
+            saved = await self.save_team_stats_to_database(data["team_stats"], session)
+            total_saved += saved
+            logger.info(f"[nflfastR] Saved {saved} team stats")
         
         return total_saved
     

@@ -413,6 +413,7 @@ class CFBFastRCollector(BaseCollector):
             "betting_lines": [],
             "team_stats": [],
             "player_stats": [],
+            "rosters": [],
         }
         errors = []
         
@@ -440,10 +441,18 @@ class CFBFastRCollector(BaseCollector):
             if collect_type in ["team_stats", "all"]:
                 team_stats = await self._collect_team_stats(years)
                 all_data["team_stats"] = team_stats
+                logger.info(f"[cfbfastR] Collected {len(team_stats)} team stats")
                 
-            if collect_type in ["player_stats", "all"]:
+            if collect_type in ["player_stats", "rosters", "all"]:
+                # First collect rosters for player info
+                rosters = await self._collect_rosters(years)
+                all_data["rosters"] = rosters
+                logger.info(f"[cfbfastR] Collected {len(rosters)} roster entries")
+                
+                # Then collect player stats
                 player_stats = await self._collect_player_stats(years)
                 all_data["player_stats"] = player_stats
+                logger.info(f"[cfbfastR] Collected {len(player_stats)} player stats")
                 
         except Exception as e:
             logger.error(f"[cfbfastR] Collection error: {e}")
@@ -1145,14 +1154,39 @@ class CFBFastRCollector(BaseCollector):
     
     async def _collect_team_stats(self, years: List[int]) -> List[Dict[str, Any]]:
         """
-        Collect team statistics.
+        Collect team statistics by calculating EPA from PBP data.
         
-        NOTE: Team stats are NOT available in the cfbfastR-data repository as separate files.
-        Team statistics can be derived from PBP data using get_team_epa().
+        Uses get_team_epa() to calculate:
+        - pass_epa_per_play
+        - rush_epa_per_play
+        - total_epa_per_play
+        - success_rate
+        - explosiveness
+        - plays
         """
-        logger.warning("[cfbfastR] Team stats not available as separate files. "
-                      "Use get_team_epa() to calculate from PBP data.")
-        return []
+        team_stats = []
+        
+        for year in years:
+            try:
+                logger.info(f"[cfbfastR] Calculating team EPA for {year}...")
+                epa_data = await self.get_team_epa(season=year)
+                
+                if epa_data:
+                    for team_name, stats in epa_data.items():
+                        record = {
+                            "team": team_name,
+                            "season": year,
+                            **stats
+                        }
+                        team_stats.append(record)
+                    
+                    logger.info(f"[cfbfastR] {year}: Calculated EPA for {len(epa_data)} teams")
+                    
+            except Exception as e:
+                logger.debug(f"[cfbfastR] Team stats {year} error: {e}")
+        
+        logger.info(f"[cfbfastR] Total {len(team_stats)} team stat records")
+        return team_stats
     
     # =========================================================================
     # PLAYER STATS
@@ -1183,6 +1217,80 @@ class CFBFastRCollector(BaseCollector):
                 logger.debug(f"[cfbfastR] Player stats {year} error: {e}")
         
         return player_stats
+    
+    async def _collect_rosters(self, years: List[int]) -> List[Dict[str, Any]]:
+        """Collect player rosters."""
+        rosters = []
+        
+        for year in years:
+            try:
+                url = CFBFASTR_URLS["rosters_parquet"].format(year=year)
+                df = await self._download_parquet(url)
+                
+                if df is None or len(df) == 0:
+                    url = CFBFASTR_URLS["rosters_csv"].format(year=year)
+                    df = await self._download_csv(url)
+                
+                if df is not None and len(df) > 0:
+                    for _, row in df.iterrows():
+                        player = self._parse_roster_row(row, year)
+                        if player:
+                            rosters.append(player)
+                    
+                    logger.info(f"[cfbfastR] {year}: {len(df)} roster entries")
+                    
+            except Exception as e:
+                logger.debug(f"[cfbfastR] Roster {year} error: {e}")
+        
+        logger.info(f"[cfbfastR] Total {len(rosters)} roster entries")
+        return rosters
+    
+    def _parse_roster_row(self, row, year: int) -> Optional[Dict[str, Any]]:
+        """Parse roster row to player dict."""
+        try:
+            # Get player ID
+            player_id = row.get("athlete_id") or row.get("id") or row.get("player_id")
+            if pd.isna(player_id):
+                return None
+            
+            # Get player name
+            first_name = row.get("first_name") or ""
+            last_name = row.get("last_name") or ""
+            full_name = row.get("name") or row.get("player_name") or f"{first_name} {last_name}".strip()
+            
+            if not full_name or full_name == "nan":
+                return None
+            
+            # Get team
+            team = row.get("team") or row.get("school")
+            
+            # Get position
+            position = row.get("position") or row.get("position_abbreviation")
+            
+            # Get height/weight
+            height = row.get("height")
+            weight = row.get("weight")
+            
+            # Get jersey number
+            jersey = row.get("jersey") or row.get("jersey_number")
+            
+            return {
+                "athlete_id": str(player_id),
+                "name": str(full_name),
+                "team": str(team) if team and not pd.isna(team) else None,
+                "position": str(position) if position and not pd.isna(position) else None,
+                "height": str(height) if height and not pd.isna(height) else None,
+                "weight": int(weight) if weight and not pd.isna(weight) else None,
+                "jersey_number": int(jersey) if jersey and not pd.isna(jersey) else None,
+                "season": year,
+                "year": row.get("year") or row.get("eligibility"),
+                "home_city": row.get("home_city"),
+                "home_state": row.get("home_state"),
+            }
+            
+        except Exception as e:
+            logger.debug(f"[cfbfastR] Roster parse error: {e}")
+            return None
     
     # =========================================================================
     # HISTORICAL DATA COLLECTION
@@ -1306,6 +1414,24 @@ class CFBFastRCollector(BaseCollector):
             saved = await self._save_games(data["games"], session)
             total_saved += saved
         
+        if data.get("betting_lines"):
+            saved = await self.save_betting_to_database(data["betting_lines"], session)
+            total_saved += saved
+        
+        # Save rosters first (creates players)
+        if data.get("rosters"):
+            saved = await self.save_rosters_to_database(data["rosters"], session)
+            total_saved += saved
+        
+        # Then save player stats (updates existing players)
+        if data.get("player_stats"):
+            saved = await self.save_players_to_database(data["player_stats"], session)
+            total_saved += saved
+        
+        if data.get("team_stats"):
+            saved = await self.save_team_stats_to_database(data["team_stats"], session)
+            total_saved += saved
+        
         return total_saved
     
     async def _save_games(
@@ -1320,7 +1446,7 @@ class CFBFastRCollector(BaseCollector):
         sport_result = await session.execute(
             select(Sport).where(Sport.code == "NCAAF")
         )
-        sport = sport_result.scalar_one_or_none()
+        sport = sport_result.scalars().first()
         
         if not sport:
             logger.error("[cfbfastR] NCAAF sport not found in database")
@@ -1413,7 +1539,6 @@ class CFBFastRCollector(BaseCollector):
                 logger.error(f"[cfbfastR] Error saving game: {e}")
                 continue
         
-        await session.commit()
         logger.info(f"[cfbfastR] Saved {saved_count} games to database")
         
         return saved_count
@@ -1441,7 +1566,7 @@ class CFBFastRCollector(BaseCollector):
                     )
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         
@@ -1455,7 +1580,7 @@ class CFBFastRCollector(BaseCollector):
                     )
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         
@@ -1499,6 +1624,248 @@ class CFBFastRCollector(BaseCollector):
         return True
     
     # =========================================================================
+    # BETTING LINES SAVING
+    # =========================================================================
+    
+    async def save_betting_to_database(
+        self,
+        betting_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """Save betting lines to odds table."""
+        from app.models import Game, Odds, Sport
+        
+        saved_count = 0
+        
+        # Get NCAAF sport
+        sport_result = await session.execute(
+            select(Sport).where(Sport.code == "NCAAF")
+        )
+        sport = sport_result.scalars().first()
+        
+        if not sport:
+            logger.error("[cfbfastR] NCAAF sport not found")
+            return 0
+        
+        for line in betting_data:
+            try:
+                game_id = line.get("game_id")
+                if not game_id:
+                    continue
+                
+                external_id = f"cfb_{game_id}"
+                
+                # Find the game
+                game_result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                game = game_result.scalars().first()
+                
+                if not game:
+                    # Try to find by searching without prefix
+                    game_result = await session.execute(
+                        select(Game).where(Game.external_id.like(f"%{game_id}%"))
+                    )
+                    game = game_result.scalars().first()
+                
+                if not game:
+                    continue
+                
+                provider = line.get("provider", "consensus")
+                spread = line.get("spread")
+                total = line.get("over_under")
+                home_ml = line.get("home_moneyline")
+                away_ml = line.get("away_moneyline")
+                
+                # Save spread odds
+                if spread is not None:
+                    # Check if spread odds exist
+                    existing = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.sportsbook_key == provider,
+                                Odds.bet_type == "spread"
+                            )
+                        )
+                    )
+                    odds = existing.scalars().first()
+                    
+                    if odds:
+                        odds.home_line = float(spread)
+                        odds.away_line = -float(spread)
+                    else:
+                        odds = Odds(
+                            game_id=game.id,
+                            sportsbook_key=provider,
+                            bet_type="spread",
+                            home_line=float(spread),
+                            away_line=-float(spread),
+                        )
+                        session.add(odds)
+                        saved_count += 1
+                
+                # Save total odds
+                if total is not None:
+                    existing = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.sportsbook_key == provider,
+                                Odds.bet_type == "total"
+                            )
+                        )
+                    )
+                    odds = existing.scalars().first()
+                    
+                    if odds:
+                        odds.total = float(total)
+                    else:
+                        odds = Odds(
+                            game_id=game.id,
+                            sportsbook_key=provider,
+                            bet_type="total",
+                            total=float(total),
+                        )
+                        session.add(odds)
+                        saved_count += 1
+                
+                # Save moneyline odds
+                if home_ml is not None or away_ml is not None:
+                    existing = await session.execute(
+                        select(Odds).where(
+                            and_(
+                                Odds.game_id == game.id,
+                                Odds.sportsbook_key == provider,
+                                Odds.bet_type == "moneyline"
+                            )
+                        )
+                    )
+                    odds = existing.scalars().first()
+                    
+                    if odds:
+                        if home_ml is not None:
+                            odds.home_odds = int(home_ml)
+                        if away_ml is not None:
+                            odds.away_odds = int(away_ml)
+                    else:
+                        odds = Odds(
+                            game_id=game.id,
+                            sportsbook_key=provider,
+                            bet_type="moneyline",
+                            home_odds=int(home_ml) if home_ml is not None else None,
+                            away_odds=int(away_ml) if away_ml is not None else None,
+                        )
+                        session.add(odds)
+                        saved_count += 1
+                    
+            except Exception as e:
+                logger.debug(f"[cfbfastR] Error saving betting line: {e}")
+                continue
+        
+        logger.info(f"[cfbfastR] Saved {saved_count} betting lines")
+        return saved_count
+    
+    # =========================================================================
+    # ROSTERS SAVING
+    # =========================================================================
+    
+    async def save_rosters_to_database(
+        self,
+        rosters_data: List[Dict[str, Any]],
+        session: AsyncSession
+    ) -> int:
+        """Save player rosters to database."""
+        from app.models import Player, Team, Sport
+        from sqlalchemy import or_
+        
+        saved_count = 0
+        batch_count = 0
+        
+        # Get NCAAF sport
+        sport_result = await session.execute(
+            select(Sport).where(Sport.code == "NCAAF")
+        )
+        sport = sport_result.scalars().first()
+        
+        if not sport:
+            logger.error("[cfbfastR] NCAAF sport not found")
+            return 0
+        
+        for roster_entry in rosters_data:
+            player_id = roster_entry.get("athlete_id")
+            if not player_id:
+                continue
+            
+            external_id = f"cfb_{player_id}"
+            player_name = roster_entry.get("name", "Unknown")
+            
+            # Get team
+            team_name = roster_entry.get("team")
+            team = None
+            if team_name:
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            or_(
+                                Team.name.ilike(f"%{team_name}%"),
+                                Team.abbreviation == team_name
+                            )
+                        )
+                    )
+                )
+                team = team_result.scalars().first()
+            
+            # Check if player exists
+            existing = await session.execute(
+                select(Player).where(Player.external_id == external_id)
+            )
+            player = existing.scalars().first()
+            
+            # Handle height conversion (string like "6-2" to string)
+            height_val = roster_entry.get("height")
+            if height_val and not pd.isna(height_val):
+                height_val = str(height_val)
+            else:
+                height_val = None
+            
+            if player:
+                # Update existing player
+                player.name = player_name
+                player.position = roster_entry.get("position")
+                player.jersey_number = roster_entry.get("jersey_number")
+                player.weight = roster_entry.get("weight")
+                player.height = height_val
+                if team:
+                    player.team_id = team.id
+                player.is_active = True
+            else:
+                # Create new player
+                player = Player(
+                    external_id=external_id,
+                    name=player_name,
+                    position=roster_entry.get("position"),
+                    jersey_number=roster_entry.get("jersey_number"),
+                    weight=roster_entry.get("weight"),
+                    height=height_val,
+                    team_id=team.id if team else None,
+                    is_active=True,
+                )
+                session.add(player)
+                saved_count += 1
+            
+            # Flush in batches
+            batch_count += 1
+            if batch_count >= 500:
+                await session.flush()
+                logger.info(f"[cfbfastR] Flushed batch, {saved_count} new players so far")
+                batch_count = 0
+        
+        logger.info(f"[cfbfastR] Saved {saved_count} players from rosters")
+        return saved_count
+    
+    # =========================================================================
     # PLAYERS & STATS SAVING
     # =========================================================================
     
@@ -1528,7 +1895,7 @@ class CFBFastRCollector(BaseCollector):
             sport_result = await session.execute(
                 select(Sport).where(Sport.code == "NCAAF")
             )
-            sport = sport_result.scalar_one_or_none()
+            sport = sport_result.scalars().first()
             
             if not sport:
                 logger.error("[cfbfastR] NCAAF sport not found")
@@ -1576,13 +1943,13 @@ class CFBFastRCollector(BaseCollector):
                                 )
                             )
                         )
-                        team = team_result.scalar_one_or_none()
+                        team = team_result.scalars().first()
                     
                     # Check if player exists
                     existing = await session.execute(
                         select(Player).where(Player.external_id == external_id)
                     )
-                    player = existing.scalar_one_or_none()
+                    player = existing.scalars().first()
                     
                     position = stat_row.get("position") or stat_row.get("athlete_position")
                     
@@ -1636,7 +2003,6 @@ class CFBFastRCollector(BaseCollector):
                     logger.debug(f"[cfbfastR] Error saving player: {e}")
                     continue
             
-            await session.commit()
             logger.info(f"[cfbfastR] Saved {saved_players} players, {saved_stats} stats")
             
         except Exception as e:
@@ -1661,34 +2027,30 @@ class CFBFastRCollector(BaseCollector):
             sport_result = await session.execute(
                 select(Sport).where(Sport.code == "NCAAF")
             )
-            sport = sport_result.scalar_one_or_none()
+            sport = sport_result.scalars().first()
             
             if not sport:
                 return 0
             
-            # Aggregate stats by team
-            team_aggregates = defaultdict(lambda: defaultdict(float))
-            team_games = defaultdict(int)
+            # EPA stat types from _collect_team_stats / get_team_epa
+            epa_stat_types = [
+                "pass_epa_per_play",
+                "rush_epa_per_play", 
+                "total_epa_per_play",
+                "success_rate",
+                "explosiveness",
+                "plays",
+            ]
             
+            # Process each team's stat record
             for stat_row in team_stats_data:
                 team_name = stat_row.get("team") or stat_row.get("team_name") or stat_row.get("school")
                 if not team_name:
                     continue
                 
-                # Aggregate stats
-                for stat_type in ["passing_yards", "rushing_yards", "total_yards", "points", "EPA"]:
-                    value = stat_row.get(stat_type)
-                    if value is not None:
-                        try:
-                            if not pd.isna(value):
-                                team_aggregates[team_name][stat_type] += float(value)
-                        except:
-                            pass
+                # Get season for uniqueness
+                season = stat_row.get("season", 0)
                 
-                team_games[team_name] += 1
-            
-            # Save team stats
-            for team_name, stats in team_aggregates.items():
                 # Find team
                 team_result = await session.execute(
                     select(Team).where(
@@ -1701,44 +2063,47 @@ class CFBFastRCollector(BaseCollector):
                         )
                     )
                 )
-                team = team_result.scalar_one_or_none()
+                team = team_result.scalars().first()
                 
                 if not team:
                     continue
                 
-                games_played = team_games.get(team_name, 1)
+                games_played = stat_row.get("plays", 0)
                 
-                for stat_type, total_value in stats.items():
-                    try:
-                        # Check if exists
-                        existing = await session.execute(
-                            select(TeamStats).where(
-                                and_(
-                                    TeamStats.team_id == team.id,
-                                    TeamStats.stat_type == stat_type,
-                                )
+                # Save each EPA stat type
+                for stat_type in epa_stat_types:
+                    value = stat_row.get(stat_type)
+                    if value is None:
+                        continue
+                    
+                    # Make stat_type unique by season
+                    full_stat_type = f"{stat_type}_{season}"
+                    
+                    # Check if exists
+                    existing = await session.execute(
+                        select(TeamStats).where(
+                            and_(
+                                TeamStats.team_id == team.id,
+                                TeamStats.stat_type == full_stat_type,
                             )
                         )
-                        team_stat = existing.scalar_one_or_none()
-                        
-                        if team_stat:
-                            team_stat.value = total_value
-                            team_stat.games_played = games_played
-                            team_stat.computed_at = datetime.utcnow()
-                        else:
-                            team_stat = TeamStats(
-                                team_id=team.id,
-                                stat_type=stat_type,
-                                value=total_value,
-                                games_played=games_played,
-                            )
-                            session.add(team_stat)
-                            saved_count += 1
-                            
-                    except Exception as e:
-                        logger.debug(f"[cfbfastR] Error saving team stat: {e}")
+                    )
+                    team_stat = existing.scalars().first()
+                    
+                    if team_stat:
+                        team_stat.value = float(value)
+                        team_stat.games_played = games_played
+                        team_stat.computed_at = datetime.utcnow()
+                    else:
+                        team_stat = TeamStats(
+                            team_id=team.id,
+                            stat_type=full_stat_type,
+                            value=float(value),
+                            games_played=games_played,
+                        )
+                        session.add(team_stat)
+                        saved_count += 1
             
-            await session.commit()
             logger.info(f"[cfbfastR] Saved {saved_count} team stats")
             
         except Exception as e:

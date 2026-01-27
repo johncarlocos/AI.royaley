@@ -555,6 +555,277 @@ class WeatherCollector:
         console.print(table)
         console.print(f"\n[cyan]Raw data archived to:[/cyan] {self.RAW_DATA_PATH}")
 
+    # =========================================================================
+    # HISTORICAL WEATHER COLLECTION (Open-Meteo API - FREE)
+    # =========================================================================
+    
+    OPEN_METEO_HISTORICAL_URL = "https://archive-api.open-meteo.com/v1/archive"
+    
+    async def collect_historical_for_games(
+        self,
+        sport_code: Optional[str] = None,
+        days_back: int = 365,
+    ) -> CollectorStats:
+        """
+        Collect historical weather for past games using Open-Meteo API (FREE).
+        
+        Open-Meteo provides historical weather data from 1940 to present.
+        No API key required!
+        
+        Args:
+            sport_code: Optional specific sport
+            days_back: Number of days to look back (max ~10 years)
+            
+        Returns:
+            CollectorStats
+        """
+        sports = [sport_code.upper()] if sport_code else OUTDOOR_SPORTS
+        
+        console.print(f"[bold blue]Historical Weather Collection[/bold blue]")
+        console.print(f"Sports: {', '.join(sports)}")
+        console.print(f"Days back: {days_back}")
+        console.print(f"[green]Using Open-Meteo API (FREE, no key required)[/green]")
+        
+        # Get past games without weather data
+        games = await self._get_past_games_without_weather(sports, days_back)
+        
+        console.print(f"[cyan]Found {len(games)} past games needing weather[/cyan]")
+        
+        if not games:
+            console.print("[yellow]No games found needing historical weather[/yellow]")
+            return self.stats
+        
+        for game in games:
+            try:
+                weather = await self._fetch_historical_weather(game)
+                
+                if weather:
+                    await self._save_weather(weather)
+                    self.stats.weather_fetched += 1
+                
+                self.stats.games_processed += 1
+                
+                # Open-Meteo rate limit: 10,000/day, be nice
+                await asyncio.sleep(0.2)
+                
+            except Exception as e:
+                self.stats.errors.append(str(e)[:100])
+                logger.error(f"Error for game {game.get('id')}: {e}")
+        
+        self._print_summary()
+        return self.stats
+    
+    async def _get_past_games_without_weather(
+        self,
+        sports: List[str],
+        days_back: int,
+    ) -> List[Dict[str, Any]]:
+        """Get past games that don't have weather data."""
+        try:
+            from app.core.database import db_manager
+            from app.models import Game, Sport, Team, Venue, WeatherData
+            from app.models.models import GameStatus
+            from sqlalchemy import select, and_, not_, exists
+            from sqlalchemy.orm import aliased
+            
+            games = []
+            now = datetime.utcnow()
+            start_date = now - timedelta(days=days_back)
+            
+            await db_manager.initialize()
+            async with db_manager.session() as session:
+                # Subquery to check if weather exists for game
+                weather_exists = (
+                    select(WeatherData.id)
+                    .where(WeatherData.game_id == Game.id)
+                    .exists()
+                )
+                
+                query = (
+                    select(Game, Sport, Team, Venue)
+                    .join(Sport, Game.sport_id == Sport.id)
+                    .join(Team, Game.home_team_id == Team.id)
+                    .outerjoin(Venue, Game.venue_id == Venue.id)
+                    .where(
+                        and_(
+                            Sport.code.in_(sports),
+                            Game.scheduled_at >= start_date,
+                            Game.scheduled_at <= now,
+                            Game.status == GameStatus.FINAL,
+                            ~weather_exists,  # No weather data exists
+                        )
+                    )
+                    .order_by(Game.scheduled_at.desc())
+                    .limit(1000)  # Process in batches
+                )
+                
+                result = await session.execute(query)
+                
+                for game, sport, team, venue in result:
+                    games.append({
+                        "id": str(game.id),
+                        "sport_code": sport.code,
+                        "game_date": game.scheduled_at,
+                        "venue_name": venue.name if venue else None,
+                        "city": venue.city if venue else team.city,
+                        "state": venue.state if venue else None,
+                        "is_dome": venue.is_dome if venue else False,
+                        "latitude": venue.latitude if venue else None,
+                        "longitude": venue.longitude if venue else None,
+                    })
+            
+            return games
+            
+        except ImportError:
+            logger.warning("Database modules not available")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching past games: {e}")
+            return []
+    
+    async def _fetch_historical_weather(
+        self,
+        game: Dict[str, Any],
+    ) -> Optional[WeatherResult]:
+        """Fetch historical weather from Open-Meteo (FREE)."""
+        venue = game.get("venue_name", "")
+        city = game.get("city", "")
+        game_date = game.get("game_date")
+        
+        if not game_date:
+            return None
+        
+        # Check if dome stadium
+        is_dome = game.get("is_dome", False) or DOME_STADIUMS.get(venue, False)
+        
+        if is_dome:
+            self.stats.dome_games += 1
+            # Return neutral weather for dome games
+            return WeatherResult(
+                game_id=game["id"],
+                temperature_f=72.0,
+                feels_like_f=72.0,
+                humidity_pct=50.0,
+                wind_speed_mph=0.0,
+                wind_direction="N/A",
+                precipitation_pct=0.0,
+                conditions="Indoor",
+                is_dome=True,
+            )
+        
+        # Get coordinates
+        lat = game.get("latitude")
+        lon = game.get("longitude")
+        
+        if not lat or not lon:
+            lat, lon = await self._get_coordinates(city)
+        
+        if lat is None:
+            logger.warning(f"Could not geocode: {city}")
+            return None
+        
+        # Format date for API
+        date_str = game_date.strftime("%Y-%m-%d")
+        
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": date_str,
+            "end_date": date_str,
+            "hourly": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m,weather_code",
+            "temperature_unit": "fahrenheit",
+            "wind_speed_unit": "mph",
+            "timezone": "UTC",
+        }
+        
+        try:
+            self.stats.api_calls += 1
+            
+            async with self.session.get(self.OPEN_METEO_HISTORICAL_URL, params=params) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.warning(f"Open-Meteo API error {response.status}: {error_text}")
+                    return None
+                
+                data = await response.json()
+            
+            # Parse hourly data - get values around game time (assume 7pm local = ~0:00 UTC next day)
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            
+            if not times:
+                return None
+            
+            # Find index closest to game time
+            game_hour = game_date.hour
+            idx = min(game_hour, len(times) - 1)
+            
+            # Get weather values
+            temp = hourly.get("temperature_2m", [70])[idx] if hourly.get("temperature_2m") else 70
+            humidity = hourly.get("relative_humidity_2m", [50])[idx] if hourly.get("relative_humidity_2m") else 50
+            precip = hourly.get("precipitation", [0])[idx] if hourly.get("precipitation") else 0
+            wind_speed = hourly.get("wind_speed_10m", [0])[idx] if hourly.get("wind_speed_10m") else 0
+            wind_dir = hourly.get("wind_direction_10m", [0])[idx] if hourly.get("wind_direction_10m") else 0
+            weather_code = hourly.get("weather_code", [0])[idx] if hourly.get("weather_code") else 0
+            
+            # Convert weather code to conditions
+            conditions = self._weather_code_to_conditions(weather_code)
+            
+            # Calculate precipitation probability from actual precipitation
+            precip_pct = min(100, precip * 20) if precip > 0 else 0
+            
+            return WeatherResult(
+                game_id=game["id"],
+                temperature_f=temp,
+                feels_like_f=temp,  # Open-Meteo doesn't have feels_like in archive
+                humidity_pct=humidity,
+                wind_speed_mph=wind_speed,
+                wind_direction=self._degrees_to_cardinal(int(wind_dir)),
+                precipitation_pct=precip_pct,
+                conditions=conditions,
+                is_dome=False,
+            )
+            
+        except Exception as e:
+            logger.error(f"Open-Meteo error: {e}")
+            return None
+    
+    def _weather_code_to_conditions(self, code: int) -> str:
+        """Convert WMO weather code to condition string."""
+        # WMO Weather interpretation codes
+        # https://open-meteo.com/en/docs
+        codes = {
+            0: "Clear",
+            1: "Mostly Clear",
+            2: "Partly Cloudy",
+            3: "Overcast",
+            45: "Fog",
+            48: "Fog",
+            51: "Light Drizzle",
+            53: "Drizzle",
+            55: "Heavy Drizzle",
+            56: "Freezing Drizzle",
+            57: "Freezing Drizzle",
+            61: "Light Rain",
+            63: "Rain",
+            65: "Heavy Rain",
+            66: "Freezing Rain",
+            67: "Freezing Rain",
+            71: "Light Snow",
+            73: "Snow",
+            75: "Heavy Snow",
+            77: "Snow Grains",
+            80: "Light Showers",
+            81: "Showers",
+            82: "Heavy Showers",
+            85: "Snow Showers",
+            86: "Heavy Snow Showers",
+            95: "Thunderstorm",
+            96: "Thunderstorm with Hail",
+            99: "Thunderstorm with Heavy Hail",
+        }
+        return codes.get(code, "Unknown")
+
 
 async def main():
     """Main entry point."""

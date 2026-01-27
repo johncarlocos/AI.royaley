@@ -417,38 +417,112 @@ async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> I
 
 
 async def import_weather(sports: List[str] = None, days: int = 7) -> ImportResult:
-    """Import weather for upcoming outdoor games."""
+    """Import weather for upcoming outdoor games.
+    
+    Fills: weather_data table
+    Outdoor Sports: NFL, NCAAF, CFL, MLB, ATP, WTA
+    
+    Note: Indoor sports (NBA, NHL, NCAAB, WNBA) don't need weather data.
+    """
     result = ImportResult(source="weather")
     try:
         from app.services.collectors.collector_05_weather import WeatherCollector
         from app.core.database import db_manager
         
-        # Only outdoor sports need weather
-        outdoor_sports = ["NFL", "MLB", "NCAAF"]
+        # Outdoor sports that need weather data
+        OUTDOOR_SPORTS = ["NFL", "NCAAF", "CFL", "MLB", "ATP", "WTA"]
+        
         if sports:
-            outdoor_sports = [s for s in sports if s in outdoor_sports]
+            # Filter to only outdoor sports
+            outdoor_sports = [s for s in sports if s.upper() in OUTDOOR_SPORTS]
+        else:
+            outdoor_sports = OUTDOOR_SPORTS
         
         if not outdoor_sports:
+            logger.info("[Weather] No outdoor sports specified, skipping")
             result.success = True
             return result
         
         await db_manager.initialize()
         
+        logger.info(f"[Weather] Collecting weather for {len(outdoor_sports)} outdoor sports")
+        
         async with WeatherCollector() as collector:
             for sport in outdoor_sports:
                 try:
-                    weather_result = await collector.collect_for_upcoming_games(
+                    weather_stats = await collector.collect_for_upcoming_games(
                         sport_code=sport,
                         days_ahead=days
                     )
-                    if weather_result:
-                        result.records += weather_result.get("saved", 0)
+                    # weather_stats is CollectorStats object
+                    if weather_stats:
+                        result.records += weather_stats.weather_saved
+                        logger.info(f"[Weather] {sport}: {weather_stats.weather_saved} records saved")
                 except Exception as e:
-                    result.errors.append(f"{sport}: {str(e)[:50]}")
+                    error_msg = f"{sport}: {str(e)[:50]}"
+                    result.errors.append(error_msg)
+                    logger.error(f"[Weather] {error_msg}")
         
         result.success = result.records >= 0
     except Exception as e:
         result.errors.append(str(e)[:100])
+        logger.error(f"[Weather] Fatal error: {e}")
+    return result
+
+
+async def import_weather_history(sports: List[str] = None, days: int = 365) -> ImportResult:
+    """Import historical weather for past games using Open-Meteo (FREE).
+    
+    Fills: weather_data table with historical weather
+    Outdoor Sports: NFL, NCAAF, CFL, MLB, ATP, WTA
+    
+    Uses Open-Meteo API (free, no key required) with data from 1940 to present.
+    """
+    result = ImportResult(source="weather_history")
+    try:
+        from app.services.collectors.collector_05_weather import WeatherCollector
+        from app.core.database import db_manager
+        
+        # Outdoor sports that need weather data
+        OUTDOOR_SPORTS = ["NFL", "NCAAF", "CFL", "MLB", "ATP", "WTA"]
+        
+        if sports:
+            # Filter to only outdoor sports
+            outdoor_sports = [s for s in sports if s.upper() in OUTDOOR_SPORTS]
+        else:
+            outdoor_sports = OUTDOOR_SPORTS
+        
+        if not outdoor_sports:
+            logger.info("[Weather History] No outdoor sports specified, skipping")
+            result.success = True
+            return result
+        
+        await db_manager.initialize()
+        
+        logger.info(f"[Weather History] Collecting historical weather for {len(outdoor_sports)} sports")
+        logger.info(f"[Weather History] Looking back {days} days (~{days//365} years)")
+        logger.info(f"[Weather History] Using Open-Meteo API (FREE, no key required)")
+        
+        async with WeatherCollector() as collector:
+            for sport in outdoor_sports:
+                try:
+                    weather_stats = await collector.collect_historical_for_games(
+                        sport_code=sport,
+                        days_back=days
+                    )
+                    # weather_stats is CollectorStats object
+                    if weather_stats:
+                        result.records += weather_stats.weather_saved
+                        logger.info(f"[Weather History] {sport}: {weather_stats.weather_saved} records saved")
+                except Exception as e:
+                    error_msg = f"{sport}: {str(e)[:50]}"
+                    result.errors.append(error_msg)
+                    logger.error(f"[Weather History] {error_msg}")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        logger.error(f"[Weather History] Fatal error: {e}")
     return result
 
 
@@ -855,6 +929,7 @@ IMPORT_MAP = {
     "sportsdb_history": import_sportsdb_history,
     "nflfastr_history": import_nflfastr_history,
     "cfbfastr_history": import_cfbfastr_history,
+    "weather_history": import_weather_history,
     
     # Specialized data
     "injuries": import_espn_injuries,
@@ -879,7 +954,7 @@ IMPORT_MAP = {
 
 # Source groups
 CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "weather_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players"]
 SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons"]
 
@@ -931,6 +1006,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history"]:
                 result = await func(years_back=seasons)
+            elif source == "weather_history":
+                result = await func(sports=sports, days=days)
             elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
                            "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
                            "nfl_players", "ncaaf_players"]:

@@ -1044,105 +1044,100 @@ class NFLFastRCollector(BaseCollector):
         batch_count = 0
         
         for player_data in roster_data:
-            try:
-                player_id = player_data.get("player_id")
-                if not player_id or player_id in processed_ids:
-                    continue
-                
-                processed_ids.add(player_id)
-                external_id = f"nfl_{player_id}"
-                
-                # Get player name
-                player_name = (
-                    player_data.get("player_name") or
-                    f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip() or
-                    "Unknown"
-                )
-                
-                # Ensure height is a string (convert from float inches if needed)
-                height_val = player_data.get("height")
-                if height_val is not None:
-                    if isinstance(height_val, (int, float)):
-                        # Convert inches to "feet-inches" format
-                        try:
-                            height_inches = int(float(height_val))
-                            feet = height_inches // 12
-                            inches = height_inches % 12
-                            height_val = f"{feet}-{inches}"
-                        except:
-                            height_val = str(height_val)
-                    else:
-                        height_val = str(height_val) if height_val else None
-                
-                # Get team
-                team_abbr = player_data.get("team")
-                team = None
-                if team_abbr:
-                    team_result = await session.execute(
-                        select(Team).where(
-                            and_(
-                                Team.sport_id == sport.id,
-                                Team.abbreviation == team_abbr
-                            )
+            player_id = player_data.get("player_id")
+            if not player_id or player_id in processed_ids:
+                continue
+            
+            processed_ids.add(player_id)
+            external_id = f"nfl_{player_id}"
+            
+            # Get player name
+            player_name = (
+                player_data.get("player_name") or
+                f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip() or
+                "Unknown"
+            )
+            
+            # Ensure height is a string (convert from float inches if needed)
+            height_val = player_data.get("height")
+            if height_val is not None:
+                if isinstance(height_val, (int, float)):
+                    # Convert inches to "feet-inches" format
+                    try:
+                        height_inches = int(float(height_val))
+                        feet = height_inches // 12
+                        inches = height_inches % 12
+                        height_val = f"{feet}-{inches}"
+                    except:
+                        height_val = str(height_val)
+                else:
+                    height_val = str(height_val) if height_val else None
+            
+            # Get team
+            team_abbr = player_data.get("team")
+            team = None
+            if team_abbr:
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            Team.abbreviation == team_abbr
                         )
                     )
-                    team = team_result.scalar_one_or_none()
-                
-                # Check if player exists
-                existing = await session.execute(
-                    select(Player).where(Player.external_id == external_id)
                 )
-                player = existing.scalar_one_or_none()
+                team = team_result.scalar_one_or_none()
+            
+            # Check if player exists
+            existing = await session.execute(
+                select(Player).where(Player.external_id == external_id)
+            )
+            player = existing.scalar_one_or_none()
+            
+            if player:
+                # Update existing player
+                player.name = player_name
+                player.position = player_data.get("position")
+                player.jersey_number = player_data.get("jersey_number")
+                player.weight = player_data.get("weight")
+                player.height = height_val
+                if team:
+                    player.team_id = team.id
+                # Check status
+                status = player_data.get("status", "ACT")
+                player.is_active = status in ["ACT", "Active", "RES"]
+            else:
+                # Parse birth date
+                birth_date = None
+                birth_str = player_data.get("birth_date")
+                if birth_str and birth_str != "nan":
+                    try:
+                        birth_date = datetime.strptime(birth_str[:10], "%Y-%m-%d").date()
+                    except:
+                        pass
                 
-                if player:
-                    # Update existing player
-                    player.name = player_name
-                    player.position = player_data.get("position")
-                    player.jersey_number = player_data.get("jersey_number")
-                    player.weight = player_data.get("weight")
-                    player.height = height_val
-                    if team:
-                        player.team_id = team.id
-                    # Check status
-                    status = player_data.get("status", "ACT")
-                    player.is_active = status in ["ACT", "Active", "RES"]
-                else:
-                    # Parse birth date
-                    birth_date = None
-                    birth_str = player_data.get("birth_date")
-                    if birth_str and birth_str != "nan":
-                        try:
-                            birth_date = datetime.strptime(birth_str[:10], "%Y-%m-%d").date()
-                        except:
-                            pass
-                    
-                    # Create new player
-                    status = player_data.get("status", "ACT")
-                    player = Player(
-                        external_id=external_id,
-                        name=player_name,
-                        position=player_data.get("position"),
-                        jersey_number=player_data.get("jersey_number"),
-                        height=height_val,
-                        weight=player_data.get("weight"),
-                        birth_date=birth_date,
-                        team_id=team.id if team else None,
-                        is_active=status in ["ACT", "Active", "RES"],
-                    )
-                    session.add(player)
-                    saved_count += 1
-                
-                batch_count += 1
-                
-                # Flush in batches to prevent memory issues (not commit - let context manager commit)
-                if batch_count >= batch_size:
-                    await session.flush()
-                    batch_count = 0
-                    logger.info(f"[nflfastR] Committed batch, {saved_count} new players so far")
-                    
-            except Exception as e:
-                logger.debug(f"[nflfastR] Error saving roster player: {e}")
-                continue
+                # Create new player
+                status = player_data.get("status", "ACT")
+                player = Player(
+                    external_id=external_id,
+                    name=player_name,
+                    position=player_data.get("position"),
+                    jersey_number=player_data.get("jersey_number"),
+                    height=height_val,
+                    weight=player_data.get("weight"),
+                    birth_date=birth_date,
+                    team_id=team.id if team else None,
+                    is_active=status in ["ACT", "Active", "RES"],
+                )
+                session.add(player)
+                saved_count += 1
+            
+            batch_count += 1
+            
+            # Flush in batches to prevent memory issues (not commit - let context manager commit)
+            if batch_count >= batch_size:
+                await session.flush()
+                batch_count = 0
+                logger.info(f"[nflfastR] Flushed batch, {saved_count} new players so far")
         
         # Don't commit here - let the context manager handle it
         logger.info(f"[nflfastR] Saved {saved_count} players from rosters")
@@ -1443,94 +1438,93 @@ class NFLFastRCollector(BaseCollector):
         processed_players = set()
         
         for stat_row in player_stats_data:
-            try:
-                player_id = stat_row.get("player_id") or stat_row.get("gsis_id")
-                if not player_id or player_id in processed_players:
-                    continue
-                
-                processed_players.add(player_id)
-                external_id = f"nfl_{player_id}"
-                
-                # Get player name
-                player_name = (
-                    stat_row.get("player_display_name") or 
-                    stat_row.get("player_name") or
-                    stat_row.get("athlete_name") or
-                    "Unknown"
-                )
-                
-                # Get team
-                team_abbr = stat_row.get("recent_team") or stat_row.get("team")
-                team = None
-                if team_abbr:
-                    team_result = await session.execute(
-                        select(Team).where(
-                            and_(
-                                Team.sport_id == sport.id,
-                                Team.abbreviation == team_abbr
-                            )
+            player_id = stat_row.get("player_id") or stat_row.get("gsis_id")
+            if not player_id or player_id in processed_players:
+                continue
+            
+            processed_players.add(player_id)
+            external_id = f"nfl_{player_id}"
+            
+            # Get player name
+            player_name = (
+                stat_row.get("player_display_name") or 
+                stat_row.get("player_name") or
+                stat_row.get("athlete_name") or
+                "Unknown"
+            )
+            
+            # Get team
+            team_abbr = stat_row.get("recent_team") or stat_row.get("team")
+            team = None
+            if team_abbr:
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            Team.abbreviation == team_abbr
                         )
                     )
-                    team = team_result.scalar_one_or_none()
-                
-                # Check if player exists
-                existing = await session.execute(
-                    select(Player).where(Player.external_id == external_id)
                 )
-                player = existing.scalar_one_or_none()
+                team = team_result.scalar_one_or_none()
+            
+            # Check if player exists
+            existing = await session.execute(
+                select(Player).where(Player.external_id == external_id)
+            )
+            player = existing.scalar_one_or_none()
+            
+            is_new_player = player is None
+            
+            if player:
+                # Update existing player info only (skip stats - already imported)
+                player.name = player_name
+                player.position = stat_row.get("position") or stat_row.get("position_group")
+                if team:
+                    player.team_id = team.id
+                player.is_active = True
+            else:
+                # Create new player
+                player = Player(
+                    external_id=external_id,
+                    name=player_name,
+                    position=stat_row.get("position") or stat_row.get("position_group"),
+                    team_id=team.id if team else None,
+                    is_active=True,
+                )
+                session.add(player)
+                await session.flush()  # Get player.id
+                saved_players += 1
+            
+            # Only save stats for NEW players to avoid duplicates
+            if is_new_player:
+                stat_types = [
+                    "completions", "attempts", "passing_yards", "passing_tds", 
+                    "interceptions", "sacks", "sack_yards", "sack_fumbles",
+                    "rushing_yards", "rushing_tds", "rushing_fumbles",
+                    "receptions", "targets", "receiving_yards", "receiving_tds",
+                    "fantasy_points", "fantasy_points_ppr"
+                ]
                 
-                is_new_player = player is None
-                
-                if player:
-                    # Update existing player info only (skip stats - already imported)
-                    player.name = player_name
-                    player.position = stat_row.get("position") or stat_row.get("position_group")
-                    if team:
-                        player.team_id = team.id
-                    player.is_active = True
-                else:
-                    # Create new player
-                    player = Player(
-                        external_id=external_id,
-                        name=player_name,
-                        position=stat_row.get("position") or stat_row.get("position_group"),
-                        team_id=team.id if team else None,
-                        is_active=True,
-                    )
-                    session.add(player)
-                    await session.flush()  # Get player.id
-                    saved_players += 1
-                
-                # Only save stats for NEW players to avoid duplicates
-                if is_new_player:
-                    stat_types = [
-                        "completions", "attempts", "passing_yards", "passing_tds", 
-                        "interceptions", "sacks", "sack_yards", "sack_fumbles",
-                        "rushing_yards", "rushing_tds", "rushing_fumbles",
-                        "receptions", "targets", "receiving_yards", "receiving_tds",
-                        "fantasy_points", "fantasy_points_ppr"
-                    ]
-                    
-                    for stat_type in stat_types:
-                        value = stat_row.get(stat_type)
-                        if value is not None:
-                            try:
-                                # Skip NaN values
-                                if pd.isna(value):
-                                    continue
-                                stat_record = PlayerStats(
-                                    player_id=player.id,
-                                    stat_type=stat_type,
-                                    value=float(value),
-                                )
-                                session.add(stat_record)
-                                saved_stats += 1
-                            except:
-                                pass
-                        
-            except Exception as e:
-                logger.debug(f"[nflfastR] Error saving player: {e}")
-                continue
+                for stat_type in stat_types:
+                    value = stat_row.get(stat_type)
+                    if value is not None:
+                        # Skip NaN values
+                        try:
+                            if pd.isna(value):
+                                continue
+                        except:
+                            pass
+                        try:
+                            stat_record = PlayerStats(
+                                player_id=player.id,
+                                stat_type=stat_type,
+                                value=float(value),
+                            )
+                            session.add(stat_record)
+                            saved_stats += 1
+                        except (ValueError, TypeError):
+                            # Skip values that can't be converted to float
+                            pass
         
         # Don't commit here - let the context manager handle it
         logger.info(f"[nflfastR] Saved {saved_players} players, {saved_stats} stats")
@@ -1596,36 +1590,32 @@ class NFLFastRCollector(BaseCollector):
                 if value is None:
                     continue
                 
-                try:
-                    # Make stat_type unique by season
-                    full_stat_type = f"{stat_type}_{season}"
-                    
-                    # Check if exists
-                    existing = await session.execute(
-                        select(TeamStats).where(
-                            and_(
-                                TeamStats.team_id == team.id,
-                                TeamStats.stat_type == full_stat_type,
-                            )
+                # Make stat_type unique by season
+                full_stat_type = f"{stat_type}_{season}"
+                
+                # Check if exists
+                existing = await session.execute(
+                    select(TeamStats).where(
+                        and_(
+                            TeamStats.team_id == team.id,
+                            TeamStats.stat_type == full_stat_type,
                         )
                     )
-                    team_stat = existing.scalar_one_or_none()
-                    
-                    if team_stat:
-                        team_stat.value = float(value)
-                        team_stat.computed_at = datetime.utcnow()
-                    else:
-                        team_stat = TeamStats(
-                            team_id=team.id,
-                            stat_type=full_stat_type,
-                            value=float(value),
-                            games_played=int(stat_row.get("plays", 0)),
-                        )
-                        session.add(team_stat)
-                        saved_count += 1
-                        
-                except Exception as e:
-                    logger.debug(f"[nflfastR] Error saving team stat {stat_type}: {e}")
+                )
+                team_stat = existing.scalar_one_or_none()
+                
+                if team_stat:
+                    team_stat.value = float(value)
+                    team_stat.computed_at = datetime.utcnow()
+                else:
+                    team_stat = TeamStats(
+                        team_id=team.id,
+                        stat_type=full_stat_type,
+                        value=float(value),
+                        games_played=int(stat_row.get("plays", 0)),
+                    )
+                    session.add(team_stat)
+                    saved_count += 1
         
         # Don't commit here - let the context manager handle it
         logger.info(f"[nflfastR] Saved {saved_count} team stats")

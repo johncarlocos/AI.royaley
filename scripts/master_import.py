@@ -73,13 +73,13 @@ class ImportResult:
 # =============================================================================
 
 async def import_espn(sports: List[str] = None) -> ImportResult:
-    """Import games/scores from ESPN."""
+    """Import games/scores/teams from ESPN."""
     result = ImportResult(source="espn")
     try:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         for sport in sports:
             try:
                 data = await espn_collector.collect(sport_code=sport)
@@ -87,6 +87,9 @@ async def import_espn(sports: List[str] = None) -> ImportResult:
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
+                        # Save teams first (before games, since games reference teams)
+                        if data.data.get("teams"):
+                            await espn_collector.save_teams_to_database(data.data["teams"], session)
                         if data.data.get("games"):
                             await espn_collector.save_games_to_database(data.data["games"], session)
                         if data.data.get("scores"):
@@ -106,7 +109,7 @@ async def import_espn_injuries(sports: List[str] = None) -> ImportResult:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         await db_manager.initialize()
         
         for sport in sports:
@@ -134,7 +137,7 @@ async def import_espn_players(sports: List[str] = None) -> ImportResult:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         await db_manager.initialize()
         
         for sport in sports:
@@ -266,7 +269,7 @@ async def import_espn_history(sports: List[str] = None, days: int = 30) -> Impor
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
         
-        sports = sports or ["NFL", "NBA", "NHL", "MLB"]
+        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
         for sport in sports:
             try:
                 data = await espn_collector.collect_historical(

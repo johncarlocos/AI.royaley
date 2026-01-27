@@ -483,6 +483,92 @@ class ESPNCollector(BaseCollector):
         await session.commit()
         return updated_count
     
+    async def save_teams_to_database(
+        self,
+        teams_data: List[Dict[str, Any]],
+        session: AsyncSession,
+    ) -> int:
+        """
+        Save collected teams to database.
+        
+        Args:
+            teams_data: List of parsed team records from _collect_teams()
+            session: Database session
+            
+        Returns:
+            Number of records saved
+        """
+        saved_count = 0
+        updated_count = 0
+        
+        for team_data in teams_data:
+            try:
+                sport_code = team_data.get("sport_code")
+                
+                # Get sport
+                sport_result = await session.execute(
+                    select(Sport).where(Sport.code == sport_code)
+                )
+                sport = sport_result.scalar_one_or_none()
+                
+                if not sport:
+                    logger.warning(f"[ESPN] Sport not found: {sport_code}")
+                    continue
+                
+                external_id = team_data.get("external_id")
+                team_name = team_data.get("name")
+                abbreviation = team_data.get("abbreviation")
+                
+                if not team_name:
+                    continue
+                
+                # Check if team exists by name (primary) or external_id
+                existing = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            or_(
+                                Team.name == team_name,
+                                Team.external_id == external_id,
+                                Team.abbreviation == abbreviation,
+                            )
+                        )
+                    )
+                )
+                team = existing.scalar_one_or_none()
+                
+                if team:
+                    # Update existing team
+                    team.name = team_name
+                    team.abbreviation = abbreviation or team.abbreviation
+                    team.external_id = external_id or team.external_id
+                    if team_data.get("city"):
+                        team.city = team_data.get("city")
+                    if team_data.get("logo_url"):
+                        team.logo_url = team_data.get("logo_url")
+                    updated_count += 1
+                else:
+                    # Create new team
+                    team = Team(
+                        sport_id=sport.id,
+                        external_id=external_id or abbreviation,
+                        name=team_name,
+                        abbreviation=abbreviation,
+                        city=team_data.get("city"),
+                        logo_url=team_data.get("logo_url"),
+                        elo_rating=1500.0,
+                    )
+                    session.add(team)
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.error(f"[ESPN] Error saving team {team_data.get('name')}: {e}")
+                continue
+        
+        await session.commit()
+        logger.info(f"[ESPN] Teams saved: {saved_count} new, {updated_count} updated")
+        return saved_count
+    
     async def _get_or_create_team(
         self,
         session: AsyncSession,
@@ -581,7 +667,7 @@ class ESPNCollector(BaseCollector):
         Returns:
             CollectorResult with historical games
         """
-        sports = [sport_code.upper()] if sport_code else ["NFL", "NBA", "NHL", "MLB"]
+        sports = [sport_code.upper()] if sport_code else list(ESPN_SPORT_PATHS.keys())
         all_games = []
         errors = []
         

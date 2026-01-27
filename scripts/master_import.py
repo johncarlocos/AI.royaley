@@ -31,10 +31,14 @@ import asyncio
 import argparse
 import sys
 import signal
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 from dataclasses import dataclass, field
+
+# Setup logging for this module
+logger = logging.getLogger(__name__)
 
 # MUST come before app imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -159,15 +163,22 @@ async def import_espn_players(sports: List[str] = None) -> ImportResult:
 
 
 async def import_odds_api(sports: List[str] = None) -> ImportResult:
-    """Import odds from TheOddsAPI for all 10 sports."""
+    """Import odds from TheOddsAPI for all 10 sports.
+    
+    Note: Tennis (ATP/WTA) uses tournament-specific endpoints and is
+    collected separately using collect_tennis() method.
+    """
     result = ImportResult(source="odds_api")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
         
-        # All 10 sports supported by OddsAPI
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
-        for sport in sports:
+        # Main sports supported by OddsAPI (excludes tennis - handled separately)
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports_to_collect = sports or main_sports
+        
+        # Collect main sports
+        for sport in sports_to_collect:
             try:
                 data = await odds_collector.collect(sport_code=sport)
                 if data.success:
@@ -181,6 +192,24 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
                         result.records += movements
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
+        
+        # Collect tennis (tournament-specific endpoints)
+        if not sports or "ATP" in sports or "WTA" in sports:
+            try:
+                tennis_data = await odds_collector.collect_tennis()
+                if tennis_data.success and tennis_data.records_count > 0:
+                    result.records += tennis_data.records_count
+                    await db_manager.initialize()
+                    async with db_manager.session() as session:
+                        await odds_collector.save_to_database(tennis_data.data, session)
+                        movements = await odds_collector.track_line_movements(tennis_data.data, session)
+                        result.records += movements
+                    logger.info(f"[Tennis] Collected {tennis_data.records_count} records from active tournaments")
+                else:
+                    logger.info("[Tennis] No active tournaments found")
+            except Exception as e:
+                result.errors.append(f"Tennis: {str(e)[:50]}")
+        
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
@@ -295,17 +324,25 @@ async def import_espn_history(sports: List[str] = None, days: int = 30) -> Impor
 
 
 async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> ImportResult:
-    """Import OddsAPI historical odds (requires paid subscription $119+/month)."""
+    """Import OddsAPI historical odds (requires paid subscription $119+/month).
+    
+    Note: Tennis historical data uses tournament-specific endpoints and 
+    is not currently supported in this function.
+    """
     result = ImportResult(source="odds_api_history")
     try:
         from app.services.collectors import odds_collector
         from app.core.database import db_manager
         
-        # All 10 sports supported by OddsAPI
-        sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        # Main sports (excludes tennis - requires tournament-specific keys)
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports_to_collect = sports if sports else main_sports
+        # Filter out tennis if specified (not supported for historical)
+        sports_to_collect = [s for s in sports_to_collect if s not in ["ATP", "WTA"]]
+        
         await db_manager.initialize()
         
-        for sport in sports:
+        for sport in sports_to_collect:
             try:
                 data = await odds_collector.collect_historical(
                     sport_code=sport,

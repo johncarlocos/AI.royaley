@@ -14,7 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings, ODDS_API_SPORT_KEYS
+from app.core.config import settings, ODDS_API_SPORT_KEYS, ODDS_API_TENNIS_TOURNAMENTS
 from app.models import Game, Odds, Sportsbook, OddsMovement, Sport, Team, GameStatus
 from app.services.collectors.base_collector import (
     BaseCollector,
@@ -75,6 +75,9 @@ class OddsCollector(BaseCollector):
             
         Returns:
             CollectorResult with odds data
+            
+        Note: Tennis (ATP/WTA) requires tournament-specific API calls.
+              Use collect_tennis() method for tennis odds.
         """
         if not self.api_key:
             return CollectorResult(
@@ -82,8 +85,9 @@ class OddsCollector(BaseCollector):
                 error="TheOddsAPI key not configured",
             )
         
+        # Use main sport keys (excludes tennis which needs tournament-specific calls)
         sports_to_collect = (
-            [sport_code] if sport_code 
+            [sport_code] if sport_code and sport_code in ODDS_API_SPORT_KEYS
             else list(ODDS_API_SPORT_KEYS.keys())
         )
         
@@ -92,19 +96,13 @@ class OddsCollector(BaseCollector):
         errors = []
         successful_sports = []
         
-        # Tennis sports only support h2h (moneyline) market
-        TENNIS_SPORTS = ["ATP", "WTA"]
-        
         logger.info(f"Starting collection for {len(sports_to_collect)} sport(s): {sports_to_collect}")
         
         # Collect each sport individually and combine results
         for sport in sports_to_collect:
             try:
-                # Use only h2h market for tennis sports
-                sport_markets = markets if sport not in TENNIS_SPORTS else ["h2h"]
-                
-                logger.info(f"Collecting {sport} odds data (markets: {sport_markets})")
-                odds_data = await self._collect_sport_odds(sport, sport_markets)
+                logger.info(f"Collecting {sport} odds data (markets: {markets})")
+                odds_data = await self._collect_sport_odds(sport, markets)
                 all_odds.extend(odds_data)
                 successful_sports.append(sport)
                 logger.info(f"Successfully collected {len(odds_data)} odds records for {sport}")
@@ -126,6 +124,82 @@ class OddsCollector(BaseCollector):
                 "successful_sports": successful_sports,
                 "failed_sports": [sport for sport in sports_to_collect if sport not in successful_sports],
                 "markets": markets,
+                "requests_remaining": self._requests_remaining,
+            },
+        )
+    
+    async def collect_tennis(
+        self,
+        tour: str = None,  # "ATP", "WTA", or None for both
+        **kwargs,
+    ) -> CollectorResult:
+        """
+        Collect tennis odds from tournament-specific endpoints.
+        
+        Tennis in TheOddsAPI uses tournament-specific sport keys like
+        'tennis_atp_french_open', 'tennis_wta_wimbledon', etc.
+        This method tries all known tournaments and returns data from
+        those currently active.
+        
+        Args:
+            tour: Optional - "ATP", "WTA", or None for both tours
+            
+        Returns:
+            CollectorResult with tennis odds data
+        """
+        if not self.api_key:
+            return CollectorResult(
+                success=False,
+                error="TheOddsAPI key not configured",
+            )
+        
+        # Determine which tours to collect
+        if tour:
+            tours = [tour.upper()]
+        else:
+            tours = list(ODDS_API_TENNIS_TOURNAMENTS.keys())
+        
+        all_odds = []
+        active_tournaments = []
+        errors = []
+        
+        logger.info(f"Starting tennis collection for tours: {tours}")
+        
+        for tour_name in tours:
+            tournaments = ODDS_API_TENNIS_TOURNAMENTS.get(tour_name, [])
+            
+            for tournament_key in tournaments:
+                try:
+                    params = {
+                        "apiKey": self.api_key,
+                        "regions": "us",
+                        "markets": "h2h",  # Tennis only supports h2h (moneyline)
+                        "oddsFormat": "american",
+                    }
+                    
+                    data = await self.get(f"/sports/{tournament_key}/odds", params=params)
+                    
+                    if data and len(data) > 0:
+                        logger.info(f"[Tennis] Found {len(data)} events for {tournament_key}")
+                        parsed = self._parse_odds_response(data, tour_name)
+                        all_odds.extend(parsed)
+                        active_tournaments.append(tournament_key)
+                        
+                except Exception as e:
+                    # 404 is expected for tournaments not in season - don't log as error
+                    if "404" not in str(e):
+                        logger.debug(f"Tennis tournament {tournament_key}: {e}")
+        
+        logger.info(f"Tennis collection complete: {len(active_tournaments)} active tournaments, {len(all_odds)} odds records")
+        
+        return CollectorResult(
+            success=True,  # Success even with 0 results (no tournaments active)
+            data=all_odds,
+            records_count=len(all_odds),
+            error="; ".join(errors) if errors else None,
+            metadata={
+                "tours": tours,
+                "active_tournaments": active_tournaments,
                 "requests_remaining": self._requests_remaining,
             },
         )
@@ -527,6 +601,8 @@ class OddsCollector(BaseCollector):
         team_name: str,
     ) -> Team:
         """Get or create a team record."""
+        import hashlib
+        
         # Try to find by name
         result = await session.execute(
             select(Team).where(
@@ -539,11 +615,16 @@ class OddsCollector(BaseCollector):
         if team:
             return team
         
-        # Create new team
+        # Create new team with short external_id (max 50 chars for VARCHAR(50) column)
+        # Format: first 8 chars of sport_id + _ + hash of team_name (12 chars)
+        sport_prefix = str(sport_id)[:8]
+        team_hash = hashlib.md5(team_name.lower().encode()).hexdigest()[:12]
+        external_id = f"{sport_prefix}_{team_hash}"  # Total: 8 + 1 + 12 = 21 chars
+        
         abbreviation = team_name[:3].upper() if len(team_name) >= 3 else team_name.upper()
         team = Team(
             sport_id=sport_id,
-            external_id=f"{sport_id}_{team_name.lower().replace(' ', '_')}",
+            external_id=external_id,
             name=team_name,
             abbreviation=abbreviation,
             is_active=True,

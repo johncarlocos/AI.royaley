@@ -279,6 +279,30 @@ class HockeyRCollector(BaseCollector):
                 errors=[str(e)],
             )
 
+    async def validate(self, data: Any) -> bool:
+        """
+        Validate collected NHL data.
+        
+        Checks:
+        - Data is not None
+        - Data is a dict with expected keys
+        - Data contains records
+        """
+        if data is None:
+            return False
+        
+        if not isinstance(data, dict):
+            return False
+        
+        # Check for at least one data type
+        valid_keys = ["teams", "games", "rosters", "player_stats", "team_stats"]
+        has_data = any(
+            key in data and data[key] and len(data[key]) > 0
+            for key in valid_keys
+        )
+        
+        return has_data
+
     # =========================================================================
     # TEAMS COLLECTION
     # =========================================================================

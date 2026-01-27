@@ -27,6 +27,7 @@ Tables filled by each source:
     cfbfastr      → games, teams, players, player_stats, team_stats (NCAAF)
     baseballr     → games, teams, players, player_stats, team_stats (MLB)
     hockeyr       → games, teams, players, player_stats, team_stats (NHL)
+    wehoop        → games, teams, players, player_stats, team_stats (WNBA)
 """
 
 import asyncio
@@ -1347,6 +1348,157 @@ async def import_hockeyr_team_stats() -> ImportResult:
 
 
 # =============================================================================
+# WEHOOP IMPORTS (WNBA)
+# =============================================================================
+
+async def import_wehoop(sports: List[str] = None) -> ImportResult:
+    """Import WNBA current season data from wehoop/ESPN API."""
+    result = ImportResult(source="wehoop")
+    try:
+        from app.services.collectors import wehoop_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        # WNBA season runs May-October
+        if datetime.now().month >= 5:
+            years = [current_year]
+        else:
+            years = [current_year - 1]
+        
+        data = await wehoop_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await wehoop_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_wehoop_history(years_back: int = 10) -> ImportResult:
+    """Import WNBA historical data from wehoop/ESPN API (10 years)."""
+    result = ImportResult(source="wehoop_history")
+    try:
+        from app.services.collectors import wehoop_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        # WNBA season format: single calendar year
+        if datetime.now().month >= 5:
+            end_year = current_year
+        else:
+            end_year = current_year - 1
+        
+        years = list(range(end_year - years_back + 1, end_year + 1))
+        
+        logger.info(f"[wehoop] Collecting {len(years)} seasons: {min(years)} to {max(years)}")
+        
+        data = await wehoop_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await wehoop_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_wehoop_players() -> ImportResult:
+    """Import WNBA players and stats from wehoop/ESPN API."""
+    result = ImportResult(source="wnba_players")
+    try:
+        from app.services.collectors import wehoop_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 5:
+            years = list(range(current_year - 2, current_year + 1))
+        else:
+            years = list(range(current_year - 3, current_year))
+        
+        data = await wehoop_collector.collect(years=years, collect_type="player_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await wehoop_collector.save_player_stats_to_database(
+                    data.data.get("player_stats", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_wehoop_rosters() -> ImportResult:
+    """Import WNBA rosters from wehoop/ESPN API."""
+    result = ImportResult(source="wnba_rosters")
+    try:
+        from app.services.collectors import wehoop_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 5:
+            years = [current_year]
+        else:
+            years = [current_year - 1]
+        
+        data = await wehoop_collector.collect(years=years, collect_type="rosters")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await wehoop_collector.save_rosters_to_database(
+                    data.data.get("rosters", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_wehoop_team_stats() -> ImportResult:
+    """Import WNBA team stats from wehoop/ESPN API."""
+    result = ImportResult(source="wnba_team_stats")
+    try:
+        from app.services.collectors import wehoop_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        if datetime.now().month >= 5:
+            years = list(range(current_year - 9, current_year + 1))
+        else:
+            years = list(range(current_year - 10, current_year))
+        
+        logger.info(f"[wehoop] Collecting WNBA team stats for {min(years)}-{max(years)}...")
+        
+        data = await wehoop_collector.collect(years=years, collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await wehoop_collector.save_team_stats_to_database(
+                    data.data.get("team_stats", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1361,6 +1513,7 @@ IMPORT_MAP = {
     "cfbfastr": import_cfbfastr,
     "baseballr": import_baseballr,
     "hockeyr": import_hockeyr,
+    "wehoop": import_wehoop,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1371,6 +1524,7 @@ IMPORT_MAP = {
     "cfbfastr_history": import_cfbfastr_history,
     "baseballr_history": import_baseballr_history,
     "hockeyr_history": import_hockeyr_history,
+    "wehoop_history": import_wehoop_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1386,6 +1540,9 @@ IMPORT_MAP = {
     "nhl_players": import_hockeyr_players,
     "nhl_rosters": import_hockeyr_rosters,
     "nhl_team_stats": import_hockeyr_team_stats,
+    "wnba_players": import_wehoop_players,
+    "wnba_rosters": import_wehoop_rosters,
+    "wnba_team_stats": import_wehoop_team_stats,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,
     "sportsdb_standings": import_sportsdb_standings,
@@ -1403,10 +1560,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "weather_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "weather_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -1454,7 +1611,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history"]:
                 result = await func(years_back=seasons)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
@@ -1462,7 +1619,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
                            "nfl_players", "ncaaf_players", "mlb_players", 
                            "mlb_rosters", "mlb_team_stats",
-                           "nhl_players", "nhl_rosters", "nhl_team_stats"]:
+                           "nhl_players", "nhl_rosters", "nhl_team_stats",
+                           "wnba_players", "wnba_rosters", "wnba_team_stats"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)
@@ -1528,6 +1686,9 @@ def show_status():
     console.print("  • sportsdb      → games, teams")
     console.print("  • nflfastr      → games, teams (NFL)")
     console.print("  • cfbfastr      → games, teams (NCAAF)")
+    console.print("  • baseballr     → games, teams (MLB)")
+    console.print("  • hockeyr       → games, teams (NHL)")
+    console.print("  • wehoop        → games, teams (WNBA)")
     
     console.print("\n[green]✅ HISTORICAL DATA (--historical):[/green]")
     console.print("  • pinnacle_history  → games (archived)")
@@ -1536,12 +1697,18 @@ def show_status():
     console.print("  • sportsdb_history  → games (past N seasons)")
     console.print("  • nflfastr_history  → games (1999-present)")
     console.print("  • cfbfastr_history  → games (2002-present)")
+    console.print("  • baseballr_history → games (2016-present)")
+    console.print("  • hockeyr_history   → games (2016-present)")
+    console.print("  • wehoop_history    → games (2016-present)")
     
     console.print("\n[cyan]⚡ SPECIALIZED DATA:[/cyan]")
     console.print("  • injuries      → injuries (from ESPN)")
     console.print("  • players       → players (from ESPN)")
     console.print("  • nfl_players   → players, player_stats (from nflfastR)")
     console.print("  • ncaaf_players → players, player_stats (from cfbfastR)")
+    console.print("  • mlb_players   → players, player_stats (from baseballR)")
+    console.print("  • nhl_players   → players, player_stats (from hockeyR)")
+    console.print("  • wnba_players  → players, player_stats (from wehoop)")
     console.print("  • venues        → venues (from TheSportsDB)")
     console.print("  • sportsdb_players   → players (from TheSportsDB)")
     console.print("  • sportsdb_standings → standings (from TheSportsDB)")

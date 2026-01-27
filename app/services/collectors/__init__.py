@@ -14,6 +14,7 @@ IMPLEMENTED COLLECTORS:
     collector_08_cfbfastr.py  - cfbfastR (NCAAF PBP, EPA, SP+, Recruiting) - FREE
     collector_09_baseballr.py - baseballR (MLB Statcast, FanGraphs, 85+ features) - FREE
     collector_10_hockeyr.py   - hockeyR (NHL xG, Corsi, Fenwick, 75+ features) - FREE
+    collector_11_wehoop.py    - wehoop (WNBA PBP, box scores, player stats) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -34,6 +35,7 @@ from app.services.collectors.collector_07_nflfastr import NFLFastRCollector, nfl
 from app.services.collectors.collector_08_cfbfastr import CFBFastRCollector, cfbfastr_collector
 from app.services.collectors.collector_09_baseballr import BaseballRCollector, baseballr_collector
 from app.services.collectors.collector_10_hockeyr import HockeyRCollector, hockeyr_collector
+from app.services.collectors.collector_11_wehoop import WehoopCollector, wehoop_collector
 
 __all__ = [
     "BaseCollector",
@@ -61,4 +63,6 @@ __all__ = [
     "baseballr_collector",
     "HockeyRCollector",
     "hockeyr_collector",
+    "WehoopCollector",
+    "wehoop_collector",
 ]

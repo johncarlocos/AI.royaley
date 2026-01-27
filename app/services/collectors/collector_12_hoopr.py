@@ -272,7 +272,6 @@ class HoopRCollector(BaseCollector):
                 success=True,
                 data=data,
                 records_count=total_records,
-                message=f"Collected {total_records} records from {', '.join(leagues)}"
             )
             
         except Exception as e:
@@ -283,7 +282,7 @@ class HoopRCollector(BaseCollector):
                 success=False,
                 data=data,
                 records_count=total_records,
-                message=f"Error: {str(e)}"
+                error=str(e)
             )
         finally:
             await self.close()
@@ -523,6 +522,7 @@ class HoopRCollector(BaseCollector):
         """Collect rosters for all teams."""
         all_rosters = []
         seen_players = set()
+        debug_logged = False
         
         try:
             client = await self.get_client()
@@ -563,49 +563,94 @@ class HoopRCollector(BaseCollector):
                         if response.status_code == 200:
                             data = response.json()
                             
-                            # ESPN roster structure: athletes grouped by position
-                            for group in data.get("athletes", []):
-                                items = group.get("items", []) if isinstance(group, dict) else []
+                            # Debug: log structure on first successful response
+                            if not debug_logged and year == years[0]:
+                                import json
+                                logger.info(f"[hoopR] DEBUG {league} roster keys: {list(data.keys())}")
+                                debug_logged = True
+                            
+                            players = []
+                            
+                            # Structure 1: athletes[] with position groups containing items[]
+                            athletes = data.get("athletes", [])
+                            for group in athletes:
+                                if isinstance(group, dict):
+                                    # Check for items array
+                                    items = group.get("items", [])
+                                    if items:
+                                        players.extend(items)
+                                    # Also check if group itself has player data
+                                    if group.get("id") and group.get("displayName"):
+                                        players.append(group)
+                                elif isinstance(group, list):
+                                    players.extend(group)
+                            
+                            # Structure 2: Direct athletes array with players
+                            if not players and athletes:
+                                for athlete in athletes:
+                                    if isinstance(athlete, dict) and athlete.get("id"):
+                                        players.append(athlete)
+                            
+                            # Structure 3: roster[] array
+                            roster_list = data.get("roster", [])
+                            if roster_list:
+                                for entry in roster_list:
+                                    if isinstance(entry, dict):
+                                        if entry.get("id"):
+                                            players.append(entry)
+                                        # Check for nested athlete
+                                        athlete = entry.get("athlete", {})
+                                        if athlete and athlete.get("id"):
+                                            players.append(athlete)
+                            
+                            # Structure 4: team.athletes[]
+                            team_data = data.get("team", {})
+                            if team_data:
+                                team_athletes = team_data.get("athletes", [])
+                                for athlete in team_athletes:
+                                    if isinstance(athlete, dict) and athlete.get("id"):
+                                        players.append(athlete)
+                            
+                            # Process found players
+                            for player in players:
+                                player_id = str(player.get("id", ""))
+                                if not player_id:
+                                    continue
                                 
-                                for player in items:
-                                    player_id = str(player.get("id", ""))
-                                    if not player_id:
-                                        continue
-                                    
-                                    unique_key = f"{player_id}_{year}"
-                                    if unique_key in seen_players:
-                                        continue
-                                    seen_players.add(unique_key)
-                                    
-                                    # Parse position
-                                    position = ""
-                                    if isinstance(player.get("position"), dict):
-                                        position = player.get("position", {}).get("abbreviation", "")
-                                    else:
-                                        position = str(player.get("position", ""))
-                                    
-                                    roster_entry = {
-                                        "external_id": f"espn_{league.lower()}_{player_id}",
-                                        "espn_id": player_id,
-                                        "league": league,
-                                        "season": year,
-                                        "team_id": team_id,
-                                        "team_abbr": team["abbr"],
-                                        "player_name": player.get("displayName", player.get("fullName", "")),
-                                        "position": position,
-                                        "jersey_number": player.get("jersey", ""),
-                                        "height": player.get("displayHeight", ""),
-                                        "weight": player.get("displayWeight", ""),
-                                        "birth_date": player.get("dateOfBirth", ""),
-                                        "age": player.get("age", 0),
-                                        "birth_place": player.get("birthPlace", {}).get("city", "") if isinstance(player.get("birthPlace"), dict) else "",
-                                        "experience": player.get("experience", {}).get("years", 0) if isinstance(player.get("experience"), dict) else 0,
-                                        "college": player.get("college", {}).get("name", "") if isinstance(player.get("college"), dict) else "",
-                                        "headshot_url": player.get("headshot", {}).get("href", "") if isinstance(player.get("headshot"), dict) else "",
-                                    }
-                                    
-                                    all_rosters.append(roster_entry)
-                                    year_count += 1
+                                unique_key = f"{player_id}_{year}"
+                                if unique_key in seen_players:
+                                    continue
+                                seen_players.add(unique_key)
+                                
+                                # Parse position
+                                position = ""
+                                if isinstance(player.get("position"), dict):
+                                    position = player.get("position", {}).get("abbreviation", "")
+                                else:
+                                    position = str(player.get("position", ""))
+                                
+                                roster_entry = {
+                                    "external_id": f"espn_{league.lower()}_{player_id}",
+                                    "espn_id": player_id,
+                                    "league": league,
+                                    "season": year,
+                                    "team_id": team_id,
+                                    "team_abbr": team["abbr"],
+                                    "player_name": player.get("displayName", player.get("fullName", "")),
+                                    "position": position,
+                                    "jersey_number": player.get("jersey", ""),
+                                    "height": player.get("displayHeight", ""),
+                                    "weight": player.get("displayWeight", ""),
+                                    "birth_date": player.get("dateOfBirth", ""),
+                                    "age": player.get("age", 0),
+                                    "birth_place": player.get("birthPlace", {}).get("city", "") if isinstance(player.get("birthPlace"), dict) else "",
+                                    "experience": player.get("experience", {}).get("years", 0) if isinstance(player.get("experience"), dict) else 0,
+                                    "college": player.get("college", {}).get("name", "") if isinstance(player.get("college"), dict) else "",
+                                    "headshot_url": player.get("headshot", {}).get("href", "") if isinstance(player.get("headshot"), dict) else "",
+                                }
+                                
+                                all_rosters.append(roster_entry)
+                                year_count += 1
                         
                         await asyncio.sleep(0.05)
                         
@@ -628,6 +673,7 @@ class HoopRCollector(BaseCollector):
     async def _collect_team_stats(self, league: str, years: List[int]) -> List[Dict[str, Any]]:
         """Collect team statistics from standings."""
         all_stats = []
+        debug_logged = False
         
         try:
             client = await self.get_client()
@@ -643,6 +689,12 @@ class HoopRCollector(BaseCollector):
                     if response.status_code == 200:
                         data = response.json()
                         
+                        # Debug: log structure on first call
+                        if not debug_logged:
+                            import json
+                            logger.info(f"[hoopR] DEBUG {league} standings keys: {list(data.keys())}")
+                            debug_logged = True
+                        
                         # Try multiple possible structures
                         entries = []
                         
@@ -656,13 +708,39 @@ class HoopRCollector(BaseCollector):
                                 entry["_conference"] = conf_name
                             entries.extend(child_entries)
                         
-                        # Structure 2: standings.entries
+                        # Structure 2: standings.entries (dict)
                         if not entries:
                             standings = data.get("standings", {})
                             if isinstance(standings, dict):
                                 entries = standings.get("entries", [])
                             elif isinstance(standings, list):
                                 entries = standings
+                        
+                        # Structure 3: groups -> entries
+                        if not entries:
+                            groups = data.get("groups", [])
+                            for group in groups:
+                                conf_name = group.get("name", group.get("abbreviation", ""))
+                                group_entries = group.get("entries", group.get("standings", {}).get("entries", []))
+                                for entry in group_entries:
+                                    entry["_conference"] = conf_name
+                                entries.extend(group_entries)
+                        
+                        # Structure 4: leagues -> groups -> entries (NCAAB specific)
+                        if not entries:
+                            leagues = data.get("leagues", [])
+                            for lg in leagues:
+                                lg_groups = lg.get("groups", [])
+                                for group in lg_groups:
+                                    conf_name = group.get("name", group.get("abbreviation", ""))
+                                    group_entries = group.get("entries", [])
+                                    for entry in group_entries:
+                                        entry["_conference"] = conf_name
+                                    entries.extend(group_entries)
+                        
+                        # Structure 5: Direct entries at root
+                        if not entries:
+                            entries = data.get("entries", [])
                         
                         for entry in entries:
                             team = entry.get("team", {})

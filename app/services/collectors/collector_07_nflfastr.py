@@ -64,9 +64,9 @@ NFLVERSE_URLS = {
     # Schedules - use Lee Sharpe's nfldata CSV (schedules release only has rds)
     "schedules": "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
     
-    # Player stats (per season)
-    "player_stats": f"{NFLVERSE_BASE}/stats_player/player_stats_{{year}}.parquet",
-    "player_stats_csv": f"{NFLVERSE_BASE}/stats_player/player_stats_{{year}}.csv",
+    # Player stats - COMBINED file (nflverse changed from per-year to combined)
+    "player_stats_combined": f"{NFLVERSE_BASE}/player_stats/player_stats.parquet",
+    "player_stats_season": f"{NFLVERSE_BASE}/player_stats/player_stats_{{year}}.parquet",
     
     # Team stats
     "team_stats": f"{NFLVERSE_BASE}/stats_team/team_stats_{{year}}.parquet",
@@ -636,12 +636,37 @@ class NFLFastRCollector(BaseCollector):
     # =========================================================================
     
     async def _collect_player_stats(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect player statistics."""
+        """Collect player statistics from nflverse combined file."""
         player_stats = []
         
+        try:
+            # Try combined file first (nflverse changed from per-year to combined)
+            url = NFLVERSE_URLS["player_stats_combined"]
+            logger.info(f"[nflfastR] Downloading combined player stats...")
+            
+            df = await self._download_parquet(url)
+            
+            if df is not None and len(df) > 0:
+                # Filter by years
+                if "season" in df.columns:
+                    df = df[df["season"].isin(years)]
+                
+                for _, row in df.iterrows():
+                    stats = self._parse_player_stats(row)
+                    if stats:
+                        player_stats.append(stats)
+                
+                logger.info(f"[nflfastR] Loaded {len(player_stats)} player stat records from combined file")
+                return player_stats
+            
+        except Exception as e:
+            logger.warning(f"[nflfastR] Combined player stats failed: {e}")
+        
+        # Fallback: try per-season files
+        logger.info("[nflfastR] Trying per-season player stats files...")
         for year in years:
             try:
-                url = NFLVERSE_URLS["player_stats"].format(year=year)
+                url = NFLVERSE_URLS["player_stats_season"].format(year=year)
                 df = await self._download_parquet(url)
                 
                 if df is None:
@@ -859,6 +884,18 @@ class NFLFastRCollector(BaseCollector):
             if pd.isna(player_id) or not player_id:
                 return None
             
+            # Convert height from inches (float) to string format "X-Y" (feet-inches)
+            height_str = None
+            height_val = row.get("height")
+            if pd.notna(height_val):
+                try:
+                    height_inches = int(float(height_val))
+                    feet = height_inches // 12
+                    inches = height_inches % 12
+                    height_str = f"{feet}-{inches}"
+                except:
+                    height_str = str(height_val) if height_val else None
+            
             return {
                 "player_id": player_id,
                 "player_name": row.get("player_name", "") or row.get("full_name", ""),
@@ -868,7 +905,7 @@ class NFLFastRCollector(BaseCollector):
                 "position_group": row.get("position_group", ""),
                 "team": row.get("team", ""),
                 "jersey_number": int(row.get("jersey_number")) if pd.notna(row.get("jersey_number")) else None,
-                "height": row.get("height", ""),
+                "height": height_str,
                 "weight": int(row.get("weight")) if pd.notna(row.get("weight")) else None,
                 "birth_date": str(row.get("birth_date")) if pd.notna(row.get("birth_date")) else None,
                 "college": row.get("college", ""),
@@ -986,10 +1023,11 @@ class NFLFastRCollector(BaseCollector):
         roster_data: List[Dict[str, Any]],
         session: AsyncSession,
     ) -> int:
-        """Save roster data (players) to database."""
+        """Save roster data (players) to database with batch processing."""
         from app.models import Player, Team, Sport
         
         saved_count = 0
+        batch_size = 500
         
         try:
             # Get NFL sport
@@ -1004,6 +1042,7 @@ class NFLFastRCollector(BaseCollector):
             
             # Process each roster entry
             processed_ids = set()
+            batch_count = 0
             
             for player_data in roster_data:
                 try:
@@ -1020,6 +1059,21 @@ class NFLFastRCollector(BaseCollector):
                         f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip() or
                         "Unknown"
                     )
+                    
+                    # Ensure height is a string (convert from float inches if needed)
+                    height_val = player_data.get("height")
+                    if height_val is not None:
+                        if isinstance(height_val, (int, float)):
+                            # Convert inches to "feet-inches" format
+                            try:
+                                height_inches = int(float(height_val))
+                                feet = height_inches // 12
+                                inches = height_inches % 12
+                                height_val = f"{feet}-{inches}"
+                            except:
+                                height_val = str(height_val)
+                        else:
+                            height_val = str(height_val) if height_val else None
                     
                     # Get team
                     team_abbr = player_data.get("team")
@@ -1047,7 +1101,7 @@ class NFLFastRCollector(BaseCollector):
                         player.position = player_data.get("position")
                         player.jersey_number = player_data.get("jersey_number")
                         player.weight = player_data.get("weight")
-                        player.height = player_data.get("height")
+                        player.height = height_val
                         if team:
                             player.team_id = team.id
                         # Check status
@@ -1070,7 +1124,7 @@ class NFLFastRCollector(BaseCollector):
                             name=player_name,
                             position=player_data.get("position"),
                             jersey_number=player_data.get("jersey_number"),
-                            height=player_data.get("height"),
+                            height=height_val,
                             weight=player_data.get("weight"),
                             birth_date=birth_date,
                             team_id=team.id if team else None,
@@ -1078,16 +1132,26 @@ class NFLFastRCollector(BaseCollector):
                         )
                         session.add(player)
                         saved_count += 1
+                    
+                    batch_count += 1
+                    
+                    # Commit in batches to prevent memory issues
+                    if batch_count >= batch_size:
+                        await session.commit()
+                        batch_count = 0
+                        logger.info(f"[nflfastR] Committed batch, {saved_count} new players so far")
                         
                 except Exception as e:
                     logger.debug(f"[nflfastR] Error saving roster player: {e}")
                     continue
             
+            # Final commit
             await session.commit()
             logger.info(f"[nflfastR] Saved {saved_count} players from rosters")
             
         except Exception as e:
             logger.error(f"[nflfastR] Error saving rosters: {e}")
+            await session.rollback()
         
         return saved_count
     

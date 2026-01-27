@@ -758,19 +758,55 @@ async def import_nflfastr_history(years_back: int = 10) -> ImportResult:
         # Use collect_all for comprehensive data
         data = await nflfastr_collector.collect_all(years=years)
         
+        save_results = {
+            "games": 0,
+            "players": 0,
+            "player_stats": 0,
+            "team_stats": 0,
+        }
+        
         if data.success and data.data:
             result.records = data.records_count
             await db_manager.initialize()
-            async with db_manager.session() as session:
-                # Use save_all_to_database for comprehensive saving
-                save_results = await nflfastr_collector.save_all_to_database(data.data, session)
-                
-                console.print(f"[green]✅ Games saved: {save_results.get('games', 0)}[/]")
-                console.print(f"[green]✅ Players saved: {save_results.get('players', 0)}[/]")
-                console.print(f"[green]✅ Player stats saved: {save_results.get('player_stats', 0)}[/]")
-                console.print(f"[green]✅ Team stats saved: {save_results.get('team_stats', 0)}[/]")
-                
-                result.records = sum(save_results.values())
+            
+            # Save each type in a separate session to prevent cascading rollback
+            # 1. Games
+            if data.data.get("games"):
+                try:
+                    async with db_manager.session() as session:
+                        save_results["games"] = await nflfastr_collector._save_games(data.data["games"], session)
+                        console.print(f"[green]✅ Games saved: {save_results['games']}[/]")
+                except Exception as e:
+                    console.print(f"[red]❌ Games save error: {str(e)[:50]}[/]")
+            
+            # 2. Players (rosters)
+            if data.data.get("players"):
+                try:
+                    async with db_manager.session() as session:
+                        save_results["players"] = await nflfastr_collector.save_rosters_to_database(data.data["players"], session)
+                        console.print(f"[green]✅ Players saved: {save_results['players']}[/]")
+                except Exception as e:
+                    console.print(f"[red]❌ Players save error: {str(e)[:50]}[/]")
+            
+            # 3. Player stats
+            if data.data.get("player_stats"):
+                try:
+                    async with db_manager.session() as session:
+                        save_results["player_stats"] = await nflfastr_collector.save_players_to_database(data.data["player_stats"], session)
+                        console.print(f"[green]✅ Player stats saved: {save_results['player_stats']}[/]")
+                except Exception as e:
+                    console.print(f"[red]❌ Player stats save error: {str(e)[:50]}[/]")
+            
+            # 4. Team stats
+            if data.data.get("team_stats"):
+                try:
+                    async with db_manager.session() as session:
+                        save_results["team_stats"] = await nflfastr_collector.save_team_stats_to_database(data.data["team_stats"], session)
+                        console.print(f"[green]✅ Team stats saved: {save_results['team_stats']}[/]")
+                except Exception as e:
+                    console.print(f"[red]❌ Team stats save error: {str(e)[:50]}[/]")
+            
+            result.records = sum(save_results.values())
         
         result.success = result.records > 0
     except Exception as e:

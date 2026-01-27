@@ -12,6 +12,7 @@ IMPLEMENTED COLLECTORS:
     collector_06_sportsdb.py  - TheSportsDB (Games, scores, livescores) - $295/mo
     collector_07_nflfastr.py  - nflfastR (NFL PBP, EPA, WPA, CPOE) - FREE
     collector_08_cfbfastr.py  - cfbfastR (NCAAF PBP, EPA, SP+, Recruiting) - FREE
+    collector_09_baseballr.py - baseballR (MLB Statcast, FanGraphs, 85+ features) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -30,6 +31,7 @@ from app.services.collectors.collector_05_weather import WeatherCollector, weath
 from app.services.collectors.collector_06_sportsdb import SportsDBCollector, sportsdb_collector
 from app.services.collectors.collector_07_nflfastr import NFLFastRCollector, nflfastr_collector
 from app.services.collectors.collector_08_cfbfastr import CFBFastRCollector, cfbfastr_collector
+from app.services.collectors.collector_09_baseballr import BaseballRCollector, baseballr_collector
 
 __all__ = [
     "BaseCollector",
@@ -53,4 +55,6 @@ __all__ = [
     "nflfastr_collector",
     "CFBFastRCollector",
     "cfbfastr_collector",
+    "BaseballRCollector",
+    "baseballr_collector",
 ]

@@ -1064,6 +1064,136 @@ async def import_nflfastr_rosters() -> ImportResult:
 
 
 # =============================================================================
+# BASEBALLR (MLB Stats API + pybaseball)
+# =============================================================================
+
+async def import_baseballr(sports: List[str] = None) -> ImportResult:
+    """Import MLB current data from baseballR/MLB Stats API."""
+    result = ImportResult(source="baseballr")
+    try:
+        from app.services.collectors import baseballr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 1, current_year + 1))
+        
+        data = await baseballr_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await baseballr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_baseballr_history(years_back: int = 10) -> ImportResult:
+    """Import MLB historical data from baseballR/MLB Stats API."""
+    result = ImportResult(source="baseballr_history")
+    try:
+        from app.services.collectors import baseballr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back, current_year + 1))
+        
+        data = await baseballr_collector.collect(years=years, collect_type="all")
+        if data.success:
+            result.records = data.records_count
+            async with db_manager.session() as session:
+                await baseballr_collector.save_to_database(data.data, session)
+        result.success = result.records > 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_baseballr_players() -> ImportResult:
+    """Import MLB players and stats from baseballR."""
+    result = ImportResult(source="mlb_players")
+    try:
+        from app.services.collectors import baseballr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 3, current_year + 1))
+        
+        data = await baseballr_collector.collect(years=years, collect_type="player_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await baseballr_collector.save_players_to_database(
+                    data.data.get("player_stats", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_baseballr_rosters() -> ImportResult:
+    """Import MLB rosters from baseballR/MLB Stats API."""
+    result = ImportResult(source="mlb_rosters")
+    try:
+        from app.services.collectors import baseballr_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await baseballr_collector.collect(collect_type="rosters")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await baseballr_collector.save_rosters_to_database(
+                    data.data.get("rosters", []), session
+                )
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_baseballr_team_stats() -> ImportResult:
+    """Import MLB team stats from baseballR."""
+    result = ImportResult(source="mlb_team_stats")
+    try:
+        from app.services.collectors import baseballr_collector
+        from app.core.database import db_manager
+        from rich.console import Console
+        
+        console = Console()
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - 9, current_year + 1))
+        
+        console.print(f"[bold blue]Collecting MLB team stats for {min(years)}-{max(years)}...[/]")
+        
+        data = await baseballr_collector.collect(years=years, collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await baseballr_collector.save_team_stats_to_database(
+                    data.data.get("team_stats", []), session
+                )
+                result.records = saved
+                console.print(f"[green]✅ Team stats saved: {saved}[/]")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1076,6 +1206,7 @@ IMPORT_MAP = {
     "sportsdb": import_sportsdb,
     "nflfastr": import_nflfastr,
     "cfbfastr": import_cfbfastr,
+    "baseballr": import_baseballr,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1084,6 +1215,7 @@ IMPORT_MAP = {
     "sportsdb_history": import_sportsdb_history,
     "nflfastr_history": import_nflfastr_history,
     "cfbfastr_history": import_cfbfastr_history,
+    "baseballr_history": import_baseballr_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1093,6 +1225,9 @@ IMPORT_MAP = {
     "nfl_rosters": import_nflfastr_rosters,
     "nfl_team_stats": import_nflfastr_team_stats,
     "ncaaf_players": import_cfbfastr_players,
+    "mlb_players": import_baseballr_players,
+    "mlb_rosters": import_baseballr_rosters,
+    "mlb_team_stats": import_baseballr_team_stats,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,
     "sportsdb_standings": import_sportsdb_standings,
@@ -1110,10 +1245,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "weather_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "weather_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -1161,13 +1296,14 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history"]:
                 result = await func(years_back=seasons)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
             elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
                            "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
-                           "nfl_players", "ncaaf_players"]:
+                           "nfl_players", "ncaaf_players", "mlb_players", 
+                           "mlb_rosters", "mlb_team_stats"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

@@ -822,19 +822,26 @@ class HockeyRCollector(BaseCollector):
             await session.flush()
             logger.info("[hockeyR] Created NHL sport")
         
+        # Pre-load existing teams by external_id AND name to avoid duplicates
+        existing_by_external = {}
+        existing_by_name = {}
+        existing_result = await session.execute(
+            select(Team).where(Team.sport_id == sport.id)
+        )
+        for team in existing_result.scalars().all():
+            if team.external_id:
+                existing_by_external[team.external_id] = team
+            if team.name:
+                existing_by_name[team.name] = team
+        
+        logger.info(f"[hockeyR] Found {len(existing_by_external)} existing NHL teams")
+        
         for team_data in teams_data:
             external_id = f"nhl_{team_data.get('nhl_id', team_data.get('abbr'))}"
+            team_name = team_data.get("name", "")
             
-            # Check if team exists
-            existing = await session.execute(
-                select(Team).where(
-                    and_(
-                        Team.sport_id == sport.id,
-                        Team.external_id == external_id
-                    )
-                )
-            )
-            team = existing.scalars().first()
+            # Check if team exists by external_id or name
+            team = existing_by_external.get(external_id) or existing_by_name.get(team_name)
             
             if team:
                 # Update existing
@@ -843,12 +850,13 @@ class HockeyRCollector(BaseCollector):
                 team.city = team_data.get("city", team.city)
                 team.conference = team_data.get("conference", team.conference)
                 team.division = team_data.get("division", team.division)
+                team.external_id = external_id  # Update external_id if changed
             else:
                 # Create new
                 team = Team(
                     sport_id=sport.id,
                     external_id=external_id,
-                    name=team_data.get("name", ""),
+                    name=team_name,
                     abbreviation=team_data.get("abbr", ""),
                     city=team_data.get("city", ""),
                     conference=team_data.get("conference", ""),
@@ -856,6 +864,9 @@ class HockeyRCollector(BaseCollector):
                     is_active=True,
                 )
                 session.add(team)
+                # Track in memory to avoid duplicates in same batch
+                existing_by_external[external_id] = team
+                existing_by_name[team_name] = team
                 saved_count += 1
         
         await session.flush()

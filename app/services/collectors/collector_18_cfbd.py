@@ -728,58 +728,77 @@ class CollegeFootballDataCollector(BaseCollector):
     # =========================================================================
     
     async def save_to_database(self, data: Dict[str, Any], session: AsyncSession) -> int:
-        """Save all collected data to database."""
+        """Save all collected data to database with incremental commits."""
         total_saved = 0
         
-        try:
-            # Save seasons first
-            if data.get("seasons"):
+        # Save seasons first - COMMIT immediately
+        if data.get("seasons"):
+            try:
                 saved = await self._save_seasons(session, data["seasons"])
+                await session.commit()
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} seasons")
-            
-            # Save teams
-            if data.get("teams"):
+                logger.info(f"[CFBD] Saved {saved} seasons ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving seasons: {e}")
+                await session.rollback()
+        
+        # Save teams - COMMIT immediately
+        if data.get("teams"):
+            try:
                 saved = await self._save_teams(session, data["teams"])
+                await session.commit()
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} teams")
-            
-            # Save games
-            if data.get("games"):
-                saved = await self._save_games(session, data["games"])
+                logger.info(f"[CFBD] Saved {saved} teams ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving teams: {e}")
+                await session.rollback()
+        
+        # Save games in batches - COMMIT per batch
+        if data.get("games"):
+            try:
+                saved = await self._save_games_batched(session, data["games"])
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} games")
-            
-            # Save team stats (including ratings)
-            if data.get("team_stats"):
-                saved = await self._save_team_stats(session, data["team_stats"])
+                logger.info(f"[CFBD] Saved {saved} games ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving games: {e}")
+                await session.rollback()
+        
+        # Save team stats in batches - COMMIT per batch
+        if data.get("team_stats"):
+            try:
+                saved = await self._save_team_stats_batched(session, data["team_stats"])
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} team stats")
-            
-            # Save ratings as team stats
-            if data.get("ratings"):
-                saved = await self._save_ratings(session, data["ratings"])
+                logger.info(f"[CFBD] Saved {saved} team stats ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving team stats: {e}")
+                await session.rollback()
+        
+        # Save ratings in batches - COMMIT per batch
+        if data.get("ratings"):
+            try:
+                saved = await self._save_ratings_batched(session, data["ratings"])
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} ratings")
-            
-            # Save player stats
-            if data.get("player_stats"):
-                saved = await self._save_player_stats(session, data["player_stats"])
-                total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} player stats")
-            
-            # Save recruiting as team stats
-            if data.get("recruiting"):
+                logger.info(f"[CFBD] Saved {saved} ratings ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving ratings: {e}")
+                await session.rollback()
+        
+        # Save recruiting - COMMIT immediately
+        if data.get("recruiting"):
+            try:
                 saved = await self._save_recruiting(session, data["recruiting"])
+                await session.commit()
                 total_saved += saved
-                logger.info(f"[CFBD] Saved {saved} recruiting records")
-            
-            await session.commit()
-            
-        except Exception as e:
-            logger.error(f"[CFBD] Error saving to database: {e}")
-            await session.rollback()
-            raise
+                logger.info(f"[CFBD] Saved {saved} recruiting records ✓")
+            except Exception as e:
+                logger.error(f"[CFBD] Error saving recruiting: {e}")
+                await session.rollback()
+        
+        # Skip player stats by default (too many records - would take hours)
+        # Use cfbd_players source to import separately if needed
+        if data.get("player_stats"):
+            count = len(data['player_stats'])
+            logger.info(f"[CFBD] Skipping {count} player stats (use --source cfbd_players for separate import)")
         
         return total_saved
     
@@ -981,6 +1000,227 @@ class CollegeFootballDataCollector(BaseCollector):
         await session.flush()
         return saved
     
+    async def _save_games_batched(self, session: AsyncSession, games: List[Dict], batch_size: int = 500) -> int:
+        """Save game records in batches with progress logging."""
+        saved = 0
+        skipped = 0
+        sport = await self._get_or_create_sport(session)
+        
+        # Cache team lookups
+        team_cache = {}
+        
+        async def get_team_cached(team_name: str) -> Optional[Team]:
+            if team_name not in team_cache:
+                team_cache[team_name] = await self._find_team_by_name(session, sport.id, team_name)
+            return team_cache[team_name]
+        
+        # Cache season lookups
+        season_cache = {}
+        
+        async def get_season_cached(year: int) -> Season:
+            if year not in season_cache:
+                season_cache[year] = await self._get_or_create_season(session, sport.id, year)
+            return season_cache[year]
+        
+        total = len(games)
+        
+        for i, game_data in enumerate(games):
+            try:
+                season = await get_season_cached(game_data["year"])
+                external_id = game_data["external_id"]
+                
+                # Find teams by name
+                home_team = await get_team_cached(game_data["home_team_name"])
+                away_team = await get_team_cached(game_data["away_team_name"])
+                
+                if not home_team or not away_team:
+                    skipped += 1
+                    continue
+                
+                result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                existing = result.scalar_one_or_none()
+                
+                if existing:
+                    if game_data.get("home_score") is not None:
+                        existing.home_score = game_data["home_score"]
+                    if game_data.get("away_score") is not None:
+                        existing.away_score = game_data["away_score"]
+                    if game_data.get("status") == "final":
+                        existing.status = GameStatus.FINAL
+                else:
+                    status = GameStatus.FINAL if game_data.get("status") == "final" else GameStatus.SCHEDULED
+                    
+                    game = Game(
+                        sport_id=sport.id,
+                        season_id=season.id,
+                        external_id=external_id,
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        scheduled_at=game_data["scheduled_at"],
+                        home_score=game_data.get("home_score"),
+                        away_score=game_data.get("away_score"),
+                        status=status
+                    )
+                    session.add(game)
+                
+                saved += 1
+                
+                # Commit in batches
+                if (i + 1) % batch_size == 0:
+                    await session.commit()
+                    logger.info(f"[CFBD] Games progress: {i+1}/{total} ({saved} saved, {skipped} skipped)")
+                
+            except Exception as e:
+                logger.debug(f"[CFBD] Error saving game: {e}")
+        
+        # Final commit
+        await session.commit()
+        if skipped > 0:
+            logger.info(f"[CFBD] Games: {skipped} skipped (team not found)")
+        return saved
+    
+    async def _save_team_stats_batched(self, session: AsyncSession, stats: List[Dict], batch_size: int = 1000) -> int:
+        """Save team statistics in batches with progress logging."""
+        saved = 0
+        skipped = 0
+        sport = await self._get_or_create_sport(session)
+        
+        # Cache team lookups
+        team_cache = {}
+        
+        async def get_team_cached(team_name: str) -> Optional[Team]:
+            if team_name not in team_cache:
+                team_cache[team_name] = await self._find_team_by_name(session, sport.id, team_name)
+            return team_cache[team_name]
+        
+        # Cache season lookups  
+        season_cache = {}
+        
+        async def get_season_cached(year: int) -> Season:
+            if year not in season_cache:
+                season_cache[year] = await self._get_or_create_season(session, sport.id, year)
+            return season_cache[year]
+        
+        total = len(stats)
+        
+        for i, stat_data in enumerate(stats):
+            try:
+                season = await get_season_cached(stat_data["year"])
+                team = await get_team_cached(stat_data["team_name"])
+                
+                if not team:
+                    skipped += 1
+                    continue
+                
+                result = await session.execute(
+                    select(TeamStats).where(
+                        and_(
+                            TeamStats.team_id == team.id,
+                            TeamStats.season_id == season.id,
+                            TeamStats.stat_type == stat_data["stat_type"]
+                        )
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                
+                if existing:
+                    existing.value = stat_data["value"]
+                else:
+                    stat = TeamStats(
+                        team_id=team.id,
+                        season_id=season.id,
+                        stat_type=stat_data["stat_type"],
+                        value=stat_data["value"]
+                    )
+                    session.add(stat)
+                
+                saved += 1
+                
+                # Commit in batches
+                if (i + 1) % batch_size == 0:
+                    await session.commit()
+                    logger.info(f"[CFBD] Team stats progress: {i+1}/{total}")
+                
+            except Exception as e:
+                logger.debug(f"[CFBD] Error saving team stat: {e}")
+        
+        # Final commit
+        await session.commit()
+        return saved
+    
+    async def _save_ratings_batched(self, session: AsyncSession, ratings: List[Dict], batch_size: int = 500) -> int:
+        """Save ratings in batches with progress logging."""
+        saved = 0
+        skipped = 0
+        sport = await self._get_or_create_sport(session)
+        
+        # Cache team lookups
+        team_cache = {}
+        
+        async def get_team_cached(team_name: str) -> Optional[Team]:
+            if team_name not in team_cache:
+                team_cache[team_name] = await self._find_team_by_name(session, sport.id, team_name)
+            return team_cache[team_name]
+        
+        # Cache season lookups
+        season_cache = {}
+        
+        async def get_season_cached(year: int) -> Season:
+            if year not in season_cache:
+                season_cache[year] = await self._get_or_create_season(session, sport.id, year)
+            return season_cache[year]
+        
+        total = len(ratings)
+        
+        for i, rating_data in enumerate(ratings):
+            try:
+                season = await get_season_cached(rating_data["year"])
+                team = await get_team_cached(rating_data["team_name"])
+                
+                if not team:
+                    skipped += 1
+                    continue
+                
+                stat_type = rating_data["rating_type"]
+                
+                result = await session.execute(
+                    select(TeamStats).where(
+                        and_(
+                            TeamStats.team_id == team.id,
+                            TeamStats.season_id == season.id,
+                            TeamStats.stat_type == stat_type
+                        )
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                
+                if existing:
+                    existing.value = rating_data["value"]
+                else:
+                    stat = TeamStats(
+                        team_id=team.id,
+                        season_id=season.id,
+                        stat_type=stat_type,
+                        value=rating_data["value"]
+                    )
+                    session.add(stat)
+                
+                saved += 1
+                
+                # Commit in batches
+                if (i + 1) % batch_size == 0:
+                    await session.commit()
+                    logger.info(f"[CFBD] Ratings progress: {i+1}/{total}")
+                
+            except Exception as e:
+                logger.debug(f"[CFBD] Error saving rating: {e}")
+        
+        # Final commit
+        await session.commit()
+        return saved
+
     async def _save_team_stats(self, session: AsyncSession, stats: List[Dict]) -> int:
         """Save team statistics."""
         saved = 0

@@ -17,6 +17,7 @@ IMPLEMENTED COLLECTORS:
     collector_11_wehoop.py    - wehoop (WNBA PBP, box scores, player stats) - FREE
     collector_12_hoopr.py     - hoopR (NBA/NCAAB games, rosters, player/team stats) - FREE
     collector_13_cfl.py       - CFL Official API (CFL games, rosters, stats) - FREE (API key req)
+    collector_14_action_network.py - Action Network (Public betting %, sharp money) - FREE (Selenium)
 """
 
 from app.services.collectors.base_collector import (
@@ -40,6 +41,7 @@ from app.services.collectors.collector_10_hockeyr import HockeyRCollector, hocke
 from app.services.collectors.collector_11_wehoop import WehoopCollector, wehoop_collector
 from app.services.collectors.collector_12_hoopr import HoopRCollector, hoopr_collector
 from app.services.collectors.collector_13_cfl import CFLCollector, cfl_collector
+from app.services.collectors.collector_14_action_network import ActionNetworkCollector, action_network_collector
 
 __all__ = [
     "BaseCollector",
@@ -73,4 +75,6 @@ __all__ = [
     "hoopr_collector",
     "CFLCollector",
     "cfl_collector",
+    "ActionNetworkCollector",
+    "action_network_collector",
 ]

@@ -331,6 +331,25 @@ class ActionNetworkCollector(BaseCollector):
                     logger.warning(f"[ActionNetwork] Error collecting {sport}: {e}")
                     continue
             
+            # Deduplicate games (same sport/home/away/date)
+            seen = set()
+            unique_betting = []
+            for game in data["public_betting"]:
+                key = (
+                    game.get("sport_code", ""),
+                    game.get("home_team", ""),
+                    game.get("away_team", ""),
+                    str(game.get("game_date", ""))
+                )
+                if key not in seen:
+                    seen.add(key)
+                    unique_betting.append(game)
+            
+            data["public_betting"] = unique_betting
+            total_records = len(unique_betting)
+            
+            logger.info(f"[ActionNetwork] After deduplication: {total_records} unique games")
+            
             # Analyze for sharp indicators
             sharp_indicators = self._detect_sharp_indicators(data["public_betting"])
             data["sharp_indicators"] = sharp_indicators

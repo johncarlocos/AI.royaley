@@ -1,1125 +1,742 @@
 """
-ROYALEY - Matchstat Tennis API Collector
-Phase 1: Data Collection Services
+Collector 19: Matchstat Tennis API
+RapidAPI Tennis API for ATP, WTA, and ITF data
 
-Collects comprehensive ATP/WTA tennis data from Matchstat.com via RapidAPI.
-- Player rankings (ATP/WTA live rankings)
-- Player profiles and career stats
-- Head-to-head records
-- Match results and schedules
-- Surface performance stats
-- Tournament data
+API: https://rapidapi.com/jjrm365-kIFr3Nx_odV/api/tennis-api-atp-wta-itf
+Rate Limit: 2 requests/second (0.5s delay)
+Cost: $49/month
 
-Data Source:
-- https://matchstat.com/
-- RapidAPI: tennis-api-atp-wta-itf
-- Endpoint: https://tennis-api-atp-wta-itf.p.rapidapi.com
-
-$49/mo subscription via RapidAPI
-
-Tables Filled:
-- sports - Sport definitions (ATP, WTA)
-- teams - Tournament/event entities
-- players - Player info with rankings
-- seasons - Season definitions
-- games - Match records with scores
-- team_stats - Tournament statistics
-- player_stats - Detailed player stats (career, surface, serve/return)
+Endpoints used:
+- /{tour}/ranking/singles/ - Rankings
+- /{tour}/player/ - All players list
+- /{tour}/player/profile/{id} - Player profile
+- /{tour}/player/match-stats/{id} - Player match statistics
+- /{tour}/player/surface-summary/{id} - Surface breakdown
+- /{tour}/player/past-matches/{id} - Historical matches
+- /{tour}/tournament/calendar/{year} - Tournament calendar
+- /{tour}/tournament/results/{id} - Tournament match results
 """
 
+import httpx
 import asyncio
 import logging
-from datetime import datetime, date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID, uuid4
-import random
-
-import httpx
-
-from sqlalchemy import select, and_, or_, func
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.config import settings
-from app.models import Sport, Team, Game, GameStatus, Player, PlayerStats, TeamStats, Season
-from app.services.collectors.base_collector import (
-    BaseCollector,
-    CollectorResult,
-    collector_manager,
-)
+from datetime import datetime, date
+from typing import Optional, Dict, List, Any
+from .base_collector import BaseCollector
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# API CONFIGURATION
-# =============================================================================
-
-RAPIDAPI_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
-RAPIDAPI_BASE = f"https://{RAPIDAPI_HOST}"
-
-# Default API key (can be overridden by environment variable)
-DEFAULT_API_KEY = "4d3f34e709msh3ef002f589a50a2p10d455jsnfd280f6cde41"
-
-# Tennis tours
-TENNIS_TOURS = {
-    "ATP": {"name": "ATP Tour (Men's)", "code": "atp", "gender": "male"},
-    "WTA": {"name": "WTA Tour (Women's)", "code": "wta", "gender": "female"},
-}
-
-# Surface types for tennis
-SURFACES = ["Hard", "Clay", "Grass", "Indoor", "Carpet"]
-
-# Grand Slam tournaments
-GRAND_SLAMS = [
-    "Australian Open",
-    "Roland Garros", 
-    "Wimbledon",
-    "US Open"
-]
-
-# Player stat types to collect
-PLAYER_STAT_TYPES = [
-    # Career stats
-    "career_titles", "career_wins", "career_losses", "career_win_pct",
-    "career_prize_money", "current_ranking", "highest_ranking", "ranking_points",
-    # Service stats
-    "aces_per_match", "double_faults_per_match", "first_serve_pct",
-    "first_serve_won_pct", "second_serve_won_pct", "break_points_saved_pct",
-    "service_games_won_pct", "service_points_won_pct",
-    # Return stats
-    "first_return_won_pct", "second_return_won_pct", "break_points_converted_pct",
-    "return_games_won_pct", "return_points_won_pct",
-    # Surface stats
-    "hard_wins", "hard_losses", "hard_win_pct",
-    "clay_wins", "clay_losses", "clay_win_pct",
-    "grass_wins", "grass_losses", "grass_win_pct",
-    "indoor_wins", "indoor_losses", "indoor_win_pct",
-    # Recent form
-    "ytd_wins", "ytd_losses", "ytd_titles", "ytd_prize_money",
-    # H2H stats
-    "h2h_record",
-]
-
-
-# =============================================================================
-# MATCHSTAT TENNIS COLLECTOR CLASS
-# =============================================================================
-
 class MatchstatCollector(BaseCollector):
-    """Collector for Tennis data via Matchstat/RapidAPI."""
+    """Collector for Matchstat Tennis API (ATP/WTA/ITF)"""
     
     name = "matchstat"
     
-    def __init__(self):
-        super().__init__(
-            name="matchstat",
-            base_url=RAPIDAPI_BASE,
-            rate_limit=0.5,  # 2 requests per second max
-        )
-        self._api_key = getattr(settings, 'MATCHSTAT_API_KEY', None) or \
-                        getattr(settings, 'RAPIDAPI_KEY', None) or \
-                        DEFAULT_API_KEY
+    # RapidAPI configuration
+    BASE_URL = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2"
+    API_KEY = "4d3f34e709msh3ef002f589a50a2p10d455jsnfd280f6cde41"
+    RATE_LIMIT_DELAY = 0.5  # 2 requests per second
     
-    def _get_headers(self) -> Dict[str, str]:
-        """Get RapidAPI headers with authentication."""
-        return {
-            "X-RapidAPI-Key": self._api_key,
-            "X-RapidAPI-Host": RAPIDAPI_HOST,
-            "Accept": "application/json",
+    TOURS = ["atp", "wta"]
+    
+    def __init__(self, db_session=None):
+        super().__init__(db_session)
+        self.headers = {
+            "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com",
+            "x-rapidapi-key": self.API_KEY
         }
+        logger.info("Registered collector: Matchstat Tennis API")
     
-    async def _api_get(self, endpoint: str, params: Dict[str, Any] = None) -> Optional[Any]:
-        """Make authenticated GET request to RapidAPI."""
-        url = f"{RAPIDAPI_BASE}{endpoint}"
+    async def _make_request(self, endpoint: str) -> Optional[Dict]:
+        """Make API request with rate limiting"""
+        url = f"{self.BASE_URL}{endpoint}"
+        
+        await asyncio.sleep(self.RATE_LIMIT_DELAY)
         
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(
-                    url,
-                    headers=self._get_headers(),
-                    params=params
-                )
+                response = await client.get(url, headers=self.headers)
                 
                 if response.status_code == 200:
                     return response.json()
-                elif response.status_code == 401:
-                    logger.error("[Matchstat] Authentication failed - check RapidAPI key")
+                elif response.status_code == 404:
+                    logger.warning(f"[Matchstat] API error 404: {endpoint}")
                     return None
-                elif response.status_code == 403:
-                    logger.error("[Matchstat] Access forbidden - check subscription")
-                    return None
-                elif response.status_code == 429:
-                    logger.warning("[Matchstat] Rate limited - waiting...")
-                    await asyncio.sleep(5)
-                    return await self._api_get(endpoint, params)
                 else:
                     logger.warning(f"[Matchstat] API error {response.status_code}: {endpoint}")
-                    logger.debug(f"[Matchstat] Response: {response.text[:500]}")
                     return None
                     
         except Exception as e:
-            logger.error(f"[Matchstat] Request error: {e}")
+            logger.error(f"[Matchstat] Request error for {endpoint}: {e}")
             return None
-
-    async def validate(self, data: Any) -> bool:
-        """Validate collected data."""
-        if data is None:
-            return False
-        if hasattr(data, 'success'):
-            return data.success
-        if isinstance(data, dict):
-            return bool(data)
-        return False
-
-    # =========================================================================
-    # MAIN COLLECT METHOD
-    # =========================================================================
     
-    async def collect(
-        self,
-        years_back: int = 10,
-        collect_type: str = "all",
-        tours: List[str] = None,
-    ) -> CollectorResult:
+    # =====================================================
+    # API FETCH METHODS
+    # =====================================================
+    
+    async def fetch_rankings(self, tour: str) -> List[Dict]:
+        """Fetch current rankings for a tour"""
+        endpoint = f"/{tour}/ranking/singles/"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    async def fetch_all_players(self, tour: str) -> List[Dict]:
+        """Fetch all players for a tour"""
+        endpoint = f"/{tour}/player/"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    async def fetch_player_profile(self, tour: str, player_id: int) -> Optional[Dict]:
+        """Fetch player profile"""
+        endpoint = f"/{tour}/player/profile/{player_id}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict):
+            if "data" in data:
+                return data["data"]
+            return data
+        return None
+    
+    async def fetch_player_match_stats(self, tour: str, player_id: int) -> Optional[Dict]:
+        """Fetch player match statistics"""
+        endpoint = f"/{tour}/player/match-stats/{player_id}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict):
+            if "data" in data:
+                return data["data"]
+            return data
+        return None
+    
+    async def fetch_player_surface_summary(self, tour: str, player_id: int) -> Optional[Dict]:
+        """Fetch player surface breakdown stats"""
+        endpoint = f"/{tour}/player/surface-summary/{player_id}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict):
+            if "data" in data:
+                return data["data"]
+            return data
+        return None
+    
+    async def fetch_player_past_matches(self, tour: str, player_id: int) -> List[Dict]:
+        """Fetch player's past matches"""
+        endpoint = f"/{tour}/player/past-matches/{player_id}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    async def fetch_tournament_calendar(self, tour: str, year: int) -> List[Dict]:
+        """Fetch tournament calendar for a year"""
+        endpoint = f"/{tour}/tournament/calendar/{year}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    async def fetch_tournament_results(self, tour: str, tournament_id: int) -> List[Dict]:
+        """Fetch tournament match results"""
+        endpoint = f"/{tour}/tournament/results/{tournament_id}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    async def fetch_fixtures_by_date(self, tour: str, date_str: str) -> List[Dict]:
+        """Fetch fixtures/matches for a specific date (YYYY-MM-DD)"""
+        endpoint = f"/{tour}/fixtures/{date_str}"
+        data = await self._make_request(endpoint)
+        
+        if data and isinstance(data, dict) and "data" in data:
+            return data["data"]
+        elif data and isinstance(data, list):
+            return data
+        return []
+    
+    # =====================================================
+    # MAIN COLLECTION METHOD
+    # =====================================================
+    
+    async def collect(self, tours: List[str] = None, years_back: int = 1) -> Dict[str, Any]:
         """
-        Collect Tennis data from Matchstat API.
+        Main collection method for Tennis data
         
         Args:
-            years_back: Number of years to collect (default: 10)
-            collect_type: Type of data to collect:
-                - "all": All data types
-                - "rankings": Current rankings only
-                - "players": Player profiles only
-                - "matches": Match results only
-                - "stats": Player stats only
-                - "h2h": Head-to-head records only
-            tours: List of tours to collect ["ATP", "WTA"] (default: both)
-        
-        Returns:
-            CollectorResult with collected data
+            tours: List of tours to collect ['atp', 'wta'] or None for both
+            years_back: Number of years of historical data to collect
         """
         if tours is None:
-            tours = ["ATP", "WTA"]
+            tours = self.TOURS
         
         current_year = datetime.now().year
-        
-        data = {
-            "players": [],
-            "rankings": [],
-            "matches": [],
-            "player_stats": [],
-            "h2h": [],
-            "tournaments": [],
-            "seasons": [],
-        }
-        total_records = 0
-        errors = []
-        
         start_year = current_year - years_back + 1
-        end_year = current_year
         
-        logger.info(f"[Matchstat] Collecting Tennis data for {tours}, years {start_year} to {end_year}")
+        logger.info(f"[Matchstat] Collecting Tennis data for {tours}, years {start_year} to {current_year}")
+        
+        total_records = 0
         
         for tour in tours:
-            tour_code = TENNIS_TOURS[tour]["code"]
-            logger.info(f"[Matchstat] Collecting {tour} data...")
+            tour_lower = tour.lower()
+            logger.info(f"[Matchstat] Collecting {tour.upper()} data...")
             
-            # Collect current rankings
-            if collect_type in ["all", "rankings"]:
-                try:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    rankings = await self._collect_rankings(tour_code)
-                    data["rankings"].extend(rankings)
-                    total_records += len(rankings)
-                    logger.info(f"[Matchstat] {tour}: {len(rankings)} rankings")
-                except Exception as e:
-                    logger.warning(f"[Matchstat] Error collecting {tour} rankings: {e}")
-                    errors.append(f"{tour} rankings: {str(e)[:50]}")
+            # 1. Collect rankings (includes player IDs)
+            rankings = await self.fetch_rankings(tour_lower)
+            logger.info(f"[Matchstat] {tour.upper()}: {len(rankings)} rankings")
             
-            # Collect player profiles (from rankings)
-            if collect_type in ["all", "players"]:
-                try:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    players = await self._collect_players(tour_code, data.get("rankings", []))
-                    data["players"].extend(players)
-                    total_records += len(players)
-                    logger.info(f"[Matchstat] {tour}: {len(players)} players")
-                except Exception as e:
-                    logger.warning(f"[Matchstat] Error collecting {tour} players: {e}")
-                    errors.append(f"{tour} players: {str(e)[:50]}")
+            if rankings:
+                # Save rankings and get player IDs
+                player_ids = await self._save_rankings(rankings, tour.upper())
+                total_records += len(rankings)
+                
+                # 2. Collect player profiles for ranked players (top 200)
+                top_players = player_ids[:200] if len(player_ids) > 200 else player_ids
+                profiles_collected = 0
+                stats_collected = 0
+                
+                for player_id in top_players:
+                    # Get profile
+                    profile = await self.fetch_player_profile(tour_lower, player_id)
+                    if profile:
+                        await self._save_player_profile(profile, tour.upper())
+                        profiles_collected += 1
+                    
+                    # Get match stats
+                    stats = await self.fetch_player_match_stats(tour_lower, player_id)
+                    if stats:
+                        await self._save_player_stats(stats, player_id, tour.upper())
+                        stats_collected += 1
+                    
+                    # Get surface stats
+                    surface = await self.fetch_player_surface_summary(tour_lower, player_id)
+                    if surface:
+                        await self._save_surface_stats(surface, player_id, tour.upper())
+                
+                logger.info(f"[Matchstat] {tour.upper()}: {profiles_collected} profiles, {stats_collected} stats")
+                total_records += profiles_collected + stats_collected
             
-            # Collect player stats
-            if collect_type in ["all", "stats"]:
-                try:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    stats = await self._collect_player_stats(tour_code, data.get("players", []))
-                    data["player_stats"].extend(stats)
-                    total_records += len(stats)
-                    logger.info(f"[Matchstat] {tour}: {len(stats)} player stats")
-                except Exception as e:
-                    logger.warning(f"[Matchstat] Error collecting {tour} stats: {e}")
-                    errors.append(f"{tour} stats: {str(e)[:50]}")
-            
-            # Collect matches by year
-            if collect_type in ["all", "matches"]:
-                for year in range(start_year, end_year + 1):
-                    try:
-                        await asyncio.sleep(random.uniform(0.5, 1.0))
-                        matches = await self._collect_matches(tour_code, year)
-                        data["matches"].extend(matches)
-                        total_records += len(matches)
-                        logger.info(f"[Matchstat] {tour} {year}: {len(matches)} matches")
-                        
-                        # Add season record
-                        season_data = {
-                            "sport_code": tour,
-                            "year": year,
-                            "name": f"{tour} {year}",
-                        }
-                        data["seasons"].append(season_data)
-                        
-                    except Exception as e:
-                        logger.warning(f"[Matchstat] Error collecting {tour} {year} matches: {e}")
-                        errors.append(f"{tour} {year}: {str(e)[:50]}")
-            
-            # Collect tournaments
-            if collect_type in ["all", "tournaments"]:
-                try:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    tournaments = await self._collect_tournaments(tour_code)
-                    data["tournaments"].extend(tournaments)
+            # 3. Collect tournaments and matches by year
+            for year in range(start_year, current_year + 1):
+                tournaments = await self.fetch_tournament_calendar(tour_lower, year)
+                logger.info(f"[Matchstat] {tour.upper()} {year}: {len(tournaments)} tournaments")
+                
+                if tournaments:
+                    await self._save_tournaments(tournaments, tour.upper())
                     total_records += len(tournaments)
-                    logger.info(f"[Matchstat] {tour}: {len(tournaments)} tournaments")
-                except Exception as e:
-                    logger.warning(f"[Matchstat] Error collecting {tour} tournaments: {e}")
-                    errors.append(f"{tour} tournaments: {str(e)[:50]}")
+                    
+                    # Collect results for each tournament
+                    matches_collected = 0
+                    for tournament in tournaments[:50]:  # Limit to 50 tournaments per year
+                        t_id = tournament.get("id")
+                        if t_id:
+                            results = await self.fetch_tournament_results(tour_lower, t_id)
+                            if results:
+                                await self._save_matches_batched(results, tour.upper())
+                                matches_collected += len(results)
+                    
+                    logger.info(f"[Matchstat] {tour.upper()} {year}: {matches_collected} matches")
+                    total_records += matches_collected
         
         logger.info(f"[Matchstat] Total records collected: {total_records}")
-        
-        return CollectorResult(
-            success=total_records > 0,
-            data=data,
-            records_count=total_records,
-            error="; ".join(errors[:5]) if errors else None
-        )
-
-    # =========================================================================
-    # RANKINGS COLLECTION
-    # =========================================================================
+        return {"records": total_records}
     
-    async def _collect_rankings(self, tour_code: str) -> List[Dict[str, Any]]:
-        """Collect current rankings for a tour."""
-        rankings = []
-        
-        # Try different endpoint formats
-        endpoints = [
-            f"/tennis/v2/{tour_code}/live-ranking",
-            f"/{tour_code}/live-ranking",
-            f"/tennis/{tour_code}/rankings",
-            f"/{tour_code}/rankings",
-        ]
-        
-        response = None
-        for endpoint in endpoints:
-            response = await self._api_get(endpoint)
-            if response:
-                logger.info(f"[Matchstat] Rankings endpoint working: {endpoint}")
-                break
-        
-        if not response:
-            logger.warning(f"[Matchstat] No rankings response for {tour_code}")
-            return rankings
-        
-        # Handle different response formats
-        ranking_data = response if isinstance(response, list) else response.get("rankings", response.get("data", []))
-        
-        for rank_data in ranking_data:
-            try:
-                ranking = {
-                    "tour": tour_code.upper(),
-                    "rank": rank_data.get("rank", rank_data.get("position", rank_data.get("ranking"))),
-                    "player_id": rank_data.get("player_id", rank_data.get("playerId", rank_data.get("id"))),
-                    "player_name": rank_data.get("player_name", rank_data.get("playerName", rank_data.get("name", rank_data.get("full_name")))),
-                    "country": rank_data.get("country", rank_data.get("nationality", rank_data.get("country_code"))),
-                    "points": rank_data.get("points", rank_data.get("ranking_points", rank_data.get("rankingPoints"))),
-                    "move": rank_data.get("move", rank_data.get("movement", 0)),
-                    "tournaments_played": rank_data.get("tournaments_played", rank_data.get("tournamentsPlayed")),
-                }
-                rankings.append(ranking)
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error parsing ranking: {e}")
-                continue
-        
-        return rankings
-
-    # =========================================================================
-    # PLAYERS COLLECTION
-    # =========================================================================
-    
-    async def _collect_players(self, tour_code: str, rankings: List[Dict]) -> List[Dict[str, Any]]:
-        """Collect player profiles."""
-        players = []
-        seen_players = set()
-        
-        # First, get players from rankings
-        for rank_data in rankings:
-            if rank_data.get("tour", "").lower() != tour_code.lower():
-                continue
-                
-            player_id = rank_data.get("player_id")
-            player_name = rank_data.get("player_name", "")
-            
-            if not player_name or player_name in seen_players:
-                continue
-            seen_players.add(player_name)
-            
-            player = {
-                "tour": tour_code.upper(),
-                "external_id": f"matchstat_{tour_code}_{player_id}" if player_id else f"matchstat_{tour_code}_{player_name.replace(' ', '_').lower()}",
-                "player_id": player_id,
-                "name": player_name,
-                "country": rank_data.get("country"),
-                "current_ranking": rank_data.get("rank"),
-                "ranking_points": rank_data.get("points"),
-            }
-            players.append(player)
-        
-        # Try to get additional player details
-        for player in players[:100]:  # Limit to top 100 to avoid rate limits
-            player_id = player.get("player_id")
-            if not player_id:
-                continue
-            
-            await asyncio.sleep(random.uniform(0.3, 0.5))
-            
-            # Try different player detail endpoints
-            endpoints = [
-                f"/tennis/v2/{tour_code}/player/{player_id}",
-                f"/{tour_code}/player/{player_id}",
-                f"/tennis/{tour_code}/players/{player_id}",
-            ]
-            
-            for endpoint in endpoints:
-                response = await self._api_get(endpoint)
-                if response:
-                    # Update player with additional details
-                    player["birth_date"] = response.get("birth_date", response.get("birthDate", response.get("dob")))
-                    player["height"] = response.get("height")
-                    player["weight"] = response.get("weight")
-                    player["turned_pro"] = response.get("turned_pro", response.get("turnedPro"))
-                    player["plays"] = response.get("plays", response.get("hand"))  # Right/Left handed
-                    player["backhand"] = response.get("backhand")  # One/Two handed
-                    player["career_titles"] = response.get("career_titles", response.get("careerTitles", response.get("titles")))
-                    player["career_wins"] = response.get("career_wins", response.get("careerWins", response.get("wins")))
-                    player["career_losses"] = response.get("career_losses", response.get("careerLosses", response.get("losses")))
-                    player["prize_money"] = response.get("prize_money", response.get("prizeMoney", response.get("career_prize_money")))
-                    player["highest_ranking"] = response.get("highest_ranking", response.get("highestRanking", response.get("best_ranking")))
-                    break
-        
-        return players
-
-    # =========================================================================
-    # PLAYER STATS COLLECTION
-    # =========================================================================
-    
-    async def _collect_player_stats(self, tour_code: str, players: List[Dict]) -> List[Dict[str, Any]]:
-        """Collect player statistics."""
-        stats = []
-        
-        for player in players[:100]:  # Limit to top 100
-            player_id = player.get("player_id")
-            player_name = player.get("name", "")
-            
-            if not player_id:
-                continue
-            
-            await asyncio.sleep(random.uniform(0.3, 0.5))
-            
-            # Try to get player stats
-            endpoints = [
-                f"/tennis/v2/{tour_code}/player/{player_id}/stats",
-                f"/{tour_code}/player/{player_id}/stats",
-                f"/tennis/{tour_code}/players/{player_id}/statistics",
-            ]
-            
-            response = None
-            for endpoint in endpoints:
-                response = await self._api_get(endpoint)
-                if response:
-                    break
-            
-            if not response:
-                # Use basic stats from player profile
-                if player.get("career_wins") is not None:
-                    wins = player.get("career_wins", 0)
-                    losses = player.get("career_losses", 0)
-                    total = wins + losses
-                    win_pct = (wins / total * 100) if total > 0 else 0
-                    
-                    stats.append({
-                        "tour": tour_code.upper(),
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "stat_type": "matchstat_career_wins",
-                        "value": wins,
-                    })
-                    stats.append({
-                        "tour": tour_code.upper(),
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "stat_type": "matchstat_career_losses",
-                        "value": losses,
-                    })
-                    stats.append({
-                        "tour": tour_code.upper(),
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "stat_type": "matchstat_career_win_pct",
-                        "value": win_pct,
-                    })
-                continue
-            
-            # Parse detailed stats
-            stat_data = response if isinstance(response, dict) else {}
-            
-            # Service stats
-            for stat_key in ["aces", "double_faults", "first_serve_pct", "first_serve_won", 
-                           "second_serve_won", "break_points_saved", "service_games_won"]:
-                value = stat_data.get(stat_key, stat_data.get(self._to_camel_case(stat_key)))
-                if value is not None:
-                    stats.append({
-                        "tour": tour_code.upper(),
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "stat_type": f"matchstat_{stat_key}",
-                        "value": float(value) if isinstance(value, (int, float, str)) else 0,
-                    })
-            
-            # Return stats
-            for stat_key in ["first_return_won", "second_return_won", "break_points_converted", 
-                           "return_games_won"]:
-                value = stat_data.get(stat_key, stat_data.get(self._to_camel_case(stat_key)))
-                if value is not None:
-                    stats.append({
-                        "tour": tour_code.upper(),
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "stat_type": f"matchstat_{stat_key}",
-                        "value": float(value) if isinstance(value, (int, float, str)) else 0,
-                    })
-            
-            # Surface stats
-            for surface in ["hard", "clay", "grass", "indoor"]:
-                surface_data = stat_data.get(f"{surface}_stats", stat_data.get(surface, {}))
-                if isinstance(surface_data, dict):
-                    wins = surface_data.get("wins", 0)
-                    losses = surface_data.get("losses", 0)
-                    if wins or losses:
-                        stats.append({
-                            "tour": tour_code.upper(),
-                            "player_name": player_name,
-                            "player_id": player_id,
-                            "stat_type": f"matchstat_{surface}_wins",
-                            "value": wins,
-                        })
-                        stats.append({
-                            "tour": tour_code.upper(),
-                            "player_name": player_name,
-                            "player_id": player_id,
-                            "stat_type": f"matchstat_{surface}_losses",
-                            "value": losses,
-                        })
-        
-        return stats
-    
-    def _to_camel_case(self, snake_str: str) -> str:
-        """Convert snake_case to camelCase."""
-        components = snake_str.split('_')
-        return components[0] + ''.join(x.title() for x in components[1:])
-
-    # =========================================================================
-    # MATCHES COLLECTION
-    # =========================================================================
-    
-    async def _collect_matches(self, tour_code: str, year: int) -> List[Dict[str, Any]]:
-        """Collect match results for a year."""
-        matches = []
-        
-        # Try different match endpoints
-        endpoints = [
-            f"/tennis/v2/{tour_code}/results/{year}",
-            f"/{tour_code}/results/{year}",
-            f"/tennis/{tour_code}/matches/{year}",
-            f"/{tour_code}/matches?year={year}",
-        ]
-        
-        response = None
-        for endpoint in endpoints:
-            response = await self._api_get(endpoint)
-            if response:
-                logger.info(f"[Matchstat] Matches endpoint working: {endpoint}")
-                break
-        
-        if not response:
-            # Try getting matches by tournament
-            tournaments = await self._collect_tournaments(tour_code)
-            for tournament in tournaments[:20]:  # Limit tournaments
-                tournament_id = tournament.get("tournament_id")
-                if not tournament_id:
-                    continue
-                
-                await asyncio.sleep(random.uniform(0.3, 0.5))
-                
-                tournament_matches = await self._api_get(
-                    f"/tennis/v2/{tour_code}/tournament/{tournament_id}/matches",
-                    {"year": year}
-                )
-                if tournament_matches:
-                    match_list = tournament_matches if isinstance(tournament_matches, list) else tournament_matches.get("matches", [])
-                    for match_data in match_list:
-                        match = self._parse_match(match_data, tour_code, year, tournament.get("name"))
-                        if match:
-                            matches.append(match)
-            
-            return matches
-        
-        # Parse matches from response
-        match_list = response if isinstance(response, list) else response.get("matches", response.get("results", response.get("data", [])))
-        
-        for match_data in match_list:
-            match = self._parse_match(match_data, tour_code, year)
-            if match:
-                matches.append(match)
-        
-        return matches
-    
-    def _parse_match(self, match_data: Dict, tour_code: str, year: int, tournament_name: str = None) -> Optional[Dict[str, Any]]:
-        """Parse a match from API response."""
-        try:
-            match_id = match_data.get("match_id", match_data.get("matchId", match_data.get("id")))
-            
-            # Get players
-            player1 = match_data.get("player1", match_data.get("player1_name", match_data.get("home_player")))
-            player2 = match_data.get("player2", match_data.get("player2_name", match_data.get("away_player")))
-            
-            if isinstance(player1, dict):
-                player1 = player1.get("name", player1.get("full_name", ""))
-            if isinstance(player2, dict):
-                player2 = player2.get("name", player2.get("full_name", ""))
-            
-            if not player1 or not player2:
-                return None
-            
-            # Get score
-            score = match_data.get("score", match_data.get("result", ""))
-            winner = match_data.get("winner", match_data.get("winner_name"))
-            if isinstance(winner, dict):
-                winner = winner.get("name", "")
-            
-            # Get match date
-            match_date = match_data.get("date", match_data.get("match_date", match_data.get("startTime")))
-            if isinstance(match_date, str):
-                try:
-                    scheduled_at = datetime.fromisoformat(match_date.replace("Z", "+00:00"))
-                except:
-                    scheduled_at = datetime(year, 1, 1)
-            else:
-                scheduled_at = datetime(year, 1, 1)
-            
-            # Get tournament
-            tournament = tournament_name or match_data.get("tournament", match_data.get("tournament_name", match_data.get("event")))
-            if isinstance(tournament, dict):
-                tournament = tournament.get("name", "")
-            
-            # Determine status
-            status = "final" if score and winner else "scheduled"
-            
-            match = {
-                "tour": tour_code.upper(),
-                "external_id": f"matchstat_{tour_code}_{match_id}" if match_id else f"matchstat_{tour_code}_{year}_{player1}_{player2}".replace(" ", "_"),
-                "year": year,
-                "player1_name": player1,
-                "player2_name": player2,
-                "winner_name": winner,
-                "score": score,
-                "tournament": tournament,
-                "surface": match_data.get("surface"),
-                "round": match_data.get("round", match_data.get("round_name")),
-                "scheduled_at": scheduled_at,
-                "status": status,
-                "duration_minutes": match_data.get("duration", match_data.get("match_duration")),
-                # Set scores (parse from score string if needed)
-                "sets": self._parse_sets(score),
-            }
-            
-            return match
-            
-        except Exception as e:
-            logger.debug(f"[Matchstat] Error parsing match: {e}")
-            return None
-    
-    def _parse_sets(self, score: str) -> List[Dict[str, int]]:
-        """Parse set scores from score string like '6-4 7-5 6-3'."""
-        sets = []
-        if not score:
-            return sets
-        
-        try:
-            # Handle different score formats
-            score = str(score).strip()
-            set_scores = score.split()
-            
-            for set_score in set_scores:
-                if '-' in set_score:
-                    parts = set_score.replace('(', ' ').replace(')', '').split('-')
-                    if len(parts) >= 2:
-                        try:
-                            p1_games = int(parts[0].split()[0])
-                            p2_games = int(parts[1].split()[0])
-                            sets.append({"p1": p1_games, "p2": p2_games})
-                        except (ValueError, IndexError):
-                            continue
-        except:
-            pass
-        
-        return sets
-
-    # =========================================================================
-    # TOURNAMENTS COLLECTION
-    # =========================================================================
-    
-    async def _collect_tournaments(self, tour_code: str) -> List[Dict[str, Any]]:
-        """Collect tournament information."""
-        tournaments = []
-        
-        # Try different tournament endpoints
-        endpoints = [
-            f"/tennis/v2/{tour_code}/tournaments",
-            f"/{tour_code}/tournaments",
-            f"/tennis/{tour_code}/events",
-            f"/{tour_code}/events",
-        ]
-        
-        response = None
-        for endpoint in endpoints:
-            response = await self._api_get(endpoint)
-            if response:
-                break
-        
-        if not response:
-            return tournaments
-        
-        tournament_list = response if isinstance(response, list) else response.get("tournaments", response.get("events", response.get("data", [])))
-        
-        for t_data in tournament_list:
-            try:
-                tournament = {
-                    "tour": tour_code.upper(),
-                    "tournament_id": t_data.get("tournament_id", t_data.get("tournamentId", t_data.get("id"))),
-                    "name": t_data.get("name", t_data.get("tournament_name", t_data.get("title"))),
-                    "location": t_data.get("location", t_data.get("city")),
-                    "country": t_data.get("country"),
-                    "surface": t_data.get("surface"),
-                    "category": t_data.get("category", t_data.get("level")),  # Grand Slam, Masters, ATP 500, etc.
-                    "prize_money": t_data.get("prize_money", t_data.get("prizeMoney")),
-                    "start_date": t_data.get("start_date", t_data.get("startDate")),
-                    "end_date": t_data.get("end_date", t_data.get("endDate")),
-                }
-                tournaments.append(tournament)
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error parsing tournament: {e}")
-                continue
-        
-        return tournaments
-
-    # =========================================================================
-    # HEAD-TO-HEAD COLLECTION
-    # =========================================================================
-    
-    async def _collect_h2h(self, tour_code: str, player1_id: str, player2_id: str) -> Optional[Dict[str, Any]]:
-        """Collect head-to-head record between two players."""
-        
-        # Try different H2H endpoints
-        endpoints = [
-            f"/tennis/v2/{tour_code}/h2h/{player1_id}/{player2_id}",
-            f"/{tour_code}/h2h/{player1_id}/{player2_id}",
-            f"/tennis/{tour_code}/head-to-head?player1={player1_id}&player2={player2_id}",
-        ]
-        
-        response = None
-        for endpoint in endpoints:
-            response = await self._api_get(endpoint)
-            if response:
-                break
-        
-        if not response:
-            return None
-        
-        try:
-            h2h = {
-                "tour": tour_code.upper(),
-                "player1_id": player1_id,
-                "player2_id": player2_id,
-                "player1_wins": response.get("player1_wins", response.get("p1Wins", 0)),
-                "player2_wins": response.get("player2_wins", response.get("p2Wins", 0)),
-                "matches": response.get("matches", []),
-            }
-            return h2h
-        except Exception as e:
-            logger.debug(f"[Matchstat] Error parsing H2H: {e}")
-            return None
-
-    # =========================================================================
+    # =====================================================
     # DATABASE SAVE METHODS
-    # =========================================================================
+    # =====================================================
     
-    async def save_to_database(self, data: Dict[str, Any], session: AsyncSession) -> int:
-        """Save all collected data to database with incremental commits."""
-        total_saved = 0
+    async def _save_rankings(self, rankings: List[Dict], tour: str) -> List[int]:
+        """Save rankings and return player IDs"""
+        if not self.db_session:
+            return [r.get("id") or r.get("playerId") for r in rankings if r.get("id") or r.get("playerId")]
         
-        # Save seasons first
-        if data.get("seasons"):
-            try:
-                saved = await self._save_seasons(session, data["seasons"])
-                await session.commit()
-                total_saved += saved
-                logger.info(f"[Matchstat] Saved {saved} seasons ✓")
-            except Exception as e:
-                logger.error(f"[Matchstat] Error saving seasons: {e}")
-                await session.rollback()
+        from app.models import Player, Sport, Season
         
-        # Save players
-        if data.get("players") or data.get("rankings"):
-            try:
-                # Combine players from rankings if no separate players
-                players = data.get("players", [])
-                if not players and data.get("rankings"):
-                    players = [{"tour": r["tour"], "name": r["player_name"], "external_id": f"matchstat_{r['tour']}_{r.get('player_id', r['player_name'])}",
-                               "current_ranking": r["rank"], "ranking_points": r.get("points"), "country": r.get("country")} 
-                              for r in data["rankings"]]
-                
-                saved = await self._save_players(session, players)
-                await session.commit()
-                total_saved += saved
-                logger.info(f"[Matchstat] Saved {saved} players ✓")
-            except Exception as e:
-                logger.error(f"[Matchstat] Error saving players: {e}")
-                await session.rollback()
-        
-        # Save matches
-        if data.get("matches"):
-            try:
-                saved = await self._save_matches_batched(session, data["matches"])
-                total_saved += saved
-                logger.info(f"[Matchstat] Saved {saved} matches ✓")
-            except Exception as e:
-                logger.error(f"[Matchstat] Error saving matches: {e}")
-                await session.rollback()
-        
-        # Save player stats
-        if data.get("player_stats"):
-            try:
-                saved = await self._save_player_stats_batched(session, data["player_stats"])
-                total_saved += saved
-                logger.info(f"[Matchstat] Saved {saved} player stats ✓")
-            except Exception as e:
-                logger.error(f"[Matchstat] Error saving player stats: {e}")
-                await session.rollback()
-        
-        # Save tournaments as teams
-        if data.get("tournaments"):
-            try:
-                saved = await self._save_tournaments(session, data["tournaments"])
-                await session.commit()
-                total_saved += saved
-                logger.info(f"[Matchstat] Saved {saved} tournaments ✓")
-            except Exception as e:
-                logger.error(f"[Matchstat] Error saving tournaments: {e}")
-                await session.rollback()
-        
-        return total_saved
-    
-    async def _get_or_create_sport(self, session: AsyncSession, tour_code: str) -> Sport:
-        """Get or create sport record for tennis tour."""
-        result = await session.execute(
-            select(Sport).where(Sport.code == tour_code)
-        )
-        sport = result.scalar_one_or_none()
-        
+        # Get or create sport
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
         if not sport:
-            tour_info = TENNIS_TOURS.get(tour_code, {"name": f"{tour_code} Tennis"})
-            sport = Sport(
-                code=tour_code,
-                name=tour_info["name"],
-                is_active=True
-            )
-            session.add(sport)
-            await session.flush()
+            sport = Sport(code=tour, name=f"Tennis {tour}", active=True)
+            self.db_session.add(sport)
+            self.db_session.commit()
         
-        return sport
-    
-    async def _get_or_create_season(
-        self, 
-        session: AsyncSession, 
-        sport_id: UUID, 
-        year: int
-    ) -> Season:
-        """Get or create season record."""
-        result = await session.execute(
-            select(Season).where(
-                and_(
-                    Season.sport_id == sport_id,
-                    Season.year == year
-                )
-            )
-        )
-        season = result.scalar_one_or_none()
-        
+        # Get or create current season
+        current_year = datetime.now().year
+        season = self.db_session.query(Season).filter_by(
+            sport_id=sport.id, year=current_year
+        ).first()
         if not season:
-            # Tennis season runs Jan-Nov
-            start_date = date(year, 1, 1)
-            end_date = date(year, 11, 30)
-            
             season = Season(
-                sport_id=sport_id,
-                year=year,
-                name=str(year),
-                start_date=start_date,
-                end_date=end_date,
-                is_current=(year == datetime.now().year)
+                sport_id=sport.id,
+                year=current_year,
+                name=f"{tour} {current_year}",
+                start_date=date(current_year, 1, 1),
+                end_date=date(current_year, 12, 31)
             )
-            session.add(season)
-            await session.flush()
+            self.db_session.add(season)
+            self.db_session.commit()
         
-        return season
-    
-    async def _save_seasons(self, session: AsyncSession, seasons: List[Dict]) -> int:
-        """Save season records."""
-        saved = 0
-        seen = set()
+        player_ids = []
         
-        for season_data in seasons:
-            key = (season_data["sport_code"], season_data["year"])
-            if key in seen:
+        for ranking in rankings:
+            player_id = ranking.get("id") or ranking.get("playerId")
+            if not player_id:
                 continue
-            seen.add(key)
             
-            try:
-                sport = await self._get_or_create_sport(session, season_data["sport_code"])
-                await self._get_or_create_season(session, sport.id, season_data["year"])
-                saved += 1
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error saving season: {e}")
-        
-        await session.flush()
-        return saved
-    
-    async def _save_players(self, session: AsyncSession, players: List[Dict]) -> int:
-        """Save player records."""
-        saved = 0
-        
-        for player_data in players:
-            try:
-                tour = player_data.get("tour", "ATP")
-                sport = await self._get_or_create_sport(session, tour)
-                external_id = player_data.get("external_id", f"matchstat_{tour}_{player_data['name'].replace(' ', '_').lower()}")
-                
-                result = await session.execute(
-                    select(Player).where(Player.external_id == external_id)
+            player_ids.append(player_id)
+            
+            # Get or create player
+            external_id = f"matchstat_{tour}_{player_id}"
+            player = self.db_session.query(Player).filter_by(external_id=external_id).first()
+            
+            player_data = ranking.get("player", {}) if isinstance(ranking.get("player"), dict) else {}
+            name = player_data.get("name") or ranking.get("name") or ranking.get("playerName", f"Player {player_id}")
+            country = player_data.get("countryAcr") or ranking.get("countryAcr") or ranking.get("country", "")
+            
+            rank = ranking.get("ranking") or ranking.get("rank") or ranking.get("position")
+            points = ranking.get("points") or ranking.get("rankingPoints", 0)
+            
+            if player:
+                player.name = name
+                player.jersey_number = str(rank) if rank else player.jersey_number
+                player.position = tour
+                player.birth_country = country
+            else:
+                player = Player(
+                    external_id=external_id,
+                    sport_id=sport.id,
+                    name=name,
+                    jersey_number=str(rank) if rank else None,
+                    position=tour,
+                    birth_country=country,
+                    active=True
                 )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    # Update existing player
-                    if player_data.get("current_ranking"):
-                        existing.jersey_number = str(player_data["current_ranking"])  # Store ranking in jersey_number
-                    if player_data.get("country"):
-                        existing.birth_place = player_data["country"]
-                else:
-                    player = Player(
-                        external_id=external_id,
-                        name=player_data["name"],
-                        position=tour,  # Use position to store tour type
-                        jersey_number=str(player_data.get("current_ranking", "")),
-                        birth_place=player_data.get("country"),
-                        height=player_data.get("height"),
-                        weight=player_data.get("weight"),
-                        is_active=True
-                    )
-                    session.add(player)
-                
-                saved += 1
-                
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error saving player: {e}")
+                self.db_session.add(player)
         
-        await session.flush()
-        return saved
+        self.db_session.commit()
+        return player_ids
     
-    async def _save_matches_batched(self, session: AsyncSession, matches: List[Dict], batch_size: int = 500) -> int:
-        """Save match records in batches."""
-        saved = 0
-        total = len(matches)
+    async def _save_player_profile(self, profile: Dict, tour: str):
+        """Save player profile details"""
+        if not self.db_session:
+            return
         
-        for i, match_data in enumerate(matches):
+        from app.models import Player, Sport
+        
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
+        if not sport:
+            return
+        
+        player_id = profile.get("id") or profile.get("playerId")
+        if not player_id:
+            return
+        
+        external_id = f"matchstat_{tour}_{player_id}"
+        player = self.db_session.query(Player).filter_by(external_id=external_id).first()
+        
+        if not player:
+            player = Player(
+                external_id=external_id,
+                sport_id=sport.id,
+                name=profile.get("name", f"Player {player_id}"),
+                position=tour,
+                active=True
+            )
+            self.db_session.add(player)
+        
+        # Update profile fields
+        if profile.get("name"):
+            player.name = profile["name"]
+        if profile.get("countryAcr"):
+            player.birth_country = profile["countryAcr"]
+        if profile.get("birthDate"):
             try:
-                tour = match_data.get("tour", "ATP")
-                sport = await self._get_or_create_sport(session, tour)
-                season = await self._get_or_create_season(session, sport.id, match_data["year"])
-                
-                external_id = match_data["external_id"]
-                
-                result = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
+                player.birth_date = datetime.fromisoformat(profile["birthDate"].replace("Z", "")).date()
+            except:
+                pass
+        if profile.get("height"):
+            player.height = str(profile["height"])
+        if profile.get("weight"):
+            player.weight = str(profile["weight"])
+        
+        self.db_session.commit()
+    
+    async def _save_player_stats(self, stats: Dict, player_id: int, tour: str):
+        """Save player match statistics"""
+        if not self.db_session or not stats:
+            return
+        
+        from app.models import PlayerStat, Player, Sport, Season
+        
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
+        if not sport:
+            return
+        
+        external_id = f"matchstat_{tour}_{player_id}"
+        player = self.db_session.query(Player).filter_by(external_id=external_id).first()
+        if not player:
+            return
+        
+        current_year = datetime.now().year
+        season = self.db_session.query(Season).filter_by(
+            sport_id=sport.id, year=current_year
+        ).first()
+        if not season:
+            return
+        
+        # Flatten stats into key-value pairs
+        stat_entries = []
+        
+        def flatten_dict(d, prefix=""):
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    flatten_dict(value, f"{prefix}{key}_")
+                elif isinstance(value, (int, float, str)) and value is not None:
+                    stat_entries.append((f"matchstat_{prefix}{key}", str(value)))
+        
+        flatten_dict(stats)
+        
+        # Save stats
+        for stat_type, value in stat_entries:
+            existing = self.db_session.query(PlayerStat).filter_by(
+                player_id=player.id,
+                season_id=season.id,
+                stat_type=stat_type
+            ).first()
+            
+            if existing:
+                existing.value = value
+            else:
+                stat = PlayerStat(
+                    player_id=player.id,
+                    season_id=season.id,
+                    stat_type=stat_type,
+                    value=value
                 )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    if match_data.get("status") == "final":
-                        existing.status = GameStatus.FINAL
-                else:
-                    status = GameStatus.FINAL if match_data.get("status") == "final" else GameStatus.SCHEDULED
+                self.db_session.add(stat)
+        
+        self.db_session.commit()
+    
+    async def _save_surface_stats(self, surface: Dict, player_id: int, tour: str):
+        """Save player surface statistics"""
+        if not self.db_session or not surface:
+            return
+        
+        from app.models import PlayerStat, Player, Sport, Season
+        
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
+        if not sport:
+            return
+        
+        external_id = f"matchstat_{tour}_{player_id}"
+        player = self.db_session.query(Player).filter_by(external_id=external_id).first()
+        if not player:
+            return
+        
+        current_year = datetime.now().year
+        season = self.db_session.query(Season).filter_by(
+            sport_id=sport.id, year=current_year
+        ).first()
+        if not season:
+            return
+        
+        # Handle both list and dict formats
+        surfaces = surface if isinstance(surface, list) else [surface]
+        
+        for surf_data in surfaces:
+            if not isinstance(surf_data, dict):
+                continue
+            
+            surface_name = surf_data.get("court", {}).get("name", "") if isinstance(surf_data.get("court"), dict) else surf_data.get("surface", "unknown")
+            surface_name = surface_name.lower().replace(" ", "_").replace(".", "")
+            
+            for key in ["wins", "losses", "winPct", "titles"]:
+                if key in surf_data:
+                    stat_type = f"matchstat_surface_{surface_name}_{key}"
+                    value = str(surf_data[key])
                     
-                    # For tennis, we don't have team_ids, use None or create placeholder
-                    game = Game(
-                        sport_id=sport.id,
-                        season_id=season.id,
-                        external_id=external_id,
-                        scheduled_at=match_data["scheduled_at"],
-                        status=status
-                    )
-                    session.add(game)
-                
-                saved += 1
-                
-                # Commit in batches
-                if (i + 1) % batch_size == 0:
-                    await session.commit()
-                    logger.info(f"[Matchstat] Matches progress: {i+1}/{total}")
-                
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error saving match: {e}")
-        
-        await session.commit()
-        return saved
-    
-    async def _save_player_stats_batched(self, session: AsyncSession, stats: List[Dict], batch_size: int = 500) -> int:
-        """Save player statistics in batches."""
-        saved = 0
-        total = len(stats)
-        player_cache = {}
-        
-        for i, stat_data in enumerate(stats):
-            try:
-                tour = stat_data.get("tour", "ATP")
-                sport = await self._get_or_create_sport(session, tour)
-                
-                # Get current year season
-                current_year = datetime.now().year
-                season = await self._get_or_create_season(session, sport.id, current_year)
-                
-                player_name = stat_data["player_name"]
-                
-                # Find player
-                if player_name not in player_cache:
-                    external_id = f"matchstat_{tour}_{player_name.replace(' ', '_').lower()}"
-                    result = await session.execute(
-                        select(Player).where(Player.external_id == external_id)
-                    )
-                    player_cache[player_name] = result.scalar_one_or_none()
-                
-                player = player_cache.get(player_name)
-                if not player:
-                    continue
-                
-                stat_type = stat_data["stat_type"]
-                
-                result = await session.execute(
-                    select(PlayerStats).where(
-                        and_(
-                            PlayerStats.player_id == player.id,
-                            PlayerStats.season_id == season.id,
-                            PlayerStats.stat_type == stat_type
-                        )
-                    )
-                )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    existing.value = stat_data["value"]
-                else:
-                    stat = PlayerStats(
+                    existing = self.db_session.query(PlayerStat).filter_by(
                         player_id=player.id,
                         season_id=season.id,
-                        stat_type=stat_type,
-                        value=stat_data["value"]
-                    )
-                    session.add(stat)
-                
-                saved += 1
-                
-                # Commit in batches
-                if (i + 1) % batch_size == 0:
-                    await session.commit()
-                    logger.info(f"[Matchstat] Player stats progress: {i+1}/{total}")
-                
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error saving player stat: {e}")
+                        stat_type=stat_type
+                    ).first()
+                    
+                    if existing:
+                        existing.value = value
+                    else:
+                        stat = PlayerStat(
+                            player_id=player.id,
+                            season_id=season.id,
+                            stat_type=stat_type,
+                            value=value
+                        )
+                        self.db_session.add(stat)
         
-        await session.commit()
-        return saved
+        self.db_session.commit()
     
-    async def _save_tournaments(self, session: AsyncSession, tournaments: List[Dict]) -> int:
-        """Save tournament records as teams."""
+    async def _save_tournaments(self, tournaments: List[Dict], tour: str):
+        """Save tournaments as teams"""
+        if not self.db_session:
+            return
+        
+        from app.models import Team, Sport
+        
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
+        if not sport:
+            return
+        
+        for tournament in tournaments:
+            t_id = tournament.get("id")
+            if not t_id:
+                continue
+            
+            external_id = f"matchstat_tournament_{tour}_{t_id}"
+            team = self.db_session.query(Team).filter_by(external_id=external_id).first()
+            
+            name = tournament.get("name", f"Tournament {t_id}")
+            country = tournament.get("countryAcr") or tournament.get("country", {}).get("acronym", "")
+            court = tournament.get("court", {}).get("name", "") if isinstance(tournament.get("court"), dict) else ""
+            rank_type = tournament.get("rank", {}).get("name", "") if isinstance(tournament.get("rank"), dict) else ""
+            
+            if team:
+                team.name = name
+                team.country = country
+                team.venue = f"{court} - {rank_type}".strip(" -")
+            else:
+                team = Team(
+                    external_id=external_id,
+                    sport_id=sport.id,
+                    name=name,
+                    abbreviation=tour,
+                    country=country,
+                    venue=f"{court} - {rank_type}".strip(" -"),
+                    active=True
+                )
+                self.db_session.add(team)
+        
+        self.db_session.commit()
+    
+    async def _save_matches_batched(self, matches: List[Dict], tour: str, batch_size: int = 500):
+        """Save matches in batches"""
+        if not self.db_session or not matches:
+            return
+        
+        from app.models import Game, Sport, Season, Team, Player
+        
+        sport = self.db_session.query(Sport).filter_by(code=tour).first()
+        if not sport:
+            return
+        
+        # Cache for seasons and players
+        season_cache = {}
+        player_cache = {}
+        
+        def get_season(year: int):
+            if year not in season_cache:
+                season = self.db_session.query(Season).filter_by(
+                    sport_id=sport.id, year=year
+                ).first()
+                if not season:
+                    season = Season(
+                        sport_id=sport.id,
+                        year=year,
+                        name=f"{tour} {year}",
+                        start_date=date(year, 1, 1),
+                        end_date=date(year, 12, 31)
+                    )
+                    self.db_session.add(season)
+                    self.db_session.commit()
+                season_cache[year] = season
+            return season_cache[year]
+        
+        def get_player_id(player_api_id: int):
+            if player_api_id not in player_cache:
+                external_id = f"matchstat_{tour}_{player_api_id}"
+                player = self.db_session.query(Player).filter_by(external_id=external_id).first()
+                player_cache[player_api_id] = player.id if player else None
+            return player_cache[player_api_id]
+        
+        total = len(matches)
         saved = 0
         
-        for t_data in tournaments:
-            try:
-                tour = t_data.get("tour", "ATP")
-                sport = await self._get_or_create_sport(session, tour)
+        for i in range(0, total, batch_size):
+            batch = matches[i:i + batch_size]
+            
+            for match in batch:
+                match_id = match.get("id")
+                if not match_id:
+                    continue
                 
-                external_id = f"matchstat_tournament_{tour}_{t_data.get('tournament_id', t_data['name'].replace(' ', '_'))}"
+                external_id = f"matchstat_match_{tour}_{match_id}"
                 
-                result = await session.execute(
-                    select(Team).where(
-                        and_(
-                            Team.sport_id == sport.id,
-                            Team.external_id == external_id
-                        )
-                    )
-                )
-                existing = result.scalar_one_or_none()
-                
+                # Check if exists
+                existing = self.db_session.query(Game).filter_by(external_id=external_id).first()
                 if existing:
-                    existing.conference = t_data.get("category")  # Store category (Grand Slam, Masters, etc.)
-                else:
-                    team = Team(
-                        sport_id=sport.id,
-                        external_id=external_id,
-                        name=t_data["name"],
-                        abbreviation=t_data["name"][:10].upper(),
-                        city=t_data.get("location"),
-                        conference=t_data.get("category"),
-                        division=t_data.get("surface"),
-                        is_active=True
-                    )
-                    session.add(team)
+                    continue
                 
+                # Parse date
+                match_date = None
+                date_str = match.get("date")
+                if date_str:
+                    try:
+                        match_date = datetime.fromisoformat(date_str.replace("Z", "")).date()
+                    except:
+                        pass
+                
+                if not match_date:
+                    continue
+                
+                year = match_date.year
+                season = get_season(year)
+                
+                # Get tournament info
+                tournament = match.get("tournament", {})
+                tournament_id = tournament.get("id") if isinstance(tournament, dict) else match.get("tournamentId")
+                tournament_name = tournament.get("name", "") if isinstance(tournament, dict) else ""
+                
+                # Get players
+                player1 = match.get("player1", {})
+                player2 = match.get("player2", {})
+                player1_id = player1.get("id") if isinstance(player1, dict) else match.get("player1Id")
+                player2_id = player2.get("id") if isinstance(player2, dict) else match.get("player2Id")
+                player1_name = player1.get("name", "") if isinstance(player1, dict) else ""
+                player2_name = player2.get("name", "") if isinstance(player2, dict) else ""
+                
+                winner_id = match.get("match_winner") or match.get("winnerId")
+                result = match.get("result", "")
+                
+                # Create game
+                game = Game(
+                    external_id=external_id,
+                    sport_id=sport.id,
+                    season_id=season.id,
+                    game_date=match_date,
+                    status="final",
+                    venue=tournament_name,
+                    notes=f"{player1_name} vs {player2_name}: {result}"
+                )
+                self.db_session.add(game)
                 saved += 1
-                
-            except Exception as e:
-                logger.debug(f"[Matchstat] Error saving tournament: {e}")
+            
+            self.db_session.commit()
+            
+            if i + batch_size < total:
+                logger.info(f"[Matchstat] Saved {min(i + batch_size, total)}/{total} matches")
         
-        await session.flush()
-        return saved
-
-
-# =============================================================================
-# SINGLETON INSTANCE
-# =============================================================================
-
-matchstat_collector = MatchstatCollector()
-
-# Register with collector manager
-collector_manager.register(matchstat_collector)
-logger.info("Registered collector: Matchstat Tennis API")
+        logger.info(f"[Matchstat] Saved {saved} new matches")
+    
+    # =====================================================
+    # CONVENIENCE METHODS FOR MASTER IMPORT
+    # =====================================================
+    
+    async def collect_rankings_only(self, tours: List[str] = None) -> Dict[str, Any]:
+        """Collect only rankings"""
+        if tours is None:
+            tours = self.TOURS
+        
+        total = 0
+        for tour in tours:
+            rankings = await self.fetch_rankings(tour.lower())
+            if rankings:
+                await self._save_rankings(rankings, tour.upper())
+                total += len(rankings)
+                logger.info(f"[Matchstat] {tour.upper()}: {len(rankings)} rankings")
+        
+        return {"records": total}
+    
+    async def collect_players_only(self, tours: List[str] = None, limit: int = 200) -> Dict[str, Any]:
+        """Collect player profiles and stats for top players"""
+        if tours is None:
+            tours = self.TOURS
+        
+        total = 0
+        for tour in tours:
+            # Get player IDs from rankings
+            rankings = await self.fetch_rankings(tour.lower())
+            player_ids = [r.get("id") or r.get("playerId") for r in rankings if r.get("id") or r.get("playerId")]
+            player_ids = player_ids[:limit]
+            
+            for player_id in player_ids:
+                profile = await self.fetch_player_profile(tour.lower(), player_id)
+                if profile:
+                    await self._save_player_profile(profile, tour.upper())
+                    total += 1
+            
+            logger.info(f"[Matchstat] {tour.upper()}: {total} profiles")
+        
+        return {"records": total}
+    
+    async def collect_player_stats_only(self, tours: List[str] = None, limit: int = 200) -> Dict[str, Any]:
+        """Collect player statistics for top players"""
+        if tours is None:
+            tours = self.TOURS
+        
+        total = 0
+        for tour in tours:
+            rankings = await self.fetch_rankings(tour.lower())
+            player_ids = [r.get("id") or r.get("playerId") for r in rankings if r.get("id") or r.get("playerId")]
+            player_ids = player_ids[:limit]
+            
+            for player_id in player_ids:
+                stats = await self.fetch_player_match_stats(tour.lower(), player_id)
+                if stats:
+                    await self._save_player_stats(stats, player_id, tour.upper())
+                    total += 1
+                
+                surface = await self.fetch_player_surface_summary(tour.lower(), player_id)
+                if surface:
+                    await self._save_surface_stats(surface, player_id, tour.upper())
+            
+            logger.info(f"[Matchstat] {tour.upper()}: {total} player stats")
+        
+        return {"records": total}
+    
+    async def collect_matches_only(self, tours: List[str] = None, years_back: int = 1) -> Dict[str, Any]:
+        """Collect match results from tournament calendar"""
+        if tours is None:
+            tours = self.TOURS
+        
+        current_year = datetime.now().year
+        start_year = current_year - years_back + 1
+        
+        total = 0
+        for tour in tours:
+            for year in range(start_year, current_year + 1):
+                tournaments = await self.fetch_tournament_calendar(tour.lower(), year)
+                
+                for tournament in tournaments[:50]:
+                    t_id = tournament.get("id")
+                    if t_id:
+                        results = await self.fetch_tournament_results(tour.lower(), t_id)
+                        if results:
+                            await self._save_matches_batched(results, tour.upper())
+                            total += len(results)
+                
+                logger.info(f"[Matchstat] {tour.upper()} {year}: collected matches")
+        
+        return {"records": total}
+    
+    async def collect_atp_only(self, years_back: int = 1) -> Dict[str, Any]:
+        """Collect ATP data only"""
+        return await self.collect(tours=["atp"], years_back=years_back)
+    
+    async def collect_wta_only(self, years_back: int = 1) -> Dict[str, Any]:
+        """Collect WTA data only"""
+        return await self.collect(tours=["wta"], years_back=years_back)

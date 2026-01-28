@@ -280,6 +280,35 @@ class NHLOfficialAPICollector(BaseCollector):
             await self.close()
 
     # =========================================================================
+    # VALIDATE METHOD (Required by BaseCollector)
+    # =========================================================================
+    
+    async def validate(self, data: Any) -> bool:
+        """
+        Validate collected NHL EDGE data.
+        
+        Args:
+            data: CollectorResult or dict with collected data
+            
+        Returns:
+            True if data is valid
+        """
+        if data is None:
+            return False
+        
+        # If it's a CollectorResult, check success
+        if hasattr(data, 'success'):
+            return data.success
+        
+        # If it's a dict, check for expected keys
+        if isinstance(data, dict):
+            expected_keys = ["skater_stats", "goalie_stats", "team_stats"]
+            has_data = any(data.get(key) for key in expected_keys)
+            return has_data
+        
+        return False
+
+    # =========================================================================
     # SKATER EDGE STATS
     # =========================================================================
     

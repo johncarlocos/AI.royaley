@@ -316,17 +316,15 @@ class KalshiCollector(BaseCollector):
             )
         """))
         
-        # Create indexes
-        await self.db.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_kalshi_events_series ON kalshi_events(series_ticker);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_events_sport ON kalshi_events(sport_code);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_markets_event ON kalshi_markets(event_ticker);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_markets_sport ON kalshi_markets(sport_code);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_prices_market ON kalshi_prices(market_ticker);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_prices_time ON kalshi_prices(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_trades_market ON kalshi_trades(market_ticker);
-            CREATE INDEX IF NOT EXISTS idx_kalshi_trades_time ON kalshi_trades(created_time);
-        """))
+        # Create indexes (must execute separately for asyncpg)
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_events_series ON kalshi_events(series_ticker)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_events_sport ON kalshi_events(sport_code)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_markets_event ON kalshi_markets(event_ticker)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_markets_sport ON kalshi_markets(sport_code)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_prices_market ON kalshi_prices(market_ticker)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_prices_time ON kalshi_prices(timestamp)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_trades_market ON kalshi_trades(market_ticker)"))
+        await self.db.execute(text("CREATE INDEX IF NOT EXISTS idx_kalshi_trades_time ON kalshi_trades(created_time)"))
         
         await self.db.commit()
         logger.info("[Kalshi] Tables created successfully")

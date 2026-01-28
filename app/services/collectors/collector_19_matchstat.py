@@ -47,6 +47,10 @@ class MatchstatCollector(BaseCollector):
         }
         logger.info("Registered collector: Matchstat Tennis API")
     
+    def validate(self) -> bool:
+        """Validate collector configuration"""
+        return True
+    
     async def _make_request(self, endpoint: str) -> Optional[Dict]:
         """Make API request with rate limiting"""
         url = f"{self.BASE_URL}{endpoint}"

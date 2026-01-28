@@ -189,87 +189,121 @@ class MatchstatCollector(BaseCollector):
     # MAIN COLLECTION METHOD
     # =====================================================
     
-    async def collect(self, tours: List[str] = None, years_back: int = 1) -> Dict[str, Any]:
+    async def collect(self, tours: List[str] = None, years_back: int = 1, collect_type: str = "all") -> 'CollectorResult':
         """
         Main collection method for Tennis data
         
         Args:
             tours: List of tours to collect ['atp', 'wta'] or None for both
             years_back: Number of years of historical data to collect
+            collect_type: Type of data to collect ('all', 'rankings', 'players', 'matches', 'stats')
+        
+        Returns:
+            CollectorResult with success status and data
         """
+        from app.services.collectors.base_collector import CollectorResult
+        
         if tours is None:
             tours = self.TOURS
+        else:
+            # Normalize tour names to lowercase
+            tours = [t.lower() for t in tours]
         
         current_year = datetime.now().year
         start_year = current_year - years_back + 1
         
-        logger.info(f"[Matchstat] Collecting Tennis data for {tours}, years {start_year} to {current_year}")
+        logger.info(f"[Matchstat] Collecting Tennis data for {tours}, type={collect_type}, years {start_year} to {current_year}")
         
         total_records = 0
+        all_data = {"rankings": [], "players": [], "matches": [], "tournaments": [], "stats": []}
         
-        for tour in tours:
-            tour_lower = tour.lower()
-            logger.info(f"[Matchstat] Collecting {tour.upper()} data...")
+        try:
+            for tour in tours:
+                tour_lower = tour.lower()
+                logger.info(f"[Matchstat] Collecting {tour.upper()} data...")
+                
+                # 1. Collect rankings (always needed for player IDs)
+                if collect_type in ["all", "rankings", "players", "stats"]:
+                    rankings = await self.fetch_rankings(tour_lower)
+                    logger.info(f"[Matchstat] {tour.upper()}: {len(rankings)} rankings")
+                    
+                    if rankings:
+                        # Save rankings and get player IDs
+                        player_ids = await self._save_rankings(rankings, tour.upper())
+                        total_records += len(rankings)
+                        all_data["rankings"].extend(rankings)
+                        
+                        # 2. Collect player profiles for ranked players (top 200)
+                        if collect_type in ["all", "players", "stats"]:
+                            top_players = player_ids[:200] if len(player_ids) > 200 else player_ids
+                            profiles_collected = 0
+                            stats_collected = 0
+                            
+                            for player_id in top_players:
+                                # Get profile
+                                if collect_type in ["all", "players"]:
+                                    profile = await self.fetch_player_profile(tour_lower, player_id)
+                                    if profile:
+                                        await self._save_player_profile(profile, tour.upper())
+                                        profiles_collected += 1
+                                        all_data["players"].append(profile)
+                                
+                                # Get match stats
+                                if collect_type in ["all", "stats"]:
+                                    stats = await self.fetch_player_match_stats(tour_lower, player_id)
+                                    if stats:
+                                        await self._save_player_stats(stats, player_id, tour.upper())
+                                        stats_collected += 1
+                                        all_data["stats"].append(stats)
+                                    
+                                    # Get surface stats
+                                    surface = await self.fetch_player_surface_summary(tour_lower, player_id)
+                                    if surface:
+                                        await self._save_surface_stats(surface, player_id, tour.upper())
+                            
+                            logger.info(f"[Matchstat] {tour.upper()}: {profiles_collected} profiles, {stats_collected} stats")
+                            total_records += profiles_collected + stats_collected
+                
+                # 3. Collect tournaments and matches by year
+                if collect_type in ["all", "matches"]:
+                    for year in range(start_year, current_year + 1):
+                        tournaments = await self.fetch_tournament_calendar(tour_lower, year)
+                        logger.info(f"[Matchstat] {tour.upper()} {year}: {len(tournaments)} tournaments")
+                        
+                        if tournaments:
+                            await self._save_tournaments(tournaments, tour.upper())
+                            total_records += len(tournaments)
+                            all_data["tournaments"].extend(tournaments)
+                            
+                            # Collect results for each tournament
+                            matches_collected = 0
+                            for tournament in tournaments[:50]:  # Limit to 50 tournaments per year
+                                t_id = tournament.get("id")
+                                if t_id:
+                                    results = await self.fetch_tournament_results(tour_lower, t_id)
+                                    if results:
+                                        await self._save_matches_batched(results, tour.upper())
+                                        matches_collected += len(results)
+                                        all_data["matches"].extend(results)
+                            
+                            logger.info(f"[Matchstat] {tour.upper()} {year}: {matches_collected} matches")
+                            total_records += matches_collected
             
-            # 1. Collect rankings (includes player IDs)
-            rankings = await self.fetch_rankings(tour_lower)
-            logger.info(f"[Matchstat] {tour.upper()}: {len(rankings)} rankings")
-            
-            if rankings:
-                # Save rankings and get player IDs
-                player_ids = await self._save_rankings(rankings, tour.upper())
-                total_records += len(rankings)
-                
-                # 2. Collect player profiles for ranked players (top 200)
-                top_players = player_ids[:200] if len(player_ids) > 200 else player_ids
-                profiles_collected = 0
-                stats_collected = 0
-                
-                for player_id in top_players:
-                    # Get profile
-                    profile = await self.fetch_player_profile(tour_lower, player_id)
-                    if profile:
-                        await self._save_player_profile(profile, tour.upper())
-                        profiles_collected += 1
-                    
-                    # Get match stats
-                    stats = await self.fetch_player_match_stats(tour_lower, player_id)
-                    if stats:
-                        await self._save_player_stats(stats, player_id, tour.upper())
-                        stats_collected += 1
-                    
-                    # Get surface stats
-                    surface = await self.fetch_player_surface_summary(tour_lower, player_id)
-                    if surface:
-                        await self._save_surface_stats(surface, player_id, tour.upper())
-                
-                logger.info(f"[Matchstat] {tour.upper()}: {profiles_collected} profiles, {stats_collected} stats")
-                total_records += profiles_collected + stats_collected
-            
-            # 3. Collect tournaments and matches by year
-            for year in range(start_year, current_year + 1):
-                tournaments = await self.fetch_tournament_calendar(tour_lower, year)
-                logger.info(f"[Matchstat] {tour.upper()} {year}: {len(tournaments)} tournaments")
-                
-                if tournaments:
-                    await self._save_tournaments(tournaments, tour.upper())
-                    total_records += len(tournaments)
-                    
-                    # Collect results for each tournament
-                    matches_collected = 0
-                    for tournament in tournaments[:50]:  # Limit to 50 tournaments per year
-                        t_id = tournament.get("id")
-                        if t_id:
-                            results = await self.fetch_tournament_results(tour_lower, t_id)
-                            if results:
-                                await self._save_matches_batched(results, tour.upper())
-                                matches_collected += len(results)
-                    
-                    logger.info(f"[Matchstat] {tour.upper()} {year}: {matches_collected} matches")
-                    total_records += matches_collected
-        
-        logger.info(f"[Matchstat] Total records collected: {total_records}")
-        return {"records": total_records}
+            logger.info(f"[Matchstat] Total records collected: {total_records}")
+            return CollectorResult(
+                success=True,
+                data=all_data,
+                records_count=total_records,
+                metadata={"tours": tours, "collect_type": collect_type, "years_back": years_back}
+            )
+        except Exception as e:
+            logger.error(f"[Matchstat] Collection error: {e}")
+            return CollectorResult(
+                success=False,
+                error=str(e),
+                records_count=total_records,
+                data=all_data if total_records > 0 else None
+            )
     
     # =====================================================
     # DATABASE SAVE METHODS

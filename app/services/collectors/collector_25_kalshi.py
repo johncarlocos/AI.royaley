@@ -414,21 +414,29 @@ class KalshiCollector(BaseCollector):
                         ticker = series.get("ticker", "")
                         title = series.get("title", "")
                         category = series.get("category", "")
-                        tags = series.get("tags", [])
+                        tags = series.get("tags") or []  # Handle None
                         
                         # Check if sports-related
                         sport_code = self._detect_sport(title, category, ticker, tags)
                         
                         if sport_code or self._is_sports_series(ticker, title, category, tags):
-                            await self._save_series(
-                                ticker=ticker,
-                                title=title,
-                                category=category,
-                                tags=tags,
-                                frequency=series.get("frequency"),
-                                sport_code=sport_code
-                            )
-                            count += 1
+                            try:
+                                await self._save_series(
+                                    ticker=ticker,
+                                    title=title,
+                                    category=category,
+                                    tags=tags,
+                                    frequency=series.get("frequency"),
+                                    sport_code=sport_code
+                                )
+                                count += 1
+                            except Exception as e:
+                                logger.warning(f"[Kalshi] Series save error for {ticker}: {e}")
+                                await self.db.rollback()
+                                continue
+                    
+                    # Commit after each page
+                    await self.db.commit()
                     
                     cursor = data.get("cursor", "")
                     if not cursor or not series_list:
@@ -476,9 +484,9 @@ class KalshiCollector(BaseCollector):
                         
                         for event in events:
                             # Check if sports-related
-                            title = event.get("title", "")
-                            category = event.get("category", "")
-                            series_ticker = event.get("series_ticker", "")
+                            title = event.get("title") or ""
+                            category = event.get("category") or ""
+                            series_ticker = event.get("series_ticker") or ""
                             
                             sport_code = self._detect_sport(title, category, series_ticker, [])
                             
@@ -486,24 +494,34 @@ class KalshiCollector(BaseCollector):
                                 continue
                             
                             # Save event
-                            event_ticker = event.get("event_ticker", "")
-                            await self._save_event(
-                                event_ticker=event_ticker,
-                                series_ticker=series_ticker,
-                                title=title,
-                                sub_title=event.get("sub_title"),
-                                category=category,
-                                sport_code=sport_code,
-                                strike_date=event.get("strike_date"),
-                                mutually_exclusive=event.get("mutually_exclusive", True)
-                            )
-                            event_count += 1
+                            event_ticker = event.get("event_ticker") or ""
+                            try:
+                                await self._save_event(
+                                    event_ticker=event_ticker,
+                                    series_ticker=series_ticker,
+                                    title=title,
+                                    sub_title=event.get("sub_title"),
+                                    category=category,
+                                    sport_code=sport_code,
+                                    strike_date=event.get("strike_date"),
+                                    mutually_exclusive=event.get("mutually_exclusive", True)
+                                )
+                                event_count += 1
+                            except Exception as e:
+                                logger.warning(f"[Kalshi] Event save error for {event_ticker}: {e}")
+                                await self.db.rollback()
+                                continue
                             
                             # Save nested markets
-                            markets = event.get("markets", [])
+                            markets = event.get("markets") or []
                             for market in markets:
-                                await self._save_market(market, event_ticker, sport_code)
-                                market_count += 1
+                                try:
+                                    await self._save_market(market, event_ticker, sport_code)
+                                    market_count += 1
+                                except Exception as e:
+                                    logger.warning(f"[Kalshi] Market save error: {e}")
+                                    await self.db.rollback()
+                                    continue
                         
                         cursor = data.get("cursor", "")
                         if not cursor or not events:
@@ -511,6 +529,8 @@ class KalshiCollector(BaseCollector):
                             
                         await asyncio.sleep(0.3)
                         
+                    # Commit after each status batch
+                    await self.db.commit()
                     logger.info(f"[Kalshi] Collected {status} events: {event_count}")
                     
         except Exception as e:
@@ -650,6 +670,8 @@ class KalshiCollector(BaseCollector):
                           sport_code: Optional[str]):
         """Save or update series"""
         import json
+        # Handle None tags
+        tags = tags or []
         await self.db.execute(text("""
             INSERT INTO kalshi_series (ticker, title, category, tags, frequency, sport_code, updated_at)
             VALUES (:ticker, :title, :category, :tags, :frequency, :sport_code, NOW())
@@ -673,11 +695,13 @@ class KalshiCollector(BaseCollector):
                          sub_title: Optional[str], category: str, sport_code: Optional[str],
                          strike_date: Optional[str], mutually_exclusive: bool):
         """Save or update event"""
-        # Parse strike_date
+        # Parse strike_date and remove timezone
         strike_dt = None
         if strike_date:
             try:
                 strike_dt = datetime.fromisoformat(strike_date.replace("Z", "+00:00"))
+                if strike_dt.tzinfo is not None:
+                    strike_dt = strike_dt.replace(tzinfo=None)
             except:
                 pass
                 
@@ -831,17 +855,27 @@ class KalshiCollector(BaseCollector):
             pass
     
     def _parse_timestamp(self, ts: Optional[str]) -> Optional[datetime]:
-        """Parse ISO timestamp"""
+        """Parse ISO timestamp and return timezone-naive datetime"""
         if not ts:
             return None
         try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            # Convert to naive datetime (remove timezone)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
         except:
             return None
     
     def _detect_sport(self, title: str, category: str, series_ticker: str, 
                      tags: List[str]) -> Optional[str]:
         """Detect sport code from event metadata"""
+        # Handle None values
+        tags = tags or []
+        title = title or ""
+        category = category or ""
+        series_ticker = series_ticker or ""
+        
         text = f"{title} {category} {series_ticker} {' '.join(tags)}".lower()
         
         for keyword, sport_code in self.SPORT_MAPPING.items():
@@ -853,6 +887,12 @@ class KalshiCollector(BaseCollector):
     def _is_sports_series(self, ticker: str, title: str, category: str, 
                          tags: List[str]) -> bool:
         """Check if series is sports-related"""
+        # Handle None values
+        ticker = ticker or ""
+        title = title or ""
+        category = category or ""
+        tags = tags or []
+        
         # Check category
         if category and category.lower() in ["sports", "sport"]:
             return True
@@ -862,7 +902,7 @@ class KalshiCollector(BaseCollector):
                       "basketball", "baseball", "hockey", "soccer", "golf",
                       "tennis", "mma", "ufc"}
         if tags:
-            if any(t.lower() in sports_tags for t in tags):
+            if any(t.lower() in sports_tags for t in tags if t):
                 return True
         
         # Check ticker prefix
@@ -881,9 +921,9 @@ class KalshiCollector(BaseCollector):
     
     def _is_sports_event(self, event: Dict) -> bool:
         """Check if event is sports-related"""
-        title = event.get("title", "").lower()
-        category = event.get("category", "").lower()
-        series_ticker = event.get("series_ticker", "").upper()
+        title = (event.get("title") or "").lower()
+        category = (event.get("category") or "").lower()
+        series_ticker = (event.get("series_ticker") or "").upper()
         
         # Category check
         if "sport" in category:

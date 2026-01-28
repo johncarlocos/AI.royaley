@@ -786,6 +786,38 @@ class MatchstatCollector(BaseCollector):
     async def collect_wta_only(self, years_back: int = 1) -> Dict[str, Any]:
         """Collect WTA data only"""
         return await self.collect(tours=["wta"], years_back=years_back)
+    
+    async def save_to_database(self, data: Dict[str, Any], session) -> int:
+        """
+        Save collected data to database.
+        
+        Args:
+            data: Dictionary with rankings, players, matches, tournaments, stats
+            session: Database session
+            
+        Returns:
+            Number of records saved
+        """
+        saved_count = 0
+        
+        # Data is already saved during collection via _save_* methods
+        # This method is for compatibility with master_import.py pattern
+        # Just return the count of items in data
+        
+        if data:
+            if "rankings" in data:
+                saved_count += len(data.get("rankings", []))
+            if "players" in data:
+                saved_count += len(data.get("players", []))
+            if "matches" in data:
+                saved_count += len(data.get("matches", []))
+            if "tournaments" in data:
+                saved_count += len(data.get("tournaments", []))
+            if "stats" in data:
+                saved_count += len(data.get("stats", []))
+        
+        logger.info(f"[Matchstat] save_to_database: {saved_count} records")
+        return saved_count
 
 
 # Singleton instance for import

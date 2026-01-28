@@ -654,15 +654,36 @@ class NextGenStatsCollector(BaseCollector):
                     if team_abbr and team_abbr not in team_cache:
                         team_info = NFL_TEAMS.get(team_abbr)
                         if team_info:
-                            external_id = f"nfl_{team_abbr.lower()}"
+                            # First try to find by name (unique constraint is on sport_id + name)
                             result = await session.execute(
                                 select(Team).where(
-                                    and_(Team.sport_id == sport_id, Team.external_id == external_id)
+                                    and_(Team.sport_id == sport_id, Team.name == team_info["name"])
                                 )
                             )
                             team = result.scalar_one_or_none()
                             
                             if not team:
+                                # Also try by external_id
+                                external_id = f"nfl_{team_abbr.lower()}"
+                                result = await session.execute(
+                                    select(Team).where(
+                                        and_(Team.sport_id == sport_id, Team.external_id == external_id)
+                                    )
+                                )
+                                team = result.scalar_one_or_none()
+                            
+                            if not team:
+                                # Also try by abbreviation
+                                result = await session.execute(
+                                    select(Team).where(
+                                        and_(Team.sport_id == sport_id, Team.abbreviation == team_abbr)
+                                    )
+                                )
+                                team = result.scalar_one_or_none()
+                            
+                            if not team:
+                                # Create new team
+                                external_id = f"nfl_{team_abbr.lower()}"
                                 team = Team(
                                     sport_id=sport_id,
                                     external_id=external_id,

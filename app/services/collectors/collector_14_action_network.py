@@ -462,15 +462,18 @@ class ActionNetworkCollector(BaseCollector):
         games = []
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Try multiple selectors for game containers
+        # Action Network specific selectors (2024/2025 structure)
         game_containers = (
+            soup.select('[class*="public-betting__game"]') or
+            soup.select('[class*="mobile-public-betting__game-info"]') or
+            soup.select('[class*="game-info__teams"]') or
             soup.select('[class*="game-card"]') or
             soup.select('[class*="GameCard"]') or
             soup.select('[class*="matchup"]') or
-            soup.select('[class*="Matchup"]') or
-            soup.select('[data-testid*="game"]') or
-            soup.select('article[class*="game"]')
+            soup.select('[data-testid*="game"]')
         )
+        
+        logger.debug(f"[ActionNetwork] Found {len(game_containers)} game containers")
         
         for container in game_containers:
             try:
@@ -481,9 +484,93 @@ class ActionNetworkCollector(BaseCollector):
                 logger.debug(f"[ActionNetwork] Error parsing game: {e}")
                 continue
         
-        # If no games found, try alternative parsing
+        # If no games found with containers, try row-based parsing
+        if not games:
+            games = self._parse_action_network_rows(soup, sport_code)
+        
+        # If still no games, try fallback
         if not games:
             games = self._parse_page_fallback(soup, sport_code)
+        
+        return games
+    
+    def _parse_action_network_rows(
+        self,
+        soup,
+        sport_code: str
+    ) -> List[Dict[str, Any]]:
+        """Parse Action Network using row-based structure."""
+        games = []
+        
+        # Find all game-info sections which contain team pairs
+        game_sections = soup.select('[class*="game-info"]')
+        
+        # Group by finding team pairs
+        team_elements = soup.select('[class*="game-info__team-info"], [class*="game-info__team--desktop"]')
+        
+        logger.debug(f"[ActionNetwork] Found {len(team_elements)} team elements")
+        
+        # Extract all percentage values from page
+        import re
+        page_text = soup.get_text()
+        all_percentages = re.findall(r'(\d{1,2})%', page_text)
+        
+        # Find team names
+        team_name_elements = soup.select('[class*="game-info__team-info"] span, [class*="team-name"], [class*="TeamName"]')
+        team_names = []
+        for el in team_name_elements:
+            name = el.get_text(strip=True)
+            if name and len(name) > 2 and not name.isdigit():
+                team_names.append(name)
+        
+        # Also try to find team names from links
+        team_links = soup.select('a[href*="/teams/"]')
+        for link in team_links:
+            name = link.get_text(strip=True)
+            if name and len(name) > 2 and name not in team_names:
+                team_names.append(name)
+        
+        logger.debug(f"[ActionNetwork] Found team names: {team_names[:20]}")
+        logger.debug(f"[ActionNetwork] Found percentages: {all_percentages[:20]}")
+        
+        # Pair teams (away, home) and create games
+        # Typically teams are listed in pairs with away first
+        i = 0
+        pct_idx = 0
+        while i < len(team_names) - 1:
+            away_team = self._clean_team_name(team_names[i])
+            home_team = self._clean_team_name(team_names[i + 1])
+            
+            if away_team and home_team and away_team != home_team:
+                game_data = {
+                    "sport_code": sport_code,
+                    "away_team": away_team,
+                    "home_team": home_team,
+                    "game_date": date.today(),
+                    "source": "action_network",
+                    "scraped_at": datetime.now(),
+                }
+                
+                # Try to assign percentages (typically 2 per bet type: away%, home%)
+                # Structure: spread_away, spread_home, ml_away, ml_home, over, under
+                if pct_idx + 1 < len(all_percentages):
+                    game_data["spread_away_bet_pct"] = float(all_percentages[pct_idx])
+                    game_data["spread_home_bet_pct"] = float(all_percentages[pct_idx + 1])
+                    pct_idx += 2
+                
+                if pct_idx + 1 < len(all_percentages):
+                    game_data["ml_away_bet_pct"] = float(all_percentages[pct_idx])
+                    game_data["ml_home_bet_pct"] = float(all_percentages[pct_idx + 1])
+                    pct_idx += 2
+                
+                if pct_idx + 1 < len(all_percentages):
+                    game_data["total_over_bet_pct"] = float(all_percentages[pct_idx])
+                    game_data["total_under_bet_pct"] = float(all_percentages[pct_idx + 1])
+                    pct_idx += 2
+                
+                games.append(game_data)
+            
+            i += 2  # Move to next pair
         
         return games
     
@@ -527,10 +614,17 @@ class ActionNetworkCollector(BaseCollector):
     ) -> Optional[Dict[str, Any]]:
         """Extract game data from a container element."""
         try:
-            # Try to find team names
-            team_elements = container.select('[class*="team"], [class*="Team"]')
+            # Action Network specific selectors
+            team_elements = (
+                container.select('[class*="game-info__team-info"]') or
+                container.select('[class*="game-info__team--desktop"]') or
+                container.select('[class*="team-name"]') or
+                container.select('[class*="team"], [class*="Team"]')
+            )
+            
             if len(team_elements) < 2:
-                team_elements = container.find_all(['span', 'div'], string=re.compile(r'^[A-Z][a-z]'))
+                # Try finding team names from text
+                team_elements = container.find_all(['span', 'div', 'a'], string=re.compile(r'^[A-Z][a-z]{2,}'))
             
             if len(team_elements) < 2:
                 return None
@@ -539,11 +633,13 @@ class ActionNetworkCollector(BaseCollector):
             away_team = self._clean_team_name(team_elements[0].get_text(strip=True))
             home_team = self._clean_team_name(team_elements[1].get_text(strip=True))
             
-            if not away_team or not home_team:
+            if not away_team or not home_team or away_team == home_team:
                 return None
             
-            # Extract betting percentages
-            pct_elements = container.select('[class*="pct"], [class*="percent"]')
+            # Skip if looks like navigation text
+            skip_words = ['home', 'odds', 'picks', 'teams', 'betting', 'news', 'futures', 'props']
+            if away_team.lower() in skip_words or home_team.lower() in skip_words:
+                return None
             
             game_data = {
                 "sport_code": sport_code,
@@ -555,17 +651,39 @@ class ActionNetworkCollector(BaseCollector):
                 "scraped_at": datetime.now(),
             }
             
-            # Extract spread betting data
+            # Extract percentages from container
+            container_text = container.get_text()
+            pct_matches = re.findall(r'(\d{1,2})%', container_text)
+            
+            if len(pct_matches) >= 2:
+                game_data["spread_away_bet_pct"] = float(pct_matches[0])
+                game_data["spread_home_bet_pct"] = float(pct_matches[1])
+            
+            if len(pct_matches) >= 4:
+                game_data["ml_away_bet_pct"] = float(pct_matches[2])
+                game_data["ml_home_bet_pct"] = float(pct_matches[3])
+            
+            if len(pct_matches) >= 6:
+                game_data["total_over_bet_pct"] = float(pct_matches[4])
+                game_data["total_under_bet_pct"] = float(pct_matches[5])
+            
+            # Extract spread betting data (from specific elements if available)
             spread_data = self._extract_spread_data(container)
-            game_data.update(spread_data)
+            for key, val in spread_data.items():
+                if val is not None and key not in game_data:
+                    game_data[key] = val
             
             # Extract moneyline data
             ml_data = self._extract_moneyline_data(container)
-            game_data.update(ml_data)
+            for key, val in ml_data.items():
+                if val is not None and key not in game_data:
+                    game_data[key] = val
             
             # Extract total (over/under) data
             total_data = self._extract_total_data(container)
-            game_data.update(total_data)
+            for key, val in total_data.items():
+                if val is not None and key not in game_data:
+                    game_data[key] = val
             
             # Extract scores if available
             scores = self._extract_scores(container)

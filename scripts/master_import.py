@@ -3207,6 +3207,174 @@ async def import_kaggle_tennis(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# TENNIS ABSTRACT IMPORT FUNCTIONS (Collector 23)
+# =============================================================================
+
+async def import_tennis_abstract(sports: List[str] = None) -> ImportResult:
+    """Import current Tennis Abstract data for ATP and WTA."""
+    result = ImportResult(source="tennis_abstract")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        tours = ["ATP", "WTA"] if not sports else [s.upper() for s in sports if s.upper() in ["ATP", "WTA"]]
+        
+        data = await tennis_abstract_collector.collect(tours=tours, years_back=2)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_history(years_back: int = 10) -> ImportResult:
+    """Import historical Tennis Abstract data for ATP and WTA (10 years)."""
+    result = ImportResult(source="tennis_abstract_history")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_historical(years_back=years_back)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract] History import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_atp(years_back: int = 10) -> ImportResult:
+    """Import ATP Tennis Abstract data."""
+    result = ImportResult(source="tennis_abstract_atp")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_atp_only(years_back=years_back)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract ATP] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_wta(years_back: int = 10) -> ImportResult:
+    """Import WTA Tennis Abstract data."""
+    result = ImportResult(source="tennis_abstract_wta")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_wta_only(years_back=years_back)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract WTA] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_players() -> ImportResult:
+    """Import Tennis Abstract player data only."""
+    result = ImportResult(source="tennis_abstract_players")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_players_only()
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract Players] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_rankings() -> ImportResult:
+    """Import Tennis Abstract current rankings only."""
+    result = ImportResult(source="tennis_abstract_rankings")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_rankings_only()
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                # Rankings are stored in the data but not saved separately
+                # They are embedded in match results
+                result.records = len(data.data.get('rankings', []))
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract Rankings] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_tennis_abstract_matches(years_back: int = 10) -> ImportResult:
+    """Import Tennis Abstract match data only."""
+    result = ImportResult(source="tennis_abstract_matches")
+    try:
+        from app.services.collectors import tennis_abstract_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await tennis_abstract_collector.collect_matches_only(years_back=years_back)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                tennis_abstract_collector.db_session = session
+                counts = await tennis_abstract_collector.save_to_database(data.data, session)
+                result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Tennis Abstract Matches] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -3233,6 +3401,7 @@ IMPORT_MAP = {
     "cfbd": import_cfbd,
     "matchstat": import_matchstat,
     "realgm": import_realgm,
+    "tennis_abstract": import_tennis_abstract,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -3254,6 +3423,7 @@ IMPORT_MAP = {
     "cfbd_history": import_cfbd_history,
     "matchstat_history": import_matchstat_history,
     "realgm_history": import_realgm_history,
+    "tennis_abstract_history": import_tennis_abstract_history,
     
     # Specialized data
     "injuries": import_espn_injuries,
@@ -3338,6 +3508,13 @@ IMPORT_MAP = {
     "kaggle_mma": import_kaggle_mma,
     "kaggle_tennis": import_kaggle_tennis,
     
+    # Tennis Abstract (Collector 23)
+    "tennis_abstract_atp": import_tennis_abstract_atp,
+    "tennis_abstract_wta": import_tennis_abstract_wta,
+    "tennis_abstract_players": import_tennis_abstract_players,
+    "tennis_abstract_rankings": import_tennis_abstract_rankings,
+    "tennis_abstract_matches": import_tennis_abstract_matches,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -3349,10 +3526,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving", "kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", "kaggle_mma", "kaggle_tennis"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle", "tennis_abstract"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history", "tennis_abstract_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players", "tennis_abstract_players"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving", "kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", "kaggle_mma", "kaggle_tennis", "tennis_abstract_atp", "tennis_abstract_wta", "tennis_abstract_rankings", "tennis_abstract_matches"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -3432,6 +3609,11 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", 
                            "kaggle_mma", "kaggle_tennis"]:
                 result = await func(years_back=seasons)
+            elif source in ["tennis_abstract_history", "tennis_abstract_atp", "tennis_abstract_wta", 
+                           "tennis_abstract_matches"]:
+                result = await func(years_back=seasons)
+            elif source in ["tennis_abstract", "tennis_abstract_players", "tennis_abstract_rankings"]:
+                result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)
             else:
@@ -3560,6 +3742,15 @@ def show_status():
     console.print("  • kaggle_ncaab       → College basketball stats")
     console.print("  • kaggle_mma         → UFC/MMA fights, odds")
     console.print("  • kaggle_tennis      → ATP tennis matches")
+    
+    console.print("\n[cyan]⚡ TENNIS ABSTRACT (Jeff Sackmann GitHub - ATP/WTA):[/cyan]")
+    console.print("  • tennis_abstract           → current data (ATP + WTA, 2 years)")
+    console.print("  • tennis_abstract_history   → 10 years historical (ATP + WTA)")
+    console.print("  • tennis_abstract_atp       → ATP matches, players, stats")
+    console.print("  • tennis_abstract_wta       → WTA matches, players, stats")
+    console.print("  • tennis_abstract_players   → Player info (DOB, country, height, hand)")
+    console.print("  • tennis_abstract_rankings  → Current ATP/WTA rankings")
+    console.print("  • tennis_abstract_matches   → Match results + serve stats")
     
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
     console.print("  • sportsdb_live     → Real-time scores")

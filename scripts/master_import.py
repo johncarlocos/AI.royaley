@@ -2024,6 +2024,111 @@ async def import_sportsipy_history(years_back: int = 10) -> ImportResult:
     return result
 
 
+# =============================================================================
+# BASKETBALL REFERENCE IMPORTS (NBA Scraper)
+# =============================================================================
+
+async def import_basketball_ref() -> ImportResult:
+    """Import current NBA data from Basketball-Reference."""
+    result = ImportResult(source="basketball_ref")
+    try:
+        from app.services.collectors import basketball_ref_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await basketball_ref_collector.collect(
+            years_back=1,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await basketball_ref_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_basketball_ref_history(years_back: int = 10) -> ImportResult:
+    """Import 10 years NBA data from Basketball-Reference."""
+    result = ImportResult(source="basketball_ref_history")
+    try:
+        from app.services.collectors import basketball_ref_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        logging.info(f"[BasketballRef] Collecting {years_back} years of NBA data")
+        
+        data = await basketball_ref_collector.collect(
+            years_back=years_back,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await basketball_ref_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_basketball_ref_teams() -> ImportResult:
+    """Import NBA teams from Basketball-Reference."""
+    result = ImportResult(source="basketball_ref_teams")
+    try:
+        from app.services.collectors import basketball_ref_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await basketball_ref_collector.collect(
+            years_back=1,
+            collect_type="teams"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await basketball_ref_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_basketball_ref_injuries() -> ImportResult:
+    """Import current NBA injury report from Basketball-Reference."""
+    result = ImportResult(source="basketball_ref_injuries")
+    try:
+        from app.services.collectors import basketball_ref_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await basketball_ref_collector.collect(
+            years_back=1,
+            collect_type="injuries"
+        )
+        if data.success and data.data:
+            # Injuries are returned but not saved to DB (would need injury model)
+            result.records = len(data.data.get("injuries", []))
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 async def import_sportsipy_mlb(years_back: int = 10) -> ImportResult:
     """Import MLB data from Sports-Reference."""
     result = ImportResult(source="sportsipy_mlb")
@@ -2250,6 +2355,7 @@ IMPORT_MAP = {
     "sharp_money": import_sharp_money,
     "nhl_api": import_nhl_api,
     "sportsipy": import_sportsipy,
+    "basketball_ref": import_basketball_ref,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -2267,6 +2373,7 @@ IMPORT_MAP = {
     "nhl_api_history": import_nhl_api_history,
     "weather_history": import_weather_history,
     "sportsipy_history": import_sportsipy_history,
+    "basketball_ref_history": import_basketball_ref_history,
     
     # Specialized data
     "injuries": import_espn_injuries,
@@ -2307,6 +2414,10 @@ IMPORT_MAP = {
     "sportsipy_teams": import_sportsipy_teams,
     "sportsipy_stats": import_sportsipy_stats,
     
+    # Basketball Reference
+    "basketball_ref_teams": import_basketball_ref_teams,
+    "basketball_ref_injuries": import_basketball_ref_injuries,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -2318,10 +2429,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -2371,7 +2482,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings", "nhl_api_history"]:
                 result = await func(years_back=seasons)
-            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats"]:
+            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats", "basketball_ref_history"]:
                 result = await func(years_back=seasons)
             elif source == "action_network_history":
                 result = await func(days_back=days)
@@ -2388,7 +2499,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "nba_players", "nba_team_stats",
                            "cfl_teams",
                            "action_network", "sharp_money", "nhl_api",
-                           "sportsipy", "sportsipy_teams"]:
+                           "sportsipy", "sportsipy_teams",
+                           "basketball_ref", "basketball_ref_teams", "basketball_ref_injuries"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

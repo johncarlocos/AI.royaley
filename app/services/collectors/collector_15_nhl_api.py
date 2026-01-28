@@ -1187,5 +1187,5 @@ class NHLOfficialAPICollector(BaseCollector):
 nhl_official_api_collector = NHLOfficialAPICollector()
 
 # Register with collector manager
-collector_manager.register_collector(nhl_official_api_collector)
+collector_manager.register(nhl_official_api_collector)
 logger.info("Registered collector: NHL Official API")

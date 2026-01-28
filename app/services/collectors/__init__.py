@@ -27,6 +27,7 @@ IMPLEMENTED COLLECTORS:
     collector_21_nextgenstats.py  - NFL Next Gen Stats (player tracking, time-to-throw, separation) - FREE
     collector_22_kaggle.py        - Kaggle Datasets (Historical sports data for backtesting) - FREE (API key req)
     collector_23_tennis_abstract.py - Tennis Abstract (ATP/WTA matches, H2H, surface splits from Jeff Sackmann GitHub) - FREE
+    collector_24_polymarket.py    - Polymarket (Prediction markets for crowd wisdom analysis) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -60,6 +61,7 @@ from app.services.collectors.collector_20_realgm import RealGMCollector, realgm_
 from app.services.collectors.collector_21_nextgenstats import NextGenStatsCollector, nextgenstats_collector
 from app.services.collectors.collector_22_kaggle import KaggleCollector, kaggle_collector
 from app.services.collectors.collector_23_tennis_abstract import TennisAbstractCollector, tennis_abstract_collector
+from app.services.collectors.collector_24_polymarket import PolymarketCollector
 
 __all__ = [
     "BaseCollector",
@@ -113,4 +115,5 @@ __all__ = [
     "kaggle_collector",
     "TennisAbstractCollector",
     "tennis_abstract_collector",
+    "PolymarketCollector",
 ]

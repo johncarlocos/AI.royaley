@@ -3375,6 +3375,42 @@ async def import_tennis_abstract_matches(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# POLYMARKET IMPORT FUNCTIONS (Collector 24)
+# =============================================================================
+
+async def import_polymarket(sports: List[str] = None) -> ImportResult:
+    """Import Polymarket prediction market data to existing tables (odds, consensus_lines)."""
+    result = ImportResult(source="polymarket")
+    try:
+        from app.services.collectors.collector_24_polymarket import PolymarketCollector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        async with db_manager.session() as session:
+            collector = PolymarketCollector(session)
+            stats = await collector.collect_all()
+            
+            result.records = stats.get("odds_saved", 0) + stats.get("games_linked", 0)
+            result.success = len(stats.get("errors", [])) == 0
+            
+            console.print(f"  [green]✓[/green] Polymarket: "
+                         f"{stats.get('events_found', 0)} events, "
+                         f"{stats.get('games_linked', 0)} linked, "
+                         f"{stats.get('odds_saved', 0)} odds")
+            
+            if stats.get("errors"):
+                for err in stats["errors"][:3]:
+                    result.errors.append(err[:100])
+                    
+    except Exception as e:
+        logger.error(f"[Polymarket] Import error: {e}")
+        result.errors.append(str(e)[:100])
+        console.print(f"  [red]✗[/red] Polymarket: {e}")
+        
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -3515,6 +3551,9 @@ IMPORT_MAP = {
     "tennis_abstract_rankings": import_tennis_abstract_rankings,
     "tennis_abstract_matches": import_tennis_abstract_matches,
     
+    # Polymarket (Collector 24) - Prediction Markets
+    "polymarket": import_polymarket,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -3526,7 +3565,7 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle", "tennis_abstract"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle", "tennis_abstract", "polymarket"]
 HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history", "tennis_abstract_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players", "tennis_abstract_players"]
 SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving", "kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", "kaggle_mma", "kaggle_tennis", "tennis_abstract_atp", "tennis_abstract_wta", "tennis_abstract_rankings", "tennis_abstract_matches"]
@@ -3751,6 +3790,9 @@ def show_status():
     console.print("  • tennis_abstract_players   → Player info (DOB, country, height, hand)")
     console.print("  • tennis_abstract_rankings  → Current ATP/WTA rankings")
     console.print("  • tennis_abstract_matches   → Match results + serve stats")
+    
+    console.print("\n[cyan]⚡ POLYMARKET (Prediction Markets - Crowd Wisdom):[/cyan]")
+    console.print("  • polymarket        → odds, consensus_lines (crowd probability)")
     
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
     console.print("  • sportsdb_live     → Real-time scores")

@@ -1903,6 +1903,67 @@ async def import_sharp_money() -> ImportResult:
 
 
 # =============================================================================
+# NHL OFFICIAL API IMPORTS
+# =============================================================================
+
+async def import_nhl_api() -> ImportResult:
+    """Import current NHL EDGE stats from NHL Official API."""
+    result = ImportResult(source="nhl_api")
+    try:
+        from app.services.collectors import nhl_official_api_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        # Current season only
+        data = await nhl_official_api_collector.collect(
+            years_back=1,
+            collect_type="all",
+            game_type=2  # Regular season
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await nhl_official_api_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_nhl_api_history(years_back: int = 10) -> ImportResult:
+    """Import historical NHL EDGE stats (10 years)."""
+    result = ImportResult(source="nhl_api_history")
+    try:
+        from app.services.collectors import nhl_official_api_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        logging.info(f"[NHL API] Collecting {years_back} years of EDGE data")
+        
+        data = await nhl_official_api_collector.collect(
+            years_back=years_back,
+            collect_type="all",
+            game_type=2  # Regular season
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await nhl_official_api_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1923,6 +1984,7 @@ IMPORT_MAP = {
     "action_network": import_action_network,
     "public_betting": import_public_betting,
     "sharp_money": import_sharp_money,
+    "nhl_api": import_nhl_api,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1937,6 +1999,7 @@ IMPORT_MAP = {
     "hoopr_history": import_hoopr_history,
     "cfl_history": import_cfl_history,
     "action_network_history": import_action_network_history,
+    "nhl_api_history": import_nhl_api_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1979,8 +2042,8 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "weather_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters"]
 SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings"]
 
@@ -2030,7 +2093,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings", "nhl_api_history"]:
                 result = await func(years_back=seasons)
             elif source == "action_network_history":
                 result = await func(days_back=days)
@@ -2046,7 +2109,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "wnba_players", "wnba_rosters", "wnba_team_stats",
                            "nba_players", "nba_team_stats",
                            "cfl_teams",
-                           "action_network", "sharp_money"]:
+                           "action_network", "sharp_money", "nhl_api"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

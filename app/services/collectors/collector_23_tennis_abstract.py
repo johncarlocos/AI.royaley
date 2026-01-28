@@ -789,20 +789,21 @@ class TennisAbstractCollector(BaseCollector):
         existing_games = set(row[0] for row in result.fetchall())
         logger.info(f"[TennisAbstract] Found {len(existing_games)} existing games")
         
-        # Pre-load existing teams - by BOTH external_id and name
+        # Pre-load existing teams - get ALL teams for ATP and WTA sports
         logger.info("[TennisAbstract] Loading existing teams...")
         result = await session.execute(
             select(Team.external_id, Team.id, Team.sport_id, Team.name).where(
-                Team.external_id.like('tennis_%')
+                Team.sport_id.in_([atp_sport.id, wta_sport.id])
             )
         )
         team_cache = {}
-        team_name_cache = {}  # Also track by name to avoid duplicates
+        team_name_cache = {}  # Track by (sport_id, name) to avoid duplicates
         for row in result.fetchall():
-            team_cache[row[0]] = {'id': row[1], 'sport_id': row[2]}
-            # Track by (sport_id, name) to catch duplicates
+            if row[0]:  # Only cache if external_id exists
+                team_cache[row[0]] = {'id': row[1], 'sport_id': row[2]}
+            # Always track by (sport_id, name) to catch any existing teams
             team_name_cache[(row[2], row[3])] = {'id': row[1], 'external_id': row[0]}
-        logger.info(f"[TennisAbstract] Found {len(team_cache)} existing teams")
+        logger.info(f"[TennisAbstract] Found {len(team_cache)} existing teams by external_id, {len(team_name_cache)} by name")
         
         # Pre-load existing seasons
         logger.info("[TennisAbstract] Loading existing seasons...")

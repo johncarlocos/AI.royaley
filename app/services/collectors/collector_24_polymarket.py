@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from uuid import uuid4
 import httpx
-from sqlalchemy import text, select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.collectors.base_collector import BaseCollector, CollectorResult
@@ -45,17 +45,17 @@ class PolymarketCollector(BaseCollector):
         "College Football", "College Basketball", "MMA"
     ]
     
-    # League mappings
+    # League mappings - maps Polymarket tags to our sports.code values
     LEAGUE_MAPPING = {
-        "NFL": {"sport": "football", "league": "NFL"},
-        "NBA": {"sport": "basketball", "league": "NBA"},
-        "MLB": {"sport": "baseball", "league": "MLB"},
-        "NHL": {"sport": "hockey", "league": "NHL"},
-        "Soccer": {"sport": "soccer", "league": "SOCCER"},
-        "Tennis": {"sport": "tennis", "league": "ATP"},
-        "College Football": {"sport": "football", "league": "NCAAF"},
-        "College Basketball": {"sport": "basketball", "league": "NCAAB"},
-        "MMA": {"sport": "mma", "league": "UFC"},
+        "NFL": "NFL",
+        "NBA": "NBA", 
+        "MLB": "MLB",
+        "NHL": "NHL",
+        "Soccer": "SOCCER",
+        "Tennis": "ATP",
+        "College Football": "NCAAF",
+        "College Basketball": "NCAAB",
+        "MMA": "UFC",
     }
     
     def __init__(self, db: AsyncSession, config: Optional[Dict] = None):
@@ -157,12 +157,15 @@ class PolymarketCollector(BaseCollector):
                             stats["odds_saved"] += result.get("odds_count", 0)
                             stats["movements_saved"] += result.get("movements_count", 0)
                         except Exception as e:
+                            # Rollback on error to clear bad transaction state
+                            await self.db.rollback()
                             logger.warning(f"Error processing event: {e}")
                             continue
                             
                     logger.info(f"Processed {len(events)} events for {category}")
                     
                 except Exception as e:
+                    await self.db.rollback()
                     logger.error(f"Error fetching {category}: {e}")
                     stats["errors"].append(f"{category}: {str(e)}")
                     continue
@@ -177,6 +180,7 @@ class PolymarketCollector(BaseCollector):
             )
             
         except Exception as e:
+            await self.db.rollback()
             logger.error(f"Polymarket collection error: {e}")
             stats["errors"].append(str(e))
             return CollectorResult(
@@ -217,22 +221,33 @@ class PolymarketCollector(BaseCollector):
             return result
             
         title = event_data.get("title", "")
-        league_info = self.LEAGUE_MAPPING.get(category, {})
-        sport = league_info.get("sport")
-        league = league_info.get("league")
+        sport_code = self.LEAGUE_MAPPING.get(category)
+        
+        if not sport_code:
+            return result
         
         # Parse teams from title
         home_team, away_team = self._parse_teams_from_title(title)
         
+        # Skip non-sports events (political, etc.)
+        if not home_team or not away_team:
+            return result
+            
+        # Skip obvious non-game events
+        non_game_keywords = ["will", "budget", "perform", "win the", "championship", "mvp", "award"]
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in non_game_keywords):
+            return result
+        
         # Find matching game in our database
-        game = await self._find_matching_game(sport, league, home_team, away_team, event_data)
+        game = await self._find_matching_game(sport_code, home_team, away_team, event_data)
         
         if not game:
             return result
             
         # Save/update mapping
         await self._save_game_mapping(
-            condition_id, game.id, title,
+            condition_id, game["id"], title,
             event_data.get("volume", 0),
             event_data.get("liquidity", 0)
         )
@@ -250,12 +265,12 @@ class PolymarketCollector(BaseCollector):
                 away_odds = self._prob_to_american_odds(away_prob)
                 
                 # Check for movement
-                previous_odds = await self._get_previous_odds(game.id)
+                previous_odds = await self._get_previous_odds(game["id"])
                 
                 # Save to odds table
                 odds_record = Odds(
                     id=uuid4(),
-                    game_id=game.id,
+                    game_id=game["id"],
                     sportsbook_id=self._polymarket_sportsbook_id,
                     sportsbook_key="polymarket",
                     bet_type="moneyline",
@@ -267,14 +282,14 @@ class PolymarketCollector(BaseCollector):
                 self.db.add(odds_record)
                 result["odds_count"] += 1
                 
-                # Save movement if changed
+                # Save movement if changed significantly
                 if previous_odds and (
                     abs(home_odds - previous_odds.get("home", 0)) > 5 or
                     abs(away_odds - previous_odds.get("away", 0)) > 5
                 ):
                     movement = OddsMovement(
                         id=uuid4(),
-                        game_id=game.id,
+                        game_id=game["id"],
                         bet_type="moneyline",
                         previous_line=previous_odds.get("home"),
                         current_line=home_odds,
@@ -286,7 +301,7 @@ class PolymarketCollector(BaseCollector):
                     result["movements_count"] += 1
                 
                 # Update consensus_lines with crowd probability
-                await self._update_consensus(game.id, home_prob, away_prob, event_data)
+                await self._update_consensus(game["id"], home_prob, away_prob, event_data)
                 
         return result
     
@@ -309,9 +324,9 @@ class PolymarketCollector(BaseCollector):
             "liq": float(liquidity or 0)
         })
     
-    async def _find_matching_game(self, sport: str, league: str, home_team: str, 
-                                   away_team: str, event_data: Dict) -> Optional[Game]:
-        """Find matching game in our database"""
+    async def _find_matching_game(self, sport_code: str, home_team: str, 
+                                   away_team: str, event_data: Dict) -> Optional[Dict]:
+        """Find matching game in our database using correct schema"""
         if not home_team or not away_team:
             return None
             
@@ -329,18 +344,29 @@ class PolymarketCollector(BaseCollector):
             start_window = datetime.utcnow() - timedelta(days=1)
             end_window = datetime.utcnow() + timedelta(days=7)
         
-        # Try to find game using raw SQL for async compatibility
+        # Query with proper joins: games → teams (for names), sports (for code)
         result = await self.db.execute(text("""
-            SELECT id, home_team, away_team, game_datetime FROM games
-            WHERE sport = :sport AND league = :league
-            AND LOWER(home_team) LIKE LOWER(:home_pattern)
-            AND LOWER(away_team) LIKE LOWER(:away_pattern)
-            AND game_datetime >= :start_window
-            AND game_datetime <= :end_window
+            SELECT g.id, ht.name as home_team, at.name as away_team, g.scheduled_at
+            FROM games g
+            JOIN teams ht ON g.home_team_id = ht.id
+            JOIN teams at ON g.away_team_id = at.id
+            JOIN sports s ON g.sport_id = s.id
+            WHERE s.code = :sport_code
+            AND (
+                LOWER(ht.name) LIKE LOWER(:home_pattern)
+                OR LOWER(ht.abbreviation) LIKE LOWER(:home_pattern)
+                OR LOWER(ht.city) LIKE LOWER(:home_pattern)
+            )
+            AND (
+                LOWER(at.name) LIKE LOWER(:away_pattern)
+                OR LOWER(at.abbreviation) LIKE LOWER(:away_pattern)
+                OR LOWER(at.city) LIKE LOWER(:away_pattern)
+            )
+            AND g.scheduled_at >= :start_window
+            AND g.scheduled_at <= :end_window
             LIMIT 1
         """), {
-            "sport": sport,
-            "league": league,
+            "sport_code": sport_code,
             "home_pattern": f"%{home_team}%",
             "away_pattern": f"%{away_team}%",
             "start_window": start_window,
@@ -349,24 +375,31 @@ class PolymarketCollector(BaseCollector):
         row = result.fetchone()
         
         if row:
-            # Return a simple object with id
-            class GameResult:
-                def __init__(self, id):
-                    self.id = id
-            return GameResult(row[0])
+            return {"id": row[0], "home_team": row[1], "away_team": row[2]}
             
         # Try swapped teams
         result = await self.db.execute(text("""
-            SELECT id, home_team, away_team, game_datetime FROM games
-            WHERE sport = :sport AND league = :league
-            AND LOWER(home_team) LIKE LOWER(:away_pattern)
-            AND LOWER(away_team) LIKE LOWER(:home_pattern)
-            AND game_datetime >= :start_window
-            AND game_datetime <= :end_window
+            SELECT g.id, ht.name as home_team, at.name as away_team, g.scheduled_at
+            FROM games g
+            JOIN teams ht ON g.home_team_id = ht.id
+            JOIN teams at ON g.away_team_id = at.id
+            JOIN sports s ON g.sport_id = s.id
+            WHERE s.code = :sport_code
+            AND (
+                LOWER(ht.name) LIKE LOWER(:away_pattern)
+                OR LOWER(ht.abbreviation) LIKE LOWER(:away_pattern)
+                OR LOWER(ht.city) LIKE LOWER(:away_pattern)
+            )
+            AND (
+                LOWER(at.name) LIKE LOWER(:home_pattern)
+                OR LOWER(at.abbreviation) LIKE LOWER(:home_pattern)
+                OR LOWER(at.city) LIKE LOWER(:home_pattern)
+            )
+            AND g.scheduled_at >= :start_window
+            AND g.scheduled_at <= :end_window
             LIMIT 1
         """), {
-            "sport": sport,
-            "league": league,
+            "sport_code": sport_code,
             "home_pattern": f"%{home_team}%",
             "away_pattern": f"%{away_team}%",
             "start_window": start_window,
@@ -375,10 +408,7 @@ class PolymarketCollector(BaseCollector):
         row = result.fetchone()
         
         if row:
-            class GameResult:
-                def __init__(self, id):
-                    self.id = id
-            return GameResult(row[0])
+            return {"id": row[0], "home_team": row[1], "away_team": row[2]}
         
         return None
     
@@ -490,19 +520,31 @@ class PolymarketCollector(BaseCollector):
             
         title_lower = title.lower()
         
+        # Look for game-like patterns: "Team A vs Team B"
         for separator in [" vs ", " vs. ", " v ", " @ ", " at "]:
             if separator in title_lower:
                 idx = title_lower.find(separator)
                 parts = [title[:idx], title[idx + len(separator):]]
                 if len(parts) == 2:
-                    home = parts[0].strip().split(" to ")[0].strip()
-                    away = parts[1].strip().split(" to ")[0].strip()
-                    # Remove common prefixes
-                    for prefix in ["will ", "can "]:
-                        if home.lower().startswith(prefix):
-                            home = home[len(prefix):]
-                        if away.lower().startswith(prefix):
-                            away = away[len(prefix):]
+                    home = parts[0].strip()
+                    away = parts[1].strip()
+                    
+                    # Clean up - remove anything after "to" or "?"
+                    if " to " in home.lower():
+                        home = home[:home.lower().find(" to ")].strip()
+                    if " to " in away.lower():
+                        away = away[:away.lower().find(" to ")].strip()
+                    if "?" in away:
+                        away = away[:away.find("?")].strip()
+                        
+                    # Skip if result looks like a question/prediction
+                    if len(home) < 2 or len(away) < 2:
+                        return None, None
+                    if home.lower().startswith(("will ", "can ", "who ")):
+                        return None, None
+                    if away.lower().startswith(("will ", "can ", "who ")):
+                        return None, None
+                        
                     return home, away
                     
         return None, None

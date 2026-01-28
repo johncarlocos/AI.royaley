@@ -189,8 +189,10 @@ class NHLOfficialAPICollector(BaseCollector):
         current_month = datetime.now().month
         
         # NHL season format: 20232024 for 2023-24 season
-        # Season starts in October, so if month < 10, we're in previous season
-        if current_month < 10:
+        # Season starts in October, so if month < 10, we're in previous season's finish
+        # Current date is Jan 2026, so we're in 2025-26 season = 20252026
+        # But NHL API data might lag, so let's also try previous season
+        if current_month < 7:  # Before July = still in previous season or just ended
             end_season_year = current_year
         else:
             end_season_year = current_year + 1
@@ -200,9 +202,17 @@ class NHLOfficialAPICollector(BaseCollector):
         for i in range(years_back):
             season_end = end_season_year - i
             season_start = season_end - 1
-            # EDGE tracking started ~2021
-            if season_start >= 2015:  # Go back to 2015-16 for basic stats
+            # EDGE tracking started in 2021-22 season
+            if season_start >= 2021:
                 seasons.append(f"{season_start}{season_end}")
+        
+        # If no EDGE seasons, fall back to basic stats seasons
+        if not seasons:
+            for i in range(years_back):
+                season_end = end_season_year - i
+                season_start = season_end - 1
+                if season_start >= 2015:
+                    seasons.append(f"{season_start}{season_end}")
         
         logger.info(f"[NHL API] Collecting EDGE data for seasons: {seasons[:5]}... ({len(seasons)} total)")
         logger.info(f"[NHL API] Collection type: {collect_type}, Game type: {game_type}")
@@ -381,18 +391,51 @@ class NHLOfficialAPICollector(BaseCollector):
             "game_type": game_type,
         }
         
-        # Get shot speed detail
+        has_any_data = False
+        
+        # Get shot speed detail (most reliable EDGE endpoint)
         try:
             url = f"{NHL_WEB_API}/edge/skater-shot-speed-detail/{player_id}/{season}/{game_type}"
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                edge_data["shot_speed_max"] = data.get("maxShotSpeed")
-                edge_data["shot_speed_avg"] = data.get("avgShotSpeed")
-                edge_data["total_shots"] = data.get("totalShots")
-                edge_data["shots_on_goal"] = data.get("shotsOnGoal")
-        except:
-            pass
+                
+                # Debug: log first response structure
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Shot speed keys for {player_id}: {list(data.keys())[:15]}")
+                
+                # Try multiple key patterns - NHL API uses various formats
+                edge_data["shot_speed_max"] = (
+                    data.get("maxShotSpeed") or 
+                    data.get("shotSpeedMax") or
+                    data.get("max") or
+                    (data.get("shotSpeed", {}).get("max") if isinstance(data.get("shotSpeed"), dict) else None)
+                )
+                edge_data["shot_speed_avg"] = (
+                    data.get("avgShotSpeed") or 
+                    data.get("shotSpeedAvg") or
+                    data.get("avg") or
+                    (data.get("shotSpeed", {}).get("avg") if isinstance(data.get("shotSpeed"), dict) else None)
+                )
+                edge_data["total_shots"] = data.get("totalShots") or data.get("shots")
+                
+                # Check all keys for any shot/speed data
+                for key, value in data.items():
+                    if value and isinstance(value, (int, float)):
+                        if "max" in key.lower() and "shot" in key.lower() and not edge_data.get("shot_speed_max"):
+                            edge_data["shot_speed_max"] = value
+                            has_any_data = True
+                        elif "avg" in key.lower() and "shot" in key.lower() and not edge_data.get("shot_speed_avg"):
+                            edge_data["shot_speed_avg"] = value
+                            has_any_data = True
+                
+                if edge_data.get("shot_speed_max") or edge_data.get("shot_speed_avg"):
+                    has_any_data = True
+                    
+                # Store raw data for analysis
+                edge_data["raw_shot_speed"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Shot speed error for {player_id}: {e}")
         
         # Get skating speed detail
         try:
@@ -400,13 +443,44 @@ class NHLOfficialAPICollector(BaseCollector):
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                edge_data["skating_speed_max"] = data.get("maxSkatingSpeed")
-                edge_data["skating_speed_avg"] = data.get("avgSkatingSpeed")
-                edge_data["speed_bursts_22plus"] = data.get("speedBursts22Plus")
-                edge_data["speed_bursts_20_22"] = data.get("speedBursts20To22")
-                edge_data["speed_bursts_18_20"] = data.get("speedBursts18To20")
-        except:
-            pass
+                
+                # Debug: log structure
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Skating speed keys for {player_id}: {list(data.keys())[:15]}")
+                
+                # Try multiple key patterns
+                edge_data["skating_speed_max"] = (
+                    data.get("maxSkatingSpeed") or 
+                    data.get("skatingSpeedMax") or
+                    data.get("max") or
+                    (data.get("skatingSpeed", {}).get("max") if isinstance(data.get("skatingSpeed"), dict) else None)
+                )
+                edge_data["skating_speed_avg"] = (
+                    data.get("avgSkatingSpeed") or 
+                    data.get("skatingSpeedAvg") or
+                    data.get("avg") or
+                    (data.get("skatingSpeed", {}).get("avg") if isinstance(data.get("skatingSpeed"), dict) else None)
+                )
+                edge_data["speed_bursts_22plus"] = data.get("speedBursts22Plus") or data.get("bursts22Plus")
+                edge_data["speed_bursts_20_22"] = data.get("speedBursts20To22") or data.get("bursts20To22")
+                edge_data["speed_bursts_18_20"] = data.get("speedBursts18To20") or data.get("bursts18To20")
+                
+                # Scan all keys for skating speed data
+                for key, value in data.items():
+                    if value and isinstance(value, (int, float)):
+                        if "max" in key.lower() and "skat" in key.lower() and not edge_data.get("skating_speed_max"):
+                            edge_data["skating_speed_max"] = value
+                            has_any_data = True
+                        elif "avg" in key.lower() and "skat" in key.lower() and not edge_data.get("skating_speed_avg"):
+                            edge_data["skating_speed_avg"] = value
+                            has_any_data = True
+                
+                if edge_data.get("skating_speed_max") or edge_data.get("skating_speed_avg"):
+                    has_any_data = True
+                    
+                edge_data["raw_skating_speed"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Skating speed error for {player_id}: {e}")
         
         # Get skating distance detail
         try:
@@ -414,46 +488,65 @@ class NHLOfficialAPICollector(BaseCollector):
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                edge_data["distance_total"] = data.get("distanceTotal")
-                edge_data["distance_per_game"] = data.get("distancePerGame")
-        except:
-            pass
+                
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Distance keys for {player_id}: {list(data.keys())[:15]}")
+                
+                edge_data["distance_total"] = (
+                    data.get("distanceTotal") or 
+                    data.get("totalDistance") or
+                    data.get("total") or
+                    (data.get("distance", {}).get("total") if isinstance(data.get("distance"), dict) else None)
+                )
+                edge_data["distance_per_game"] = (
+                    data.get("distancePerGame") or 
+                    data.get("perGame") or
+                    data.get("avg") or
+                    (data.get("distance", {}).get("perGame") if isinstance(data.get("distance"), dict) else None)
+                )
+                
+                if edge_data.get("distance_total") or edge_data.get("distance_per_game"):
+                    has_any_data = True
+                    
+                edge_data["raw_distance"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Distance error for {player_id}: {e}")
         
-        # Get zone time (from skater detail)
+        # Get zone time from skater detail
         try:
             url = f"{NHL_WEB_API}/edge/skater-detail/{player_id}/{season}/{game_type}"
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                zone_time = data.get("zoneTime", {})
-                edge_data["offensive_zone_pct"] = zone_time.get("offensiveZonePct")
-                edge_data["defensive_zone_pct"] = zone_time.get("defensiveZonePct")
-                edge_data["neutral_zone_pct"] = zone_time.get("neutralZonePct")
-                edge_data["offensive_zone_time"] = zone_time.get("offensiveZoneTime")
-                edge_data["defensive_zone_time"] = zone_time.get("defensiveZoneTime")
-                edge_data["neutral_zone_time"] = zone_time.get("neutralZoneTime")
+                
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Skater detail keys for {player_id}: {list(data.keys())[:15]}")
+                
+                # Zone time - try multiple structures
+                zone_time = data.get("zoneTime", data.get("zoneTimeBreakdown", data.get("zones", {})))
+                if zone_time and isinstance(zone_time, dict):
+                    edge_data["offensive_zone_pct"] = zone_time.get("offensiveZonePct") or zone_time.get("ozPct") or zone_time.get("oz")
+                    edge_data["defensive_zone_pct"] = zone_time.get("defensiveZonePct") or zone_time.get("dzPct") or zone_time.get("dz")
+                    edge_data["neutral_zone_pct"] = zone_time.get("neutralZonePct") or zone_time.get("nzPct") or zone_time.get("nz")
+                    if any([edge_data.get("offensive_zone_pct"), edge_data.get("defensive_zone_pct")]):
+                        has_any_data = True
+                
+                # Also check top-level for zone data
+                edge_data["offensive_zone_pct"] = edge_data.get("offensive_zone_pct") or data.get("offensiveZonePct") or data.get("ozPct")
+                edge_data["defensive_zone_pct"] = edge_data.get("defensive_zone_pct") or data.get("defensiveZonePct") or data.get("dzPct")
+                
                 edge_data["raw_data"] = data
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[NHL API] Skater detail error for {player_id}: {e}")
         
-        # Get shot location detail
-        try:
-            url = f"{NHL_WEB_API}/edge/skater-shot-location-detail/{player_id}/{season}/{game_type}"
-            response = await client.get(url)
-            if response.status_code == 200:
-                data = response.json()
-                shots = data.get("shotsByZone", {})
-                edge_data["shots_low"] = shots.get("low", {}).get("shots")
-                edge_data["shots_mid"] = shots.get("mid", {}).get("shots")
-                edge_data["shots_high"] = shots.get("high", {}).get("shots")
-                edge_data["goals_low"] = shots.get("low", {}).get("goals")
-                edge_data["goals_mid"] = shots.get("mid", {}).get("goals")
-                edge_data["goals_high"] = shots.get("high", {}).get("goals")
-        except:
-            pass
+        # Return data if we got anything useful
+        if has_any_data:
+            return edge_data
         
-        # Only return if we have some EDGE data
-        if any(edge_data.get(k) for k in ["shot_speed_max", "skating_speed_max", "distance_total"]):
+        return None
+        
+        # Return data if we got anything
+        if has_any_data:
             return edge_data
         
         return None
@@ -521,36 +614,58 @@ class NHLOfficialAPICollector(BaseCollector):
             "game_type": game_type,
         }
         
-        # Get goalie shot location detail
+        has_any_data = False
+        
+        # Get goalie shot location detail (primary endpoint)
         try:
             url = f"{NHL_WEB_API}/edge/goalie-shot-location-detail/{player_id}/{season}/{game_type}"
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
                 
-                # Save locations
-                saves = data.get("savesByZone", {})
-                edge_data["saves_low"] = saves.get("low", {}).get("saves")
-                edge_data["saves_mid"] = saves.get("mid", {}).get("saves")
-                edge_data["saves_high"] = saves.get("high", {}).get("saves")
-                edge_data["save_pct_low"] = saves.get("low", {}).get("savePct")
-                edge_data["save_pct_mid"] = saves.get("mid", {}).get("savePct")
-                edge_data["save_pct_high"] = saves.get("high", {}).get("savePct")
+                # Debug: log first response structure
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Goalie shot location keys for {player_id}: {list(data.keys())[:15]}")
+                    # Also log sample value types
+                    for k, v in list(data.items())[:5]:
+                        logger.info(f"[NHL API DEBUG] {k}: {type(v).__name__} = {v if not isinstance(v, dict) else list(v.keys())[:5]}")
                 
-                # Shots against
-                shots = data.get("shotsByZone", {})
-                edge_data["shots_against_low"] = shots.get("low", {}).get("shots")
-                edge_data["shots_against_mid"] = shots.get("mid", {}).get("shots")
-                edge_data["shots_against_high"] = shots.get("high", {}).get("shots")
+                # Try nested structure first
+                saves = data.get("savesByZone", data.get("saves", {}))
+                if saves and isinstance(saves, dict):
+                    # Nested: {"low": {"saves": 100, "savePct": 0.92}, ...}
+                    if isinstance(saves.get("low"), dict):
+                        edge_data["saves_low"] = saves["low"].get("saves")
+                        edge_data["save_pct_low"] = saves["low"].get("savePct")
+                        has_any_data = True
+                    if isinstance(saves.get("mid"), dict):
+                        edge_data["saves_mid"] = saves["mid"].get("saves")
+                        edge_data["save_pct_mid"] = saves["mid"].get("savePct")
+                    if isinstance(saves.get("high"), dict):
+                        edge_data["saves_high"] = saves["high"].get("saves")
+                        edge_data["save_pct_high"] = saves["high"].get("savePct")
                 
-                # Goals against
-                edge_data["goals_against_low"] = shots.get("low", {}).get("goals")
-                edge_data["goals_against_mid"] = shots.get("mid", {}).get("goals")
-                edge_data["goals_against_high"] = shots.get("high", {}).get("goals")
+                # Try flat structure: {"lowSaves": 100, "lowSavePct": 0.92, ...}
+                if not has_any_data:
+                    edge_data["saves_low"] = data.get("lowSaves") or data.get("savesLow")
+                    edge_data["saves_mid"] = data.get("midSaves") or data.get("savesMid") or data.get("middleSaves")
+                    edge_data["saves_high"] = data.get("highSaves") or data.get("savesHigh")
+                    edge_data["save_pct_low"] = data.get("lowSavePct") or data.get("savePctLow")
+                    edge_data["save_pct_mid"] = data.get("midSavePct") or data.get("savePctMid") or data.get("middleSavePct")
+                    edge_data["save_pct_high"] = data.get("highSavePct") or data.get("savePctHigh")
+                    if any([edge_data.get("saves_low"), edge_data.get("saves_mid"), edge_data.get("saves_high")]):
+                        has_any_data = True
                 
-                edge_data["raw_data"] = data
-        except:
-            pass
+                # Scan all keys for save data
+                for key, value in data.items():
+                    if value and isinstance(value, (int, float)):
+                        key_lower = key.lower()
+                        if "save" in key_lower:
+                            has_any_data = True  # Found some save data
+                
+                edge_data["raw_shot_location"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Goalie shot location error for {player_id}: {e}")
         
         # Get goalie 5v5 detail
         try:
@@ -558,29 +673,68 @@ class NHLOfficialAPICollector(BaseCollector):
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                edge_data["save_pct_5v5"] = data.get("savePct5v5")
-                edge_data["goals_against_5v5"] = data.get("goalsAgainst5v5")
-                edge_data["shots_against_5v5"] = data.get("shotsAgainst5v5")
-        except:
-            pass
+                
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Goalie 5v5 keys for {player_id}: {list(data.keys())[:15]}")
+                
+                edge_data["save_pct_5v5"] = (
+                    data.get("savePct5v5") or 
+                    data.get("savePct") or 
+                    data.get("fiveOnFiveSavePct") or
+                    data.get("5v5SavePct")
+                )
+                edge_data["goals_against_5v5"] = (
+                    data.get("goalsAgainst5v5") or 
+                    data.get("goalsAgainst") or
+                    data.get("5v5GoalsAgainst")
+                )
+                edge_data["shots_against_5v5"] = (
+                    data.get("shotsAgainst5v5") or 
+                    data.get("shotsAgainst") or
+                    data.get("5v5ShotsAgainst")
+                )
+                if edge_data.get("save_pct_5v5"):
+                    has_any_data = True
+                    
+                edge_data["raw_5v5"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Goalie 5v5 error for {player_id}: {e}")
         
-        # Get high danger stats
+        # Get goalie detail (high danger stats)
         try:
             url = f"{NHL_WEB_API}/edge/goalie-detail/{player_id}/{season}/{game_type}"
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                hd = data.get("highDanger", {})
-                edge_data["high_danger_saves"] = hd.get("saves")
-                edge_data["high_danger_save_pct"] = hd.get("savePct")
-                edge_data["high_danger_goals_against"] = hd.get("goalsAgainst")
-                edge_data["total_saves"] = data.get("totalSaves")
-                edge_data["total_shots_against"] = data.get("totalShotsAgainst")
-        except:
-            pass
+                
+                if player_id % 500 == 0:
+                    logger.info(f"[NHL API DEBUG] Goalie detail keys for {player_id}: {list(data.keys())[:15]}")
+                
+                # High danger - try nested and flat
+                hd = data.get("highDanger", data.get("highDangerShots", {}))
+                if hd and isinstance(hd, dict):
+                    edge_data["high_danger_saves"] = hd.get("saves")
+                    edge_data["high_danger_save_pct"] = hd.get("savePct") or hd.get("savePercentage")
+                    edge_data["high_danger_goals_against"] = hd.get("goalsAgainst") or hd.get("goals")
+                    if edge_data.get("high_danger_saves"):
+                        has_any_data = True
+                
+                # Flat high danger
+                edge_data["high_danger_saves"] = edge_data.get("high_danger_saves") or data.get("highDangerSaves")
+                edge_data["high_danger_save_pct"] = edge_data.get("high_danger_save_pct") or data.get("highDangerSavePct")
+                
+                # Total saves
+                edge_data["total_saves"] = data.get("totalSaves") or data.get("saves")
+                edge_data["total_shots_against"] = data.get("totalShotsAgainst") or data.get("shotsAgainst")
+                
+                if edge_data.get("total_saves") or edge_data.get("high_danger_saves"):
+                    has_any_data = True
+                    
+                edge_data["raw_detail"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Goalie detail error for {player_id}: {e}")
         
-        # Only return if we have some EDGE data
-        if any(edge_data.get(k) for k in ["saves_low", "save_pct_5v5", "high_danger_saves"]):
+        if has_any_data:
             return edge_data
         
         return None
@@ -629,15 +783,38 @@ class NHLOfficialAPICollector(BaseCollector):
             "game_type": game_type,
         }
         
-        # Get team detail
+        has_any_data = False
+        
+        # Get team detail (main endpoint)
         try:
             url = f"{NHL_WEB_API}/edge/team-detail/{team_id}/{season}/{game_type}"
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
+                
+                # Debug: log first team's structure
+                if team_id == 1:
+                    logger.info(f"[NHL API DEBUG] Team detail keys for {team_id}: {list(data.keys())[:15]}")
+                    for k, v in list(data.items())[:5]:
+                        logger.info(f"[NHL API DEBUG] Team {k}: {type(v).__name__} = {v if not isinstance(v, dict) else list(v.keys())[:5] if isinstance(v, dict) else v}")
+                
                 edge_data["raw_data"] = data
-        except:
-            pass
+                
+                # Try to extract any useful team data
+                for key, value in data.items():
+                    if value and isinstance(value, (int, float)):
+                        has_any_data = True
+                        key_lower = key.lower()
+                        if "distance" in key_lower and "total" in key_lower:
+                            edge_data["distance_total"] = value
+                        elif "distance" in key_lower and "game" in key_lower:
+                            edge_data["distance_per_game"] = value
+                        elif "oz" in key_lower or "offensive" in key_lower:
+                            edge_data["offensive_zone_pct"] = value
+                        elif "dz" in key_lower or "defensive" in key_lower:
+                            edge_data["defensive_zone_pct"] = value
+        except Exception as e:
+            logger.debug(f"[NHL API] Team detail error for {team_id}: {e}")
         
         # Get team skating distance
         try:
@@ -645,10 +822,28 @@ class NHLOfficialAPICollector(BaseCollector):
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                edge_data["distance_total"] = data.get("distanceTotal")
-                edge_data["distance_per_game"] = data.get("distancePerGame")
-        except:
-            pass
+                
+                if team_id == 1:
+                    logger.info(f"[NHL API DEBUG] Team distance keys for {team_id}: {list(data.keys())[:15]}")
+                
+                # Try multiple key patterns
+                edge_data["distance_total"] = (
+                    data.get("distanceTotal") or 
+                    data.get("totalDistance") or
+                    data.get("total")
+                )
+                edge_data["distance_per_game"] = (
+                    data.get("distancePerGame") or 
+                    data.get("avgDistance") or
+                    data.get("perGame")
+                )
+                
+                if edge_data.get("distance_total") or edge_data.get("distance_per_game"):
+                    has_any_data = True
+                    
+                edge_data["raw_distance"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Team distance error for {team_id}: {e}")
         
         # Get team shot location
         try:
@@ -656,36 +851,41 @@ class NHLOfficialAPICollector(BaseCollector):
             response = await client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                shots = data.get("shotsByZone", {})
-                edge_data["shots_low"] = shots.get("low", {}).get("shots")
-                edge_data["shots_mid"] = shots.get("mid", {}).get("shots")
-                edge_data["shots_high"] = shots.get("high", {}).get("shots")
-                edge_data["goals_low"] = shots.get("low", {}).get("goals")
-                edge_data["goals_mid"] = shots.get("mid", {}).get("goals")
-                edge_data["goals_high"] = shots.get("high", {}).get("goals")
-                edge_data["shooting_pct_low"] = shots.get("low", {}).get("shootingPct")
-                edge_data["shooting_pct_mid"] = shots.get("mid", {}).get("shootingPct")
-                edge_data["shooting_pct_high"] = shots.get("high", {}).get("shootingPct")
-        except:
-            pass
-        
-        # Get team zone time from leaders endpoint
-        try:
-            url = f"{NHL_WEB_API}/edge/team-zone-time-top-10/all/offensiveZonePct/{season}/{game_type}"
-            response = await client.get(url)
-            if response.status_code == 200:
-                data = response.json()
-                for team in data.get("data", []):
-                    if team.get("teamId") == team_id:
-                        edge_data["offensive_zone_pct"] = team.get("offensiveZonePct")
-                        edge_data["defensive_zone_pct"] = team.get("defensiveZonePct")
-                        edge_data["neutral_zone_pct"] = team.get("neutralZonePct")
-                        break
-        except:
-            pass
+                
+                if team_id == 1:
+                    logger.info(f"[NHL API DEBUG] Team shot location keys for {team_id}: {list(data.keys())[:15]}")
+                
+                # Try nested structure
+                shots = data.get("shotsByZone", data.get("shots", {}))
+                if shots and isinstance(shots, dict):
+                    if isinstance(shots.get("low"), dict):
+                        edge_data["shots_low"] = shots["low"].get("shots")
+                        edge_data["goals_low"] = shots["low"].get("goals")
+                        edge_data["shooting_pct_low"] = shots["low"].get("shootingPct")
+                        has_any_data = True
+                    if isinstance(shots.get("mid"), dict):
+                        edge_data["shots_mid"] = shots["mid"].get("shots")
+                        edge_data["goals_mid"] = shots["mid"].get("goals")
+                        edge_data["shooting_pct_mid"] = shots["mid"].get("shootingPct")
+                    if isinstance(shots.get("high"), dict):
+                        edge_data["shots_high"] = shots["high"].get("shots")
+                        edge_data["goals_high"] = shots["high"].get("goals")
+                        edge_data["shooting_pct_high"] = shots["high"].get("shootingPct")
+                
+                # Try flat structure
+                if not has_any_data:
+                    edge_data["shots_low"] = data.get("lowShots") or data.get("shotsLow")
+                    edge_data["shots_mid"] = data.get("midShots") or data.get("shotsMid")
+                    edge_data["shots_high"] = data.get("highShots") or data.get("shotsHigh")
+                    if any([edge_data.get("shots_low"), edge_data.get("shots_mid"), edge_data.get("shots_high")]):
+                        has_any_data = True
+                
+                edge_data["raw_shot_location"] = data
+        except Exception as e:
+            logger.debug(f"[NHL API] Team shot location error for {team_id}: {e}")
         
         # Only return if we have some data
-        if any(edge_data.get(k) for k in ["distance_total", "shots_low", "offensive_zone_pct"]):
+        if has_any_data or edge_data.get("raw_data"):
             return edge_data
         
         return None

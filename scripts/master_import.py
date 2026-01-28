@@ -2972,6 +2972,241 @@ async def import_ngs_receiving(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# KAGGLE DATASETS IMPORT FUNCTIONS (Collector 22)
+# =============================================================================
+
+async def import_kaggle(sports: List[str] = None) -> ImportResult:
+    """Import current/recent Kaggle datasets for all sports."""
+    result = ImportResult(source="kaggle")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect(sports=sports, years_back=2)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_history(years_back: int = 10, sports: List[str] = None) -> ImportResult:
+    """Import historical Kaggle datasets for all sports."""
+    result = ImportResult(source="kaggle_history")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_historical(years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle] History import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_nfl(years_back: int = 10) -> ImportResult:
+    """Import NFL data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_nfl")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("NFL", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle NFL] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_nba(years_back: int = 10) -> ImportResult:
+    """Import NBA data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_nba")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("NBA", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle NBA] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_mlb(years_back: int = 10) -> ImportResult:
+    """Import MLB data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_mlb")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("MLB", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle MLB] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_nhl(years_back: int = 10) -> ImportResult:
+    """Import NHL data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_nhl")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("NHL", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle NHL] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_soccer(years_back: int = 10) -> ImportResult:
+    """Import Soccer data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_soccer")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("SOCCER", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle Soccer] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_ncaaf(years_back: int = 10) -> ImportResult:
+    """Import NCAAF data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_ncaaf")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("NCAAF", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle NCAAF] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_ncaab(years_back: int = 10) -> ImportResult:
+    """Import NCAAB data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_ncaab")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("NCAAB", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle NCAAB] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_mma(years_back: int = 10) -> ImportResult:
+    """Import UFC/MMA data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_mma")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("MMA", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle MMA] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_kaggle_tennis(years_back: int = 10) -> ImportResult:
+    """Import Tennis data from Kaggle datasets."""
+    result = ImportResult(source="kaggle_tennis")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_sport("TENNIS", years_back=years_back)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = sum(counts.values())
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle Tennis] Import error: {e}")
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -3090,6 +3325,19 @@ IMPORT_MAP = {
     "ngs_rushing": import_ngs_rushing,
     "ngs_receiving": import_ngs_receiving,
     
+    # Kaggle Datasets (Collector 22)
+    "kaggle": import_kaggle,
+    "kaggle_history": import_kaggle_history,
+    "kaggle_nfl": import_kaggle_nfl,
+    "kaggle_nba": import_kaggle_nba,
+    "kaggle_mlb": import_kaggle_mlb,
+    "kaggle_nhl": import_kaggle_nhl,
+    "kaggle_soccer": import_kaggle_soccer,
+    "kaggle_ncaaf": import_kaggle_ncaaf,
+    "kaggle_ncaab": import_kaggle_ncaab,
+    "kaggle_mma": import_kaggle_mma,
+    "kaggle_tennis": import_kaggle_tennis,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -3101,10 +3349,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving", "kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", "kaggle_mma", "kaggle_tennis"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -3176,8 +3424,14 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "cfbd", "cfbd_teams",
                            "matchstat", "matchstat_rankings", "matchstat_players", "matchstat_stats",
                            "realgm", "realgm_salaries", "realgm_rosters",
-                           "nextgenstats"]:
+                           "nextgenstats", "kaggle"]:
                 result = await func()
+            elif source in ["kaggle_history"]:
+                result = await func(years_back=seasons)
+            elif source in ["kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", 
+                           "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", 
+                           "kaggle_mma", "kaggle_tennis"]:
+                result = await func(years_back=seasons)
             elif source == "weather":
                 result = await func(sports=sports, days=7)
             else:
@@ -3293,6 +3547,19 @@ def show_status():
     console.print("  • ngs_passing        → passing stats only (time-to-throw, air yards, CPOE)")
     console.print("  • ngs_rushing        → rushing stats only (RYOE, efficiency)")
     console.print("  • ngs_receiving      → receiving stats only (separation, cushion, YAC)")
+    
+    console.print("\n[cyan]⚡ KAGGLE DATASETS (Historical Backtesting):[/cyan]")
+    console.print("  • kaggle             → current data (all sports)")
+    console.print("  • kaggle_history     → 10 years historical (all sports)")
+    console.print("  • kaggle_nfl         → NFL scores, betting, play-by-play")
+    console.print("  • kaggle_nba         → NBA stats, odds, games")
+    console.print("  • kaggle_mlb         → MLB game data, player stats")
+    console.print("  • kaggle_nhl         → NHL game data, player stats")
+    console.print("  • kaggle_soccer      → Soccer matches, betting odds")
+    console.print("  • kaggle_ncaaf       → College football stats")
+    console.print("  • kaggle_ncaab       → College basketball stats")
+    console.print("  • kaggle_mma         → UFC/MMA fights, odds")
+    console.print("  • kaggle_tennis      → ATP tennis matches")
     
     console.print("\n[cyan]⚡ LIVESCORES:[/cyan]")
     console.print("  • sportsdb_live     → Real-time scores")

@@ -25,6 +25,7 @@ IMPLEMENTED COLLECTORS:
     collector_19_matchstat.py     - Matchstat Tennis API (ATP/WTA rankings, H2H, surface stats) - $49/mo
     collector_20_realgm.py        - RealGM/ESPN NBA Salaries (salary data, contracts, rosters) - FREE
     collector_21_nextgenstats.py  - NFL Next Gen Stats (player tracking, time-to-throw, separation) - FREE
+    collector_22_kaggle.py        - Kaggle Datasets (Historical sports data for backtesting) - FREE (API key req)
 """
 
 from app.services.collectors.base_collector import (
@@ -56,6 +57,7 @@ from app.services.collectors.collector_18_cfbd import CollegeFootballDataCollect
 from app.services.collectors.collector_19_matchstat import MatchstatCollector, matchstat_collector
 from app.services.collectors.collector_20_realgm import RealGMCollector, realgm_collector
 from app.services.collectors.collector_21_nextgenstats import NextGenStatsCollector, nextgenstats_collector
+from app.services.collectors.collector_22_kaggle import KaggleCollector, kaggle_collector
 
 __all__ = [
     "BaseCollector",
@@ -105,4 +107,6 @@ __all__ = [
     "realgm_collector",
     "NextGenStatsCollector",
     "nextgenstats_collector",
+    "KaggleCollector",
+    "kaggle_collector",
 ]

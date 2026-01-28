@@ -741,7 +741,54 @@ class NextGenStatsCollector(BaseCollector):
                     player_id = player_cache[player_key]
                     
                     # Save each stat as a PlayerStats record
-                    stat_type_base = f"ngs_{stat_category}"
+                    # Use abbreviated stat type names to fit VARCHAR(50)
+                    stat_abbrev = {
+                        "passing": "pass",
+                        "rushing": "rush", 
+                        "receiving": "rec",
+                    }
+                    stat_type_base = f"ngs_{stat_abbrev.get(stat_category, stat_category[:4])}"
+                    
+                    # Abbreviate long stat names
+                    stat_name_abbrev = {
+                        "completion_percentage_above_expectation": "cpoe",
+                        "expected_completion_percentage": "exp_comp_pct",
+                        "completion_percentage": "comp_pct",
+                        "avg_completed_air_yards": "avg_cmp_air_yds",
+                        "avg_intended_air_yards": "avg_int_air_yds",
+                        "avg_air_yards_differential": "avg_air_yds_diff",
+                        "max_completed_air_distance": "max_cmp_air_dist",
+                        "avg_air_yards_to_sticks": "avg_air_to_sticks",
+                        "percent_attempts_gte_eight_defenders": "pct_att_8_def",
+                        "rush_yards_over_expected_per_att": "ryoe_per_att",
+                        "rush_yards_over_expected": "ryoe",
+                        "expected_rush_yards": "exp_rush_yds",
+                        "rush_pct_over_expected": "rush_pct_oe",
+                        "percent_share_of_intended_air_yards": "pct_air_yds_share",
+                        "avg_yac_above_expectation": "avg_yac_oe",
+                        "avg_expected_yac": "avg_exp_yac",
+                        "player_jersey_number": "jersey_num",
+                        "player_display_name": "name",
+                        "player_position": "pos",
+                        "avg_time_to_throw": "avg_ttt",
+                        "avg_air_distance": "avg_air_dist",
+                        "max_air_distance": "max_air_dist",
+                        "passer_rating": "pass_rtg",
+                        "pass_touchdowns": "pass_td",
+                        "rush_touchdowns": "rush_td",
+                        "rec_touchdowns": "rec_td",
+                        "interceptions": "int",
+                        "completions": "cmp",
+                        "attempts": "att",
+                        "rush_attempts": "rush_att",
+                        "avg_rush_yards": "avg_rush_yds",
+                        "avg_time_to_los": "avg_time_los",
+                        "avg_separation": "avg_sep",
+                        "avg_cushion": "avg_cush",
+                        "catch_percentage": "catch_pct",
+                        "aggressiveness": "agg",
+                        "efficiency": "eff",
+                    }
                     
                     for stat_name, stat_value in stats.items():
                         if stat_value is None:
@@ -752,11 +799,18 @@ class NextGenStatsCollector(BaseCollector):
                             if stat_value_float is None:
                                 continue
                             
+                            # Abbreviate stat name if needed
+                            short_stat_name = stat_name_abbrev.get(stat_name, stat_name)
+                            
                             # Create unique stat type with week if available
                             if week:
-                                full_stat_type = f"{stat_type_base}_{stat_name}_w{week}"
+                                full_stat_type = f"{stat_type_base}_{short_stat_name}_w{week}"
                             else:
-                                full_stat_type = f"{stat_type_base}_{stat_name}"
+                                full_stat_type = f"{stat_type_base}_{short_stat_name}"
+                            
+                            # Truncate to 50 chars max (VARCHAR(50) limit)
+                            if len(full_stat_type) > 50:
+                                full_stat_type = full_stat_type[:50]
                             
                             # Check for existing stat
                             result = await session.execute(

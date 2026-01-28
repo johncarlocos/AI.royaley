@@ -14,11 +14,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
-from decimal import Decimal
 from uuid import uuid4
 import httpx
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.collectors.base_collector import BaseCollector, CollectorResult
 from app.models.models import Game, Sportsbook, Odds, OddsMovement, ConsensusLine
@@ -59,7 +58,7 @@ class PolymarketCollector(BaseCollector):
         "MMA": {"sport": "mma", "league": "UFC"},
     }
     
-    def __init__(self, db: Session, config: Optional[Dict] = None):
+    def __init__(self, db: AsyncSession, config: Optional[Dict] = None):
         # Initialize base collector
         super().__init__(
             name="polymarket",
@@ -79,26 +78,28 @@ class PolymarketCollector(BaseCollector):
         
     async def _get_polymarket_sportsbook_id(self):
         """Get Polymarket sportsbook ID from database"""
-        result = self.db.execute(
+        result = await self.db.execute(
             text("SELECT id FROM sportsbooks WHERE key = 'polymarket'")
-        ).fetchone()
+        )
+        row = result.fetchone()
         
-        if result:
-            return result[0]
+        if row:
+            return row[0]
         
         # Create if not exists
         new_id = uuid4()
-        self.db.execute(text("""
+        await self.db.execute(text("""
             INSERT INTO sportsbooks (id, name, key, is_sharp, is_active, priority, created_at)
             VALUES (:id, 'Polymarket', 'polymarket', true, true, 5, NOW())
             ON CONFLICT (key) DO NOTHING
         """), {"id": new_id})
-        self.db.commit()
+        await self.db.commit()
         
-        result = self.db.execute(
+        result = await self.db.execute(
             text("SELECT id FROM sportsbooks WHERE key = 'polymarket'")
-        ).fetchone()
-        return result[0] if result else new_id
+        )
+        row = result.fetchone()
+        return row[0] if row else new_id
     
     async def collect(self, **kwargs) -> CollectorResult:
         """
@@ -166,7 +167,7 @@ class PolymarketCollector(BaseCollector):
                     stats["errors"].append(f"{category}: {str(e)}")
                     continue
                     
-            self.db.commit()
+            await self.db.commit()
             
             return CollectorResult(
                 success=len(stats["errors"]) == 0,
@@ -291,7 +292,7 @@ class PolymarketCollector(BaseCollector):
     
     async def _save_game_mapping(self, condition_id: str, game_id, title: str, volume, liquidity):
         """Save or update polymarket_game_map"""
-        self.db.execute(text("""
+        await self.db.execute(text("""
             INSERT INTO polymarket_game_map (condition_id, game_id, event_title, volume, liquidity, updated_at)
             VALUES (:cid, :gid, :title, :vol, :liq, NOW())
             ON CONFLICT (condition_id) DO UPDATE SET
@@ -328,41 +329,70 @@ class PolymarketCollector(BaseCollector):
             start_window = datetime.utcnow() - timedelta(days=1)
             end_window = datetime.utcnow() + timedelta(days=7)
         
-        # Try to find game
-        game = self.db.query(Game).filter(
-            Game.sport == sport,
-            Game.league == league,
-            Game.home_team.ilike(f"%{home_team}%"),
-            Game.away_team.ilike(f"%{away_team}%"),
-            Game.game_datetime >= start_window,
-            Game.game_datetime <= end_window
-        ).first()
+        # Try to find game using raw SQL for async compatibility
+        result = await self.db.execute(text("""
+            SELECT id, home_team, away_team, game_datetime FROM games
+            WHERE sport = :sport AND league = :league
+            AND LOWER(home_team) LIKE LOWER(:home_pattern)
+            AND LOWER(away_team) LIKE LOWER(:away_pattern)
+            AND game_datetime >= :start_window
+            AND game_datetime <= :end_window
+            LIMIT 1
+        """), {
+            "sport": sport,
+            "league": league,
+            "home_pattern": f"%{home_team}%",
+            "away_pattern": f"%{away_team}%",
+            "start_window": start_window,
+            "end_window": end_window
+        })
+        row = result.fetchone()
         
-        if game:
-            return game
+        if row:
+            # Return a simple object with id
+            class GameResult:
+                def __init__(self, id):
+                    self.id = id
+            return GameResult(row[0])
             
         # Try swapped teams
-        game = self.db.query(Game).filter(
-            Game.sport == sport,
-            Game.league == league,
-            Game.home_team.ilike(f"%{away_team}%"),
-            Game.away_team.ilike(f"%{home_team}%"),
-            Game.game_datetime >= start_window,
-            Game.game_datetime <= end_window
-        ).first()
+        result = await self.db.execute(text("""
+            SELECT id, home_team, away_team, game_datetime FROM games
+            WHERE sport = :sport AND league = :league
+            AND LOWER(home_team) LIKE LOWER(:away_pattern)
+            AND LOWER(away_team) LIKE LOWER(:home_pattern)
+            AND game_datetime >= :start_window
+            AND game_datetime <= :end_window
+            LIMIT 1
+        """), {
+            "sport": sport,
+            "league": league,
+            "home_pattern": f"%{home_team}%",
+            "away_pattern": f"%{away_team}%",
+            "start_window": start_window,
+            "end_window": end_window
+        })
+        row = result.fetchone()
         
-        return game
+        if row:
+            class GameResult:
+                def __init__(self, id):
+                    self.id = id
+            return GameResult(row[0])
+        
+        return None
     
     async def _get_previous_odds(self, game_id) -> Optional[Dict]:
         """Get previous Polymarket odds for comparison"""
-        result = self.db.execute(text("""
+        result = await self.db.execute(text("""
             SELECT home_odds, away_odds FROM odds
             WHERE game_id = :gid AND sportsbook_key = 'polymarket'
             ORDER BY recorded_at DESC LIMIT 1
-        """), {"gid": game_id}).fetchone()
+        """), {"gid": game_id})
+        row = result.fetchone()
         
-        if result:
-            return {"home": result[0], "away": result[1]}
+        if row:
+            return {"home": row[0], "away": row[1]}
         return None
     
     async def _update_consensus(self, game_id, home_prob: float, away_prob: float, event_data: Dict):
@@ -380,13 +410,14 @@ class PolymarketCollector(BaseCollector):
             confidence = 0.3
         
         # Check if consensus exists for this game
-        existing = self.db.execute(text("""
+        existing = await self.db.execute(text("""
             SELECT id FROM consensus_lines 
             WHERE game_id = :gid AND bet_type = 'polymarket_crowd'
-        """), {"gid": game_id}).fetchone()
+        """), {"gid": game_id})
+        row = existing.fetchone()
         
-        if existing:
-            self.db.execute(text("""
+        if row:
+            await self.db.execute(text("""
                 UPDATE consensus_lines SET
                     consensus_line = :home_prob,
                     public_bet_pct = :away_prob,
@@ -400,7 +431,7 @@ class PolymarketCollector(BaseCollector):
                 "confidence": confidence * 100
             })
         else:
-            self.db.execute(text("""
+            await self.db.execute(text("""
                 INSERT INTO consensus_lines 
                 (id, game_id, bet_type, consensus_line, public_bet_pct, sharp_bet_pct, calculated_at)
                 VALUES (gen_random_uuid(), :gid, 'polymarket_crowd', :home_prob, :away_prob, :confidence, NOW())
@@ -488,5 +519,5 @@ class PolymarketCollector(BaseCollector):
 
 
 # Factory function
-def get_collector(db: Session, config: Optional[Dict] = None) -> PolymarketCollector:
+def get_collector(db: AsyncSession, config: Optional[Dict] = None) -> PolymarketCollector:
     return PolymarketCollector(db, config)

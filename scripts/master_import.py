@@ -2129,6 +2129,208 @@ async def import_basketball_ref_injuries() -> ImportResult:
     return result
 
 
+# =============================================================================
+# COLLEGE FOOTBALL DATA API IMPORTS (NCAAF Advanced)
+# =============================================================================
+
+async def import_cfbd() -> ImportResult:
+    """Import current NCAAF data from College Football Data API."""
+    result = ImportResult(source="cfbd")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=1,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_history(years_back: int = 10) -> ImportResult:
+    """Import 10 years NCAAF data from College Football Data API."""
+    result = ImportResult(source="cfbd_history")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        logging.info(f"[CFBD] Collecting {years_back} years of NCAAF data")
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_teams() -> ImportResult:
+    """Import NCAAF teams from College Football Data API."""
+    result = ImportResult(source="cfbd_teams")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=1,
+            collect_type="teams"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_games(years_back: int = 10) -> ImportResult:
+    """Import NCAAF games from College Football Data API."""
+    result = ImportResult(source="cfbd_games")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="games"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_stats(years_back: int = 10) -> ImportResult:
+    """Import NCAAF team/player stats from College Football Data API."""
+    result = ImportResult(source="cfbd_stats")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="stats"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_ratings(years_back: int = 10) -> ImportResult:
+    """Import NCAAF ratings (SP+, SRS, talent) from College Football Data API."""
+    result = ImportResult(source="cfbd_ratings")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="ratings"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_recruiting(years_back: int = 10) -> ImportResult:
+    """Import NCAAF recruiting from College Football Data API."""
+    result = ImportResult(source="cfbd_recruiting")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="recruiting"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfbd_lines(years_back: int = 10) -> ImportResult:
+    """Import NCAAF betting lines from College Football Data API."""
+    result = ImportResult(source="cfbd_lines")
+    try:
+        from app.services.collectors import cfbd_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfbd_collector.collect(
+            years_back=years_back,
+            collect_type="lines"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfbd_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 async def import_sportsipy_mlb(years_back: int = 10) -> ImportResult:
     """Import MLB data from Sports-Reference."""
     result = ImportResult(source="sportsipy_mlb")
@@ -2356,6 +2558,7 @@ IMPORT_MAP = {
     "nhl_api": import_nhl_api,
     "sportsipy": import_sportsipy,
     "basketball_ref": import_basketball_ref,
+    "cfbd": import_cfbd,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -2374,6 +2577,7 @@ IMPORT_MAP = {
     "weather_history": import_weather_history,
     "sportsipy_history": import_sportsipy_history,
     "basketball_ref_history": import_basketball_ref_history,
+    "cfbd_history": import_cfbd_history,
     
     # Specialized data
     "injuries": import_espn_injuries,
@@ -2418,6 +2622,14 @@ IMPORT_MAP = {
     "basketball_ref_teams": import_basketball_ref_teams,
     "basketball_ref_injuries": import_basketball_ref_injuries,
     
+    # College Football Data
+    "cfbd_teams": import_cfbd_teams,
+    "cfbd_games": import_cfbd_games,
+    "cfbd_stats": import_cfbd_stats,
+    "cfbd_ratings": import_cfbd_ratings,
+    "cfbd_recruiting": import_cfbd_recruiting,
+    "cfbd_lines": import_cfbd_lines,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -2429,10 +2641,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -2482,7 +2694,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings", "nhl_api_history"]:
                 result = await func(years_back=seasons)
-            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats", "basketball_ref_history"]:
+            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats", "basketball_ref_history", "cfbd_history", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines"]:
                 result = await func(years_back=seasons)
             elif source == "action_network_history":
                 result = await func(days_back=days)
@@ -2500,7 +2712,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "cfl_teams",
                            "action_network", "sharp_money", "nhl_api",
                            "sportsipy", "sportsipy_teams",
-                           "basketball_ref", "basketball_ref_teams", "basketball_ref_injuries"]:
+                           "basketball_ref", "basketball_ref_teams", "basketball_ref_injuries",
+                           "cfbd", "cfbd_teams"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

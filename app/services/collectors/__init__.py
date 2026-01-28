@@ -21,6 +21,7 @@ IMPLEMENTED COLLECTORS:
     collector_15_nhl_api.py       - NHL Official API (NHL EDGE stats: shot speed, skating speed) - FREE
     collector_16_sportsipy.py     - Sportsipy (Sports-Reference scraper: MLB, NBA, NFL, NHL, NCAAF, NCAAB) - FREE (BROKEN)
     collector_17_basketball_ref.py - Basketball Reference (NBA stats, box scores, injuries) - FREE (Requires Selenium)
+    collector_18_cfbd.py          - College Football Data API (NCAAF advanced stats, SP+, recruiting, betting lines) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -48,6 +49,7 @@ from app.services.collectors.collector_14_action_network import ActionNetworkCol
 from app.services.collectors.collector_15_nhl_api import NHLOfficialAPICollector, nhl_official_api_collector
 from app.services.collectors.collector_16_sportsipy import SportsipyCollector, sportsipy_collector
 from app.services.collectors.collector_17_basketball_ref import BasketballRefCollector, basketball_ref_collector
+from app.services.collectors.collector_18_cfbd import CollegeFootballDataCollector, cfbd_collector
 
 __all__ = [
     "BaseCollector",
@@ -89,4 +91,6 @@ __all__ = [
     "sportsipy_collector",
     "BasketballRefCollector",
     "basketball_ref_collector",
+    "CollegeFootballDataCollector",
+    "cfbd_collector",
 ]

@@ -310,7 +310,7 @@ class SportsipyCollector(BaseCollector):
             return CollectorResult(
                 success=False,
                 data=None,
-                records=0,
+                records_count=0,
                 error="sportsipy package not installed. Install with: pip install sportsipy"
             )
         
@@ -400,7 +400,7 @@ class SportsipyCollector(BaseCollector):
         return CollectorResult(
             success=total_records > 0,
             data=data,
-            records=total_records,
+            records_count=total_records,
             error="; ".join(errors[:5]) if errors else None
         )
 

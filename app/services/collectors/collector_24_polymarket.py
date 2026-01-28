@@ -18,13 +18,10 @@ from decimal import Decimal
 from uuid import uuid4
 import httpx
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, text
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import text
 
-from app.services.collectors.base_collector import BaseCollector
-from app.models.models import (
-    Game, Sportsbook, Odds, OddsMovement, ConsensusLine
-)
+from app.services.collectors.base_collector import BaseCollector, CollectorResult
+from app.models.models import Game, Sportsbook, Odds, OddsMovement, ConsensusLine
 
 logger = logging.getLogger(__name__)
 
@@ -63,28 +60,23 @@ class PolymarketCollector(BaseCollector):
     }
     
     def __init__(self, db: Session, config: Optional[Dict] = None):
-        super().__init__(db, config)
-        self.client = None
-        self.rate_limit_delay = 0.5
+        # Initialize base collector
+        super().__init__(
+            name="polymarket",
+            base_url=self.GAMMA_BASE_URL,
+            rate_limit=60,
+            rate_window=60,
+            timeout=30.0,
+            max_retries=3
+        )
+        self.db = db
+        self.config = config or {}
         self._polymarket_sportsbook_id = None
         
     async def initialize(self):
-        """Initialize HTTP client and get Polymarket sportsbook ID"""
-        self.client = httpx.AsyncClient(
-            timeout=30.0,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "ROYALEY Sports Analytics/1.0"
-            }
-        )
-        # Get or create Polymarket sportsbook
+        """Initialize and get Polymarket sportsbook ID"""
         self._polymarket_sportsbook_id = await self._get_polymarket_sportsbook_id()
         
-    async def cleanup(self):
-        """Cleanup HTTP client"""
-        if self.client:
-            await self.client.aclose()
-    
     async def _get_polymarket_sportsbook_id(self):
         """Get Polymarket sportsbook ID from database"""
         result = self.db.execute(
@@ -107,9 +99,38 @@ class PolymarketCollector(BaseCollector):
             text("SELECT id FROM sportsbooks WHERE key = 'polymarket'")
         ).fetchone()
         return result[0] if result else new_id
+    
+    async def collect(self, **kwargs) -> CollectorResult:
+        """
+        Required abstract method implementation.
+        Main collection method.
+        """
+        return await self._collect_impl(**kwargs)
+    
+    async def validate(self, data: Any) -> bool:
+        """
+        Required abstract method implementation.
+        Validate collected data.
+        """
+        if data is None:
+            return False
+        if isinstance(data, dict):
+            return "events_found" in data or "odds_saved" in data
+        return True
             
     async def collect_all(self) -> Dict[str, Any]:
-        """Main collection method"""
+        """Main collection method - wrapper for collect()"""
+        result = await self.collect()
+        return result.data if result.data else {
+            "events_found": 0,
+            "games_linked": 0,
+            "odds_saved": 0,
+            "movements_saved": 0,
+            "errors": [result.error] if result.error else []
+        }
+    
+    async def _collect_impl(self, **kwargs) -> CollectorResult:
+        """Implementation of data collection"""
         await self.initialize()
         
         stats = {
@@ -123,7 +144,7 @@ class PolymarketCollector(BaseCollector):
         try:
             for category in self.SPORTS_CATEGORIES:
                 try:
-                    await asyncio.sleep(self.rate_limit_delay)
+                    await asyncio.sleep(0.5)  # Rate limiting
                     events = await self._fetch_events_by_category(category)
                     stats["events_found"] += len(events)
                     
@@ -147,32 +168,41 @@ class PolymarketCollector(BaseCollector):
                     
             self.db.commit()
             
+            return CollectorResult(
+                success=len(stats["errors"]) == 0,
+                data=stats,
+                records_count=stats["odds_saved"] + stats["games_linked"],
+                error="; ".join(stats["errors"]) if stats["errors"] else None
+            )
+            
         except Exception as e:
             logger.error(f"Polymarket collection error: {e}")
             stats["errors"].append(str(e))
-            
-        finally:
-            await self.cleanup()
-            
-        return stats
+            return CollectorResult(
+                success=False,
+                data=stats,
+                records_count=0,
+                error=str(e)
+            )
     
     async def _fetch_events_by_category(self, category: str) -> List[Dict]:
         """Fetch events from Polymarket Gamma API"""
         try:
-            params = {
-                "tag": category,
-                "active": "true",
-                "closed": "false",
-                "limit": 100
-            }
-            
-            response = await self.client.get(
-                f"{self.GAMMA_BASE_URL}/events",
-                params=params
-            )
-            response.raise_for_status()
-            return response.json() or []
-            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                params = {
+                    "tag": category,
+                    "active": "true",
+                    "closed": "false",
+                    "limit": 100
+                }
+                
+                response = await client.get(
+                    f"{self.GAMMA_BASE_URL}/events",
+                    params=params
+                )
+                response.raise_for_status()
+                return response.json() or []
+                
         except Exception as e:
             logger.error(f"Error fetching events for {category}: {e}")
             return []
@@ -365,7 +395,7 @@ class PolymarketCollector(BaseCollector):
                 WHERE game_id = :gid AND bet_type = 'polymarket_crowd'
             """), {
                 "gid": game_id,
-                "home_prob": home_prob * 100,  # Store as percentage
+                "home_prob": home_prob * 100,
                 "away_prob": away_prob * 100,
                 "confidence": confidence * 100
             })
@@ -388,7 +418,15 @@ class PolymarketCollector(BaseCollector):
         
         for market in markets:
             outcome = (market.get("outcome") or "").lower()
-            price = float(market.get("price", 0) or 0)
+            price = market.get("price")
+            
+            if price is None:
+                continue
+                
+            try:
+                price = float(price)
+            except:
+                continue
             
             if home_team and home_team.lower() in outcome:
                 home_prob = price
@@ -399,8 +437,11 @@ class PolymarketCollector(BaseCollector):
         if home_prob is None or away_prob is None:
             if len(markets) >= 2:
                 sorted_markets = sorted(markets, key=lambda m: m.get("outcomeIndex", 0))
-                home_prob = float(sorted_markets[0].get("price", 0.5) or 0.5)
-                away_prob = float(sorted_markets[1].get("price", 0.5) or 0.5)
+                try:
+                    home_prob = float(sorted_markets[0].get("price", 0.5) or 0.5)
+                    away_prob = float(sorted_markets[1].get("price", 0.5) or 0.5)
+                except:
+                    pass
         
         # Normalize
         if home_prob and away_prob:

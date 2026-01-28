@@ -266,8 +266,18 @@ class RealGMCollector(BaseCollector):
                             else:
                                 team_name = team_cell.get_text(strip=True)
                             
-                            # Get team abbreviation
+                            # Get team abbreviation - try exact match first, then fuzzy
                             team_abbr = TEAM_NAME_TO_ABBR.get(team_name)
+                            if not team_abbr and team_name:
+                                # Try to find partial match
+                                team_name_lower = team_name.lower()
+                                for name, abbr in TEAM_NAME_TO_ABBR.items():
+                                    if name.lower() in team_name_lower or team_name_lower in name.lower():
+                                        team_abbr = abbr
+                                        break
+                                # Log unmatched team names for debugging
+                                if not team_abbr:
+                                    logger.debug(f"[RealGM] Unknown team name: '{team_name}'")
                             
                             # Extract salary
                             salary_text = cells[3].get_text(strip=True)
@@ -328,20 +338,29 @@ class RealGMCollector(BaseCollector):
             page += 1
         
         logger.info(f"[RealGM] Total for {year}: {len(all_salaries)} player salaries")
+        
+        # Log sample data for debugging
+        if all_salaries:
+            sample = all_salaries[0]
+            logger.info(f"[RealGM] Sample salary entry: {sample.get('player_name')} - Team: '{sample.get('team_name')}' -> {sample.get('team_abbr')} - ${sample.get('salary'):,}")
+        
         return all_salaries
     
     async def fetch_team_rosters(self) -> List[Dict[str, Any]]:
         """Fetch current rosters with salary info from ESPN API"""
         all_players = []
         
-        for abbr, team_info in NBA_TEAMS.items():
-            if abbr != team_info.get("name", "").split()[0]:  # Skip duplicates
-                if abbr not in ["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", 
-                               "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN",
-                               "NOP", "NYK", "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", 
-                               "TOR", "UTA", "WAS"]:
-                    continue
-            
+        # Use only canonical team abbreviations
+        canonical_teams = ["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", 
+                         "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN",
+                         "NOP", "NYK", "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", 
+                         "TOR", "UTA", "WAS"]
+        
+        for abbr in canonical_teams:
+            team_info = NBA_TEAMS.get(abbr)
+            if not team_info:
+                continue
+                
             team_id = team_info["id"]
             url = ESPN_TEAM_ROSTER.format(team_id=team_id)
             
@@ -354,17 +373,29 @@ class RealGMCollector(BaseCollector):
                     if response.status_code == 200:
                         data = response.json()
                         athletes = data.get("athletes", [])
+                        team_player_count = 0
                         
-                        for group in athletes:
-                            items = group.get("items", [])
-                            for player in items:
+                        # ESPN API can return athletes in different formats
+                        # Format 1: List of groups with "items" key
+                        # Format 2: Direct list of athletes
+                        for item in athletes:
+                            # Check if it's a group with items
+                            if isinstance(item, dict) and "items" in item:
+                                players = item.get("items", [])
+                            elif isinstance(item, dict) and "id" in item:
+                                # It's a direct athlete object
+                                players = [item]
+                            else:
+                                continue
+                            
+                            for player in players:
                                 contract = player.get("contract", {})
-                                salary = contract.get("salary")
+                                salary = contract.get("salary") if isinstance(contract, dict) else None
                                 
                                 player_data = {
                                     "player_id": player.get("id"),
-                                    "player_name": player.get("displayName", player.get("fullName")),
-                                    "position": player.get("position", {}).get("abbreviation"),
+                                    "player_name": player.get("displayName") or player.get("fullName"),
+                                    "position": player.get("position", {}).get("abbreviation") if isinstance(player.get("position"), dict) else player.get("position"),
                                     "jersey": player.get("jersey"),
                                     "team_abbr": abbr,
                                     "team_name": team_info["name"],
@@ -373,12 +404,13 @@ class RealGMCollector(BaseCollector):
                                     "weight": player.get("displayWeight"),
                                     "age": player.get("age"),
                                     "birthdate": player.get("dateOfBirth"),
-                                    "college": player.get("college", {}).get("name") if player.get("college") else None,
-                                    "experience": player.get("experience", {}).get("years") if player.get("experience") else None,
+                                    "college": player.get("college", {}).get("name") if isinstance(player.get("college"), dict) else None,
+                                    "experience": player.get("experience", {}).get("years") if isinstance(player.get("experience"), dict) else None,
                                 }
                                 all_players.append(player_data)
+                                team_player_count += 1
                         
-                        logger.info(f"[RealGM] {team_info['name']}: {len(items) if items else 0} players")
+                        logger.info(f"[RealGM] {team_info['name']}: {team_player_count} players")
                     else:
                         logger.warning(f"[RealGM] Failed to fetch roster for {team_info['name']}: HTTP {response.status_code}")
                         
@@ -464,9 +496,11 @@ class RealGMCollector(BaseCollector):
             Number of records saved
         """
         saved_count = 0
+        error_count = 0
         
         try:
             # Get or create NBA sport
+            logger.info(f"[RealGM] Starting database save...")
             result = await session.execute(
                 select(Sport).where(Sport.code == "NBA")
             )
@@ -492,8 +526,13 @@ class RealGMCollector(BaseCollector):
             
             # Process salary data
             salaries = data.get("salaries", [])
+            total_salaries = len(salaries)
+            logger.info(f"[RealGM] Processing {total_salaries} salary records...")
             
-            for salary_data in salaries:
+            for idx, salary_data in enumerate(salaries):
+                if idx > 0 and idx % 100 == 0:
+                    logger.info(f"[RealGM] Progress: {idx}/{total_salaries} ({saved_count} saved, {error_count} errors)")
+                
                 try:
                     year = salary_data.get("season_year")
                     team_abbr = salary_data.get("team_abbr")
@@ -625,7 +664,9 @@ class RealGMCollector(BaseCollector):
                     saved_count += 1
                     
                 except Exception as e:
-                    logger.debug(f"[RealGM] Error saving salary for {salary_data.get('player_name')}: {e}")
+                    error_count += 1
+                    if error_count <= 5:  # Log first 5 errors
+                        logger.warning(f"[RealGM] Error saving salary for {salary_data.get('player_name')}: {e}")
                     continue
             
             # Process roster data (additional player details)
@@ -684,10 +725,12 @@ class RealGMCollector(BaseCollector):
                     continue
             
             await session.commit()
-            logger.info(f"[RealGM] Saved {saved_count} records to database")
+            logger.info(f"[RealGM] Saved {saved_count} records to database ({error_count} errors)")
             
         except Exception as e:
             logger.error(f"[RealGM] Database save error: {e}")
+            import traceback
+            traceback.print_exc()
             await session.rollback()
             raise
         

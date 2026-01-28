@@ -536,9 +536,20 @@ class NextGenStatsCollector(BaseCollector):
         return await self.collect(years=years, stat_type="all")
     
     async def collect_current_season(self) -> CollectorResult:
-        """Collect NGS data for current season only."""
+        """Collect NGS data for current/most recent season."""
         current_year = datetime.now().year
-        return await self.collect(years=[current_year], stat_type="all")
+        current_month = datetime.now().month
+        
+        # NFL season runs Sep-Feb
+        # If we're in Jan-Aug, the most recent completed season is previous year
+        # If we're in Sep-Dec, current season is this year
+        if current_month <= 8:  # Jan-Aug: use previous year's season
+            season_year = current_year - 1
+        else:  # Sep-Dec: use current year's season
+            season_year = current_year
+        
+        logger.info(f"[NGS] Collecting current/recent season: {season_year}")
+        return await self.collect(years=[season_year], stat_type="all")
     
     # =========================================================================
     # DATABASE SAVE METHODS

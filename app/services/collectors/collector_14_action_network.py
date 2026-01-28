@@ -864,6 +864,14 @@ class ActionNetworkCollector(BaseCollector):
         # Remove common prefixes/suffixes
         name = re.sub(r'^(at|vs\.?|@)\s*', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(.*\)$', '', name)
+        # Remove rotation numbers (e.g., "NE110", "SEA109", "BOS501")
+        name = re.sub(r'[A-Z]{2,4}\d{3,4}$', '', name)
+        # Remove trailing state abbreviations and numbers (e.g., "PatriotsNE110" -> "Patriots")
+        name = re.sub(r'([a-z])([A-Z]{2}\d+)$', r'\1', name)
+        # Remove any remaining trailing numbers
+        name = re.sub(r'\d+$', '', name)
+        # Remove trailing abbreviations that got stuck (e.g., "RockiesCOL" -> "Rockies")
+        name = re.sub(r'([a-z])([A-Z]{2,3})$', r'\1', name)
         return name.strip()
     
     def _parse_page_fallback(self, soup, sport_code: str) -> List[Dict[str, Any]]:

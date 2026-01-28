@@ -127,3 +127,4 @@ selenium>=4.16.0
 webdriver-manager>=4.0.1
 
 aiofiles>=23.0.0
+sportsipy>=0.6.0

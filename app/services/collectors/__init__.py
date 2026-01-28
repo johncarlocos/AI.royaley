@@ -16,6 +16,7 @@ IMPLEMENTED COLLECTORS:
     collector_10_hockeyr.py   - hockeyR (NHL xG, Corsi, Fenwick, 75+ features) - FREE
     collector_11_wehoop.py    - wehoop (WNBA PBP, box scores, player stats) - FREE
     collector_12_hoopr.py     - hoopR (NBA/NCAAB games, rosters, player/team stats) - FREE
+    collector_13_cfl.py       - CFL Official API (CFL games, rosters, stats) - FREE (API key req)
 """
 
 from app.services.collectors.base_collector import (
@@ -38,6 +39,7 @@ from app.services.collectors.collector_09_baseballr import BaseballRCollector, b
 from app.services.collectors.collector_10_hockeyr import HockeyRCollector, hockeyr_collector
 from app.services.collectors.collector_11_wehoop import WehoopCollector, wehoop_collector
 from app.services.collectors.collector_12_hoopr import HoopRCollector, hoopr_collector
+from app.services.collectors.collector_13_cfl import CFLCollector, cfl_collector
 
 __all__ = [
     "BaseCollector",
@@ -69,4 +71,6 @@ __all__ = [
     "wehoop_collector",
     "HoopRCollector",
     "hoopr_collector",
+    "CFLCollector",
+    "cfl_collector",
 ]

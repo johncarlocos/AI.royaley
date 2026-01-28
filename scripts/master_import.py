@@ -1664,6 +1664,128 @@ async def import_hoopr_team_stats() -> ImportResult:
 
 
 # =============================================================================
+# CFL OFFICIAL API IMPORT FUNCTIONS
+# =============================================================================
+
+async def import_cfl() -> ImportResult:
+    """Import current CFL data from CFL Official API."""
+    result = ImportResult(source="cfl")
+    try:
+        from app.services.collectors import cfl_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        
+        data = await cfl_collector.collect(years=[current_year], collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfl_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfl_history(years_back: int = 10) -> ImportResult:
+    """Import historical CFL data (10 years) from CFL Official API."""
+    result = ImportResult(source="cfl_history")
+    try:
+        from app.services.collectors import cfl_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        
+        logging.info(f"[CFL] Collecting {len(years)} seasons: {years[0]} to {years[-1]}")
+        
+        data = await cfl_collector.collect(years=years, collect_type="all")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfl_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfl_teams() -> ImportResult:
+    """Import CFL teams only (works without API key)."""
+    result = ImportResult(source="cfl_teams")
+    try:
+        from app.services.collectors import cfl_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await cfl_collector.collect(years=[], collect_type="teams")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfl_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfl_rosters(years_back: int = 5) -> ImportResult:
+    """Import CFL player rosters."""
+    result = ImportResult(source="cfl_rosters")
+    try:
+        from app.services.collectors import cfl_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        
+        data = await cfl_collector.collect(years=years, collect_type="rosters")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfl_collector._save_rosters(session, data.data.get("rosters", []))
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_cfl_standings(years_back: int = 10) -> ImportResult:
+    """Import CFL standings/team stats."""
+    result = ImportResult(source="cfl_standings")
+    try:
+        from app.services.collectors import cfl_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        current_year = datetime.now().year
+        years = list(range(current_year - years_back + 1, current_year + 1))
+        
+        data = await cfl_collector.collect(years=years, collect_type="team_stats")
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await cfl_collector._save_team_stats(session, data.data.get("team_stats", []))
+                result.records = saved
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1680,6 +1802,7 @@ IMPORT_MAP = {
     "hockeyr": import_hockeyr,
     "wehoop": import_wehoop,
     "hoopr": import_hoopr,
+    "cfl": import_cfl,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1692,6 +1815,7 @@ IMPORT_MAP = {
     "hockeyr_history": import_hockeyr_history,
     "wehoop_history": import_wehoop_history,
     "hoopr_history": import_hoopr_history,
+    "cfl_history": import_cfl_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1714,6 +1838,9 @@ IMPORT_MAP = {
     "nba_team_stats": import_hoopr_team_stats,
     "hoopr_nba": import_hoopr_nba,
     "hoopr_ncaab": import_hoopr_ncaab,
+    "cfl_teams": import_cfl_teams,
+    "cfl_rosters": import_cfl_rosters,
+    "cfl_standings": import_cfl_standings,
     "venues": import_sportsdb_venues,
     "sportsdb_players": import_sportsdb_players,
     "sportsdb_standings": import_sportsdb_standings,
@@ -1731,10 +1858,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "weather_history"]
-PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "weather_history"]
+PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -1782,7 +1909,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, days=days)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
-            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab"]:
+            elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings"]:
                 result = await func(years_back=seasons)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
@@ -1792,7 +1919,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "mlb_rosters", "mlb_team_stats",
                            "nhl_players", "nhl_rosters", "nhl_team_stats",
                            "wnba_players", "wnba_rosters", "wnba_team_stats",
-                           "nba_players", "nba_team_stats"]:
+                           "nba_players", "nba_team_stats",
+                           "cfl_teams"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

@@ -789,14 +789,19 @@ class TennisAbstractCollector(BaseCollector):
         existing_games = set(row[0] for row in result.fetchall())
         logger.info(f"[TennisAbstract] Found {len(existing_games)} existing games")
         
-        # Pre-load existing teams
+        # Pre-load existing teams - by BOTH external_id and name
         logger.info("[TennisAbstract] Loading existing teams...")
         result = await session.execute(
-            select(Team.external_id, Team.id, Team.sport_id).where(
+            select(Team.external_id, Team.id, Team.sport_id, Team.name).where(
                 Team.external_id.like('tennis_%')
             )
         )
-        team_cache = {row[0]: {'id': row[1], 'sport_id': row[2]} for row in result.fetchall()}
+        team_cache = {}
+        team_name_cache = {}  # Also track by name to avoid duplicates
+        for row in result.fetchall():
+            team_cache[row[0]] = {'id': row[1], 'sport_id': row[2]}
+            # Track by (sport_id, name) to catch duplicates
+            team_name_cache[(row[2], row[3])] = {'id': row[1], 'external_id': row[0]}
         logger.info(f"[TennisAbstract] Found {len(team_cache)} existing teams")
         
         # Pre-load existing seasons
@@ -865,39 +870,57 @@ class TennisAbstractCollector(BaseCollector):
                 winner_name = match.get('winner_name', 'Unknown')
                 loser_name = match.get('loser_name', 'Unknown')
                 
-                # Winner team
+                # Winner team - check by external_id first, then by name
                 winner_ext_id = f"tennis_{tour}_{winner_id}"
-                if winner_ext_id not in team_cache:
-                    abbrev = self._get_player_abbrev(winner_name)
-                    winner_team = Team(
-                        sport_id=sport.id,
-                        external_id=winner_ext_id,
-                        name=winner_name,
-                        abbreviation=abbrev,
-                        city=match.get('winner_ioc', ''),
-                        is_active=True
-                    )
-                    session.add(winner_team)
-                    await session.flush()
-                    team_cache[winner_ext_id] = {'id': winner_team.id, 'sport_id': sport.id}
-                    counts['teams'] += 1
+                winner_name_key = (sport.id, winner_name)
                 
-                # Loser team
+                if winner_ext_id not in team_cache:
+                    # Check if team with same name already exists
+                    if winner_name_key in team_name_cache:
+                        # Use existing team with same name
+                        team_cache[winner_ext_id] = team_name_cache[winner_name_key]
+                    else:
+                        # Create new team
+                        abbrev = self._get_player_abbrev(winner_name)
+                        winner_team = Team(
+                            sport_id=sport.id,
+                            external_id=winner_ext_id,
+                            name=winner_name,
+                            abbreviation=abbrev,
+                            city=match.get('winner_ioc', ''),
+                            is_active=True
+                        )
+                        session.add(winner_team)
+                        await session.flush()
+                        team_cache[winner_ext_id] = {'id': winner_team.id, 'sport_id': sport.id}
+                        team_name_cache[winner_name_key] = {'id': winner_team.id, 'external_id': winner_ext_id}
+                        counts['teams'] += 1
+                
+                # Loser team - check by external_id first, then by name
                 loser_ext_id = f"tennis_{tour}_{loser_id}"
+                loser_name_key = (sport.id, loser_name)
+                
                 if loser_ext_id not in team_cache:
-                    abbrev = self._get_player_abbrev(loser_name)
-                    loser_team = Team(
-                        sport_id=sport.id,
-                        external_id=loser_ext_id,
-                        name=loser_name,
-                        abbreviation=abbrev,
-                        city=match.get('loser_ioc', ''),
-                        is_active=True
-                    )
-                    session.add(loser_team)
-                    await session.flush()
-                    team_cache[loser_ext_id] = {'id': loser_team.id, 'sport_id': sport.id}
-                    counts['teams'] += 1
+                    # Check if team with same name already exists
+                    if loser_name_key in team_name_cache:
+                        # Use existing team with same name
+                        team_cache[loser_ext_id] = team_name_cache[loser_name_key]
+                    else:
+                        # Create new team
+                        abbrev = self._get_player_abbrev(loser_name)
+                        loser_team = Team(
+                            sport_id=sport.id,
+                            external_id=loser_ext_id,
+                            name=loser_name,
+                            abbreviation=abbrev,
+                            city=match.get('loser_ioc', ''),
+                            is_active=True
+                        )
+                        session.add(loser_team)
+                        await session.flush()
+                        team_cache[loser_ext_id] = {'id': loser_team.id, 'sport_id': sport.id}
+                        team_name_cache[loser_name_key] = {'id': loser_team.id, 'external_id': loser_ext_id}
+                        counts['teams'] += 1
                 
                 winner_team_id = team_cache[winner_ext_id]['id']
                 loser_team_id = team_cache[loser_ext_id]['id']

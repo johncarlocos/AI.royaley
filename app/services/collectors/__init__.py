@@ -19,6 +19,7 @@ IMPLEMENTED COLLECTORS:
     collector_13_cfl.py       - CFL Official API (CFL games, rosters, stats) - FREE (API key req)
     collector_14_action_network.py - Action Network (Public betting %, sharp money) - FREE (Selenium)
     collector_15_nhl_api.py       - NHL Official API (NHL EDGE stats: shot speed, skating speed) - FREE
+    collector_16_sportsipy.py     - Sportsipy (Sports-Reference scraper: MLB, NBA, NFL, NHL, NCAAF, NCAAB) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -44,6 +45,7 @@ from app.services.collectors.collector_12_hoopr import HoopRCollector, hoopr_col
 from app.services.collectors.collector_13_cfl import CFLCollector, cfl_collector
 from app.services.collectors.collector_14_action_network import ActionNetworkCollector, action_network_collector
 from app.services.collectors.collector_15_nhl_api import NHLOfficialAPICollector, nhl_official_api_collector
+from app.services.collectors.collector_16_sportsipy import SportsipyCollector, sportsipy_collector
 
 __all__ = [
     "BaseCollector",
@@ -81,4 +83,6 @@ __all__ = [
     "action_network_collector",
     "NHLOfficialAPICollector",
     "nhl_official_api_collector",
+    "SportsipyCollector",
+    "sportsipy_collector",
 ]

@@ -3411,6 +3411,118 @@ async def import_polymarket(sports: List[str] = None) -> ImportResult:
 
 
 # =============================================================================
+# KALSHI IMPORT FUNCTIONS (Collector 25)
+# =============================================================================
+
+async def import_kalshi(sports: List[str] = None) -> ImportResult:
+    """
+    Import Kalshi prediction market data.
+    
+    Collects sports-related event contracts from Kalshi's
+    CFTC-regulated prediction market exchange.
+    
+    Data collected:
+    - Series: Groups of related events (kalshi_series)
+    - Events: Tradeable event contracts (kalshi_events)
+    - Markets: Binary outcome contracts with prices (kalshi_markets)
+    - Price history: Historical price snapshots (kalshi_prices)
+    - Trades: Trade history for volume analysis (kalshi_trades)
+    
+    Args:
+        sports: Optional list of sports to filter (not currently used)
+        
+    Returns:
+        ImportResult with collection statistics
+    """
+    result = ImportResult(source="kalshi")
+    try:
+        from app.services.collectors.collector_25_kalshi import KalshiCollector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        async with db_manager.session() as session:
+            collector = KalshiCollector(session)
+            data = await collector.collect_all(years_back=10)
+            
+            if data:
+                result.records = (
+                    data.get("series", 0) +
+                    data.get("events", 0) +
+                    data.get("markets", 0) +
+                    data.get("prices", 0) +
+                    data.get("trades", 0)
+                )
+                
+                # Log detailed stats
+                console.print(f"  [green]✓[/green] Kalshi: "
+                             f"{data.get('series', 0)} series, "
+                             f"{data.get('events', 0)} events, "
+                             f"{data.get('markets', 0)} markets")
+                console.print(f"    Prices: {data.get('prices', 0)}, Trades: {data.get('trades', 0)}")
+                
+                if data.get("errors"):
+                    for err in data["errors"][:3]:
+                        result.errors.append(err[:100])
+        
+        result.success = result.records >= 0
+        
+    except Exception as e:
+        logger.error(f"[Kalshi] Import error: {e}")
+        console.print(f"  [red]✗[/red] Kalshi: {e}")
+        result.errors.append(str(e)[:100])
+    
+    return result
+
+
+async def import_kalshi_history(years_back: int = 10) -> ImportResult:
+    """
+    Import Kalshi historical data for specified years.
+    
+    Collects all historical sports prediction market data including:
+    - Past events and their outcomes
+    - Historical price movements
+    - Trade history for volume analysis
+    
+    Args:
+        years_back: Number of years of historical data to collect (default: 10)
+        
+    Returns:
+        ImportResult with collection statistics
+    """
+    result = ImportResult(source="kalshi_history")
+    try:
+        from app.services.collectors.collector_25_kalshi import KalshiCollector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        async with db_manager.session() as session:
+            collector = KalshiCollector(session)
+            data = await collector.collect_all(years_back=years_back)
+            
+            if data:
+                result.records = sum([
+                    data.get("series", 0),
+                    data.get("events", 0),
+                    data.get("markets", 0),
+                    data.get("prices", 0),
+                    data.get("trades", 0)
+                ])
+                
+                console.print(f"  [green]✓[/green] Kalshi History ({years_back}yr): {result.records} records")
+        
+        result.success = result.records >= 0
+        
+    except Exception as e:
+        logger.error(f"[Kalshi History] Import error: {e}")
+        console.print(f"  [red]✗[/red] Kalshi History: {e}")
+        result.errors.append(str(e)[:100])
+    
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -3554,6 +3666,10 @@ IMPORT_MAP = {
     # Polymarket (Collector 24) - Prediction Markets
     "polymarket": import_polymarket,
     
+    # Kalshi (Collector 25) - CFTC-Regulated Prediction Markets
+    "kalshi": import_kalshi,
+    "kalshi_history": import_kalshi_history,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -3565,8 +3681,8 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle", "tennis_abstract", "polymarket"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history", "tennis_abstract_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm", "nextgenstats", "kaggle", "tennis_abstract", "polymarket", "kalshi"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history", "nextgenstats_history", "kaggle_history", "tennis_abstract_history", "kalshi_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players", "tennis_abstract_players"]
 SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters", "ngs_passing", "ngs_rushing", "ngs_receiving", "kaggle_nfl", "kaggle_nba", "kaggle_mlb", "kaggle_nhl", "kaggle_soccer", "kaggle_ncaaf", "kaggle_ncaab", "kaggle_mma", "kaggle_tennis", "tennis_abstract_atp", "tennis_abstract_wta", "tennis_abstract_rankings", "tennis_abstract_matches"]
 

@@ -860,7 +860,9 @@ class CollegeFootballDataCollector(BaseCollector):
             try:
                 sport = await self._get_or_create_sport(session)
                 external_id = team_data["external_id"]
+                team_name = team_data["name"]
                 
+                # Check by external_id first
                 result = await session.execute(
                     select(Team).where(
                         and_(
@@ -871,15 +873,31 @@ class CollegeFootballDataCollector(BaseCollector):
                 )
                 existing = result.scalar_one_or_none()
                 
+                # If not found by external_id, check by name (teams may exist from other collectors)
+                if not existing:
+                    result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name == team_name
+                            )
+                        )
+                    )
+                    existing = result.scalar_one_or_none()
+                
                 if existing:
-                    existing.conference = team_data.get("conference")
-                    existing.division = team_data.get("division")
-                    existing.logo_url = team_data.get("logo_url")
+                    # Update existing team
+                    existing.conference = team_data.get("conference") or existing.conference
+                    existing.division = team_data.get("division") or existing.division
+                    existing.logo_url = team_data.get("logo_url") or existing.logo_url
+                    # Update external_id if it was found by name
+                    if existing.external_id != external_id:
+                        existing.external_id = external_id
                 else:
                     team = Team(
                         sport_id=sport.id,
                         external_id=external_id,
-                        name=team_data["name"],
+                        name=team_name,
                         abbreviation=team_data["abbreviation"],
                         city=team_data.get("city"),
                         conference=team_data.get("conference"),

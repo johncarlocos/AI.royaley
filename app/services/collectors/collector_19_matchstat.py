@@ -740,3 +740,7 @@ class MatchstatCollector(BaseCollector):
     async def collect_wta_only(self, years_back: int = 1) -> Dict[str, Any]:
         """Collect WTA data only"""
         return await self.collect(tours=["wta"], years_back=years_back)
+
+
+# Singleton instance for import
+matchstat_collector = MatchstatCollector()

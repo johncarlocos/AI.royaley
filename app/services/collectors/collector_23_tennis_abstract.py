@@ -705,66 +705,122 @@ class TennisAbstractCollector(BaseCollector):
     
     async def _save_players(self, players: List[Dict], atp_sport: Any, 
                            wta_sport: Any, session: Any) -> int:
-        """Save players to database"""
+        """Save players to database - optimized with batch operations"""
         from app.models.models import Player
         from sqlalchemy import select
         
         saved = 0
+        batch_size = 1000
         
+        # First, get all existing external_ids to avoid individual lookups
+        logger.info(f"[TennisAbstract] Checking existing players...")
+        result = await session.execute(
+            select(Player.external_id).where(
+                Player.external_id.like('tennis_abstract_%')
+            )
+        )
+        existing_ids = set(row[0] for row in result.fetchall())
+        logger.info(f"[TennisAbstract] Found {len(existing_ids)} existing players")
+        
+        # Filter to only new players
+        new_players = []
         for player_data in players:
             tour = player_data.get('tour', 'ATP')
             external_id = f"tennis_abstract_{tour}_{player_data.get('player_id')}"
             
-            # Check if exists
-            result = await session.execute(
-                select(Player).where(Player.external_id == external_id)
-            )
-            existing = result.scalar_one_or_none()
-            
-            if existing:
-                continue
-            
-            # Parse birth date
-            birth_date = player_data.get('birth_date')
-            if isinstance(birth_date, str):
-                birth_date = self._parse_birth_date(birth_date)
-            
-            # Parse height
-            height = player_data.get('height_cm')
-            height_str = f"{height} cm" if height else None
-            
-            player = Player(
-                external_id=external_id,
-                name=player_data.get('name', ''),
-                position=player_data.get('hand', ''),  # Store hand as position
-                birth_date=birth_date,
-                height=height_str,
-                is_active=True
-            )
-            session.add(player)
-            saved += 1
-            
-            if saved % 500 == 0:
-                await session.flush()
-                logger.info(f"[TennisAbstract] Saved {saved} players...")
+            if external_id not in existing_ids:
+                new_players.append((external_id, player_data))
         
-        await session.flush()
-        logger.info(f"[TennisAbstract] Saved {saved} new players")
+        logger.info(f"[TennisAbstract] {len(new_players)} new players to save")
+        
+        # Batch insert new players
+        for i in range(0, len(new_players), batch_size):
+            batch = new_players[i:i + batch_size]
+            
+            for external_id, player_data in batch:
+                # Parse birth date
+                birth_date = player_data.get('birth_date')
+                if isinstance(birth_date, str):
+                    birth_date = self._parse_birth_date(birth_date)
+                
+                # Parse height
+                height = player_data.get('height_cm')
+                height_str = f"{height} cm" if height else None
+                
+                player = Player(
+                    external_id=external_id,
+                    name=player_data.get('name', ''),
+                    position=player_data.get('hand', ''),  # Store hand as position
+                    birth_date=birth_date,
+                    height=height_str,
+                    is_active=True
+                )
+                session.add(player)
+                saved += 1
+            
+            await session.flush()
+            logger.info(f"[TennisAbstract] Saved {min(i + batch_size, len(new_players))}/{len(new_players)} players...")
+        
+        logger.info(f"[TennisAbstract] Saved {saved} new players total")
         return saved
     
     async def _save_matches(self, matches: List[Dict], atp_sport: Any,
                            wta_sport: Any, session: Any) -> Dict[str, int]:
-        """Save matches as games with player stats"""
+        """Save matches as games with player stats - optimized with batch operations"""
         from app.models.models import Game, Team, Season, PlayerStats, Player, GameStatus
         from sqlalchemy import select
         from datetime import datetime
         
         counts = {'games': 0, 'stats': 0, 'teams': 0, 'seasons': 0}
-        team_cache = {}
-        season_cache = {}
-        player_cache = {}
         
-        for match in matches:
+        if not matches:
+            logger.info("[TennisAbstract] No matches to save")
+            return counts
+        
+        logger.info(f"[TennisAbstract] Processing {len(matches)} matches...")
+        
+        # Pre-load existing data to avoid individual queries
+        logger.info("[TennisAbstract] Loading existing games...")
+        result = await session.execute(
+            select(Game.external_id).where(
+                Game.external_id.like('tennis_abstract_%')
+            )
+        )
+        existing_games = set(row[0] for row in result.fetchall())
+        logger.info(f"[TennisAbstract] Found {len(existing_games)} existing games")
+        
+        # Pre-load existing teams
+        logger.info("[TennisAbstract] Loading existing teams...")
+        result = await session.execute(
+            select(Team.external_id, Team.id, Team.sport_id).where(
+                Team.external_id.like('tennis_%')
+            )
+        )
+        team_cache = {row[0]: {'id': row[1], 'sport_id': row[2]} for row in result.fetchall()}
+        logger.info(f"[TennisAbstract] Found {len(team_cache)} existing teams")
+        
+        # Pre-load existing seasons
+        logger.info("[TennisAbstract] Loading existing seasons...")
+        result = await session.execute(
+            select(Season.sport_id, Season.year, Season.id)
+        )
+        season_cache = {(row[0], row[1]): row[2] for row in result.fetchall()}
+        logger.info(f"[TennisAbstract] Found {len(season_cache)} existing seasons")
+        
+        # Pre-load existing players for stats
+        logger.info("[TennisAbstract] Loading existing players...")
+        result = await session.execute(
+            select(Player.external_id, Player.id).where(
+                Player.external_id.like('tennis_abstract_%')
+            )
+        )
+        player_cache = {row[0]: row[1] for row in result.fetchall()}
+        logger.info(f"[TennisAbstract] Found {len(player_cache)} existing players")
+        
+        batch_size = 500
+        stats_to_add = []
+        
+        for idx, match in enumerate(matches):
             try:
                 tour = match.get('tour', 'ATP')
                 sport = atp_sport if tour == 'ATP' else wta_sport
@@ -772,13 +828,8 @@ class TennisAbstractCollector(BaseCollector):
                 match_id = match.get('match_id', '')
                 external_id = f"tennis_abstract_{match_id}"
                 
-                # Check if game exists
-                result = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
-                )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
+                # Skip if game exists
+                if external_id in existing_games:
                     continue
                 
                 tourney_date = match.get('tourney_date')
@@ -791,107 +842,77 @@ class TennisAbstractCollector(BaseCollector):
                 year = tourney_date.year
                 
                 # Get or create season
-                season_key = f"{tour}_{year}"
+                season_key = (sport.id, year)
                 if season_key not in season_cache:
-                    result = await session.execute(
-                        select(Season).where(
-                            Season.sport_id == sport.id,
-                            Season.year == year
-                        )
+                    season = Season(
+                        sport_id=sport.id,
+                        year=year,
+                        name=f"{tour} {year}",
+                        start_date=date(year, 1, 1),
+                        end_date=date(year, 12, 31),
+                        is_current=(year == datetime.now().year)
                     )
-                    season = result.scalar_one_or_none()
-                    
-                    if not season:
-                        season = Season(
-                            sport_id=sport.id,
-                            year=year,
-                            name=f"{tour} {year}",
-                            start_date=date(year, 1, 1),
-                            end_date=date(year, 12, 31),
-                            is_current=(year == datetime.now().year)
-                        )
-                        session.add(season)
-                        await session.flush()
-                        counts['seasons'] += 1
-                    
-                    season_cache[season_key] = season
+                    session.add(season)
+                    await session.flush()
+                    season_cache[season_key] = season.id
+                    counts['seasons'] += 1
                 
-                season = season_cache[season_key]
+                season_id = season_cache[season_key]
                 
-                # Get or create "teams" for winner and loser (tennis uses players as teams)
+                # Get or create teams
                 winner_id = match.get('winner_id', '')
                 loser_id = match.get('loser_id', '')
                 winner_name = match.get('winner_name', 'Unknown')
                 loser_name = match.get('loser_name', 'Unknown')
                 
                 # Winner team
-                winner_team_key = f"{tour}_{winner_id}"
-                if winner_team_key not in team_cache:
-                    result = await session.execute(
-                        select(Team).where(
-                            Team.sport_id == sport.id,
-                            Team.external_id == f"tennis_{tour}_{winner_id}"
-                        )
+                winner_ext_id = f"tennis_{tour}_{winner_id}"
+                if winner_ext_id not in team_cache:
+                    abbrev = self._get_player_abbrev(winner_name)
+                    winner_team = Team(
+                        sport_id=sport.id,
+                        external_id=winner_ext_id,
+                        name=winner_name,
+                        abbreviation=abbrev,
+                        city=match.get('winner_ioc', ''),
+                        is_active=True
                     )
-                    winner_team = result.scalar_one_or_none()
-                    
-                    if not winner_team:
-                        abbrev = self._get_player_abbrev(winner_name)
-                        winner_team = Team(
-                            sport_id=sport.id,
-                            external_id=f"tennis_{tour}_{winner_id}",
-                            name=winner_name,
-                            abbreviation=abbrev,
-                            city=match.get('winner_ioc', ''),
-                            is_active=True
-                        )
-                        session.add(winner_team)
-                        await session.flush()
-                        counts['teams'] += 1
-                    
-                    team_cache[winner_team_key] = winner_team
+                    session.add(winner_team)
+                    await session.flush()
+                    team_cache[winner_ext_id] = {'id': winner_team.id, 'sport_id': sport.id}
+                    counts['teams'] += 1
                 
                 # Loser team
-                loser_team_key = f"{tour}_{loser_id}"
-                if loser_team_key not in team_cache:
-                    result = await session.execute(
-                        select(Team).where(
-                            Team.sport_id == sport.id,
-                            Team.external_id == f"tennis_{tour}_{loser_id}"
-                        )
+                loser_ext_id = f"tennis_{tour}_{loser_id}"
+                if loser_ext_id not in team_cache:
+                    abbrev = self._get_player_abbrev(loser_name)
+                    loser_team = Team(
+                        sport_id=sport.id,
+                        external_id=loser_ext_id,
+                        name=loser_name,
+                        abbreviation=abbrev,
+                        city=match.get('loser_ioc', ''),
+                        is_active=True
                     )
-                    loser_team = result.scalar_one_or_none()
-                    
-                    if not loser_team:
-                        abbrev = self._get_player_abbrev(loser_name)
-                        loser_team = Team(
-                            sport_id=sport.id,
-                            external_id=f"tennis_{tour}_{loser_id}",
-                            name=loser_name,
-                            abbreviation=abbrev,
-                            city=match.get('loser_ioc', ''),
-                            is_active=True
-                        )
-                        session.add(loser_team)
-                        await session.flush()
-                        counts['teams'] += 1
-                    
-                    team_cache[loser_team_key] = loser_team
+                    session.add(loser_team)
+                    await session.flush()
+                    team_cache[loser_ext_id] = {'id': loser_team.id, 'sport_id': sport.id}
+                    counts['teams'] += 1
                 
-                winner_team = team_cache[winner_team_key]
-                loser_team = team_cache[loser_team_key]
+                winner_team_id = team_cache[winner_ext_id]['id']
+                loser_team_id = team_cache[loser_ext_id]['id']
                 
-                # Create game (winner is always home team for tennis)
+                # Create game
                 game = Game(
                     sport_id=sport.id,
-                    season_id=season.id,
+                    season_id=season_id,
                     external_id=external_id,
-                    home_team_id=winner_team.id,
-                    away_team_id=loser_team.id,
+                    home_team_id=winner_team_id,
+                    away_team_id=loser_team_id,
                     scheduled_at=datetime.combine(tourney_date, datetime.min.time()),
                     status=GameStatus.FINAL,
-                    home_score=1,  # Winner always gets 1
-                    away_score=0,  # Loser gets 0
+                    home_score=1,
+                    away_score=0,
                     weather={
                         'tournament': match.get('tourney_name'),
                         'surface': match.get('surface'),
@@ -902,29 +923,20 @@ class TennisAbstractCollector(BaseCollector):
                     }
                 )
                 session.add(game)
-                await session.flush()
+                existing_games.add(external_id)  # Track new additions
                 counts['games'] += 1
                 
-                # Save player stats for winner
-                winner_stats = await self._create_player_stats(match, 'winner', season.id, game.id, session)
-                if winner_stats:
-                    counts['stats'] += len(winner_stats)
-                
-                # Save player stats for loser
-                loser_stats = await self._create_player_stats(match, 'loser', season.id, game.id, session)
-                if loser_stats:
-                    counts['stats'] += len(loser_stats)
-                
-                if counts['games'] % 1000 == 0:
+                # Flush periodically and log progress
+                if counts['games'] % batch_size == 0:
                     await session.flush()
-                    logger.info(f"[TennisAbstract] Saved {counts['games']} matches...")
+                    logger.info(f"[TennisAbstract] Saved {counts['games']} matches, {counts['teams']} teams...")
                     
             except Exception as e:
                 logger.debug(f"[TennisAbstract] Error saving match: {e}")
                 continue
         
         await session.flush()
-        logger.info(f"[TennisAbstract] Saved {counts['games']} matches, {counts['stats']} stats")
+        logger.info(f"[TennisAbstract] Saved {counts['games']} matches, {counts['teams']} teams, {counts['seasons']} seasons")
         return counts
     
     async def _create_player_stats(self, match: Dict, role: str, season_id: Any, 

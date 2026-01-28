@@ -1786,6 +1786,123 @@ async def import_cfl_standings(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# ACTION NETWORK IMPORTS
+# =============================================================================
+
+async def import_action_network() -> ImportResult:
+    """Import current public betting data from Action Network."""
+    result = ImportResult(source="action_network")
+    try:
+        from app.services.collectors import action_network_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await action_network_collector.collect(
+            sports=["NFL", "NCAAF", "NBA", "NCAAB", "NHL", "MLB"],
+            days_back=0,
+            collect_type="current"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await action_network_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_action_network_history(days_back: int = 30) -> ImportResult:
+    """Import historical public betting data from Action Network."""
+    result = ImportResult(source="action_network_history")
+    try:
+        from app.services.collectors import action_network_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        logging.info(f"[ActionNetwork] Collecting {days_back} days of historical data")
+        
+        data = await action_network_collector.collect(
+            sports=["NFL", "NCAAF", "NBA", "NCAAB", "NHL", "MLB"],
+            days_back=days_back,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await action_network_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_public_betting(sports: List[str] = None, days_back: int = 7) -> ImportResult:
+    """Import public betting data for specific sports."""
+    result = ImportResult(source="public_betting")
+    try:
+        from app.services.collectors import action_network_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        if sports is None:
+            sports = ["NFL", "NCAAF", "NBA", "NCAAB", "NHL", "MLB"]
+        
+        data = await action_network_collector.collect(
+            sports=sports,
+            days_back=days_back,
+            collect_type="all"
+        )
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await action_network_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_sharp_money() -> ImportResult:
+    """Import and detect sharp money indicators from current public betting."""
+    result = ImportResult(source="sharp_money")
+    try:
+        from app.services.collectors import action_network_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await action_network_collector.collect(
+            sports=["NFL", "NCAAF", "NBA", "NCAAB", "NHL", "MLB"],
+            days_back=3,
+            collect_type="current"
+        )
+        if data.success and data.data:
+            result.records = len(data.data.get("sharp_indicators", []))
+            async with db_manager.session() as session:
+                await action_network_collector.save_to_database(data.data, session)
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -1803,6 +1920,9 @@ IMPORT_MAP = {
     "wehoop": import_wehoop,
     "hoopr": import_hoopr,
     "cfl": import_cfl,
+    "action_network": import_action_network,
+    "public_betting": import_public_betting,
+    "sharp_money": import_sharp_money,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -1816,6 +1936,7 @@ IMPORT_MAP = {
     "wehoop_history": import_wehoop_history,
     "hoopr_history": import_hoopr_history,
     "cfl_history": import_cfl_history,
+    "action_network_history": import_action_network_history,
     "weather_history": import_weather_history,
     
     # Specialized data
@@ -1858,8 +1979,8 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "weather_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "weather_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters"]
 SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings"]
 
@@ -1911,6 +2032,10 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings"]:
                 result = await func(years_back=seasons)
+            elif source == "action_network_history":
+                result = await func(days_back=days)
+            elif source in ["public_betting"]:
+                result = await func(sports=sports, days_back=days)
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
             elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
@@ -1920,7 +2045,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "nhl_players", "nhl_rosters", "nhl_team_stats",
                            "wnba_players", "wnba_rosters", "wnba_team_stats",
                            "nba_players", "nba_team_stats",
-                           "cfl_teams"]:
+                           "cfl_teams",
+                           "action_network", "sharp_money"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)

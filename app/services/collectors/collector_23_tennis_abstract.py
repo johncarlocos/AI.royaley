@@ -63,6 +63,7 @@ class TennisPlayer:
 @dataclass
 class TennisMatch:
     """Tennis match data structure"""
+    # Required fields (no defaults) must come first
     match_id: str
     tourney_id: str
     tourney_name: str
@@ -71,15 +72,15 @@ class TennisMatch:
     surface: str
     round_name: str
     best_of: int
-    
     winner_id: str
     winner_name: str
+    loser_id: str
+    loser_name: str
+    
+    # Optional fields (with defaults) come after
     winner_seed: Optional[int] = None
     winner_rank: Optional[int] = None
     winner_rank_points: Optional[int] = None
-    
-    loser_id: str
-    loser_name: str
     loser_seed: Optional[int] = None
     loser_rank: Optional[int] = None
     loser_rank_points: Optional[int] = None

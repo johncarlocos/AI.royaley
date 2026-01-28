@@ -224,15 +224,17 @@ class SportsipyCollector(BaseCollector):
     
     def _check_sportsipy(self) -> bool:
         """Check if sportsipy is installed."""
-        if self._sportsipy_available is None:
-            try:
-                import sportsipy
-                self._sportsipy_available = True
-                logger.info("[Sportsipy] Package available")
-            except ImportError:
-                self._sportsipy_available = False
-                logger.warning("[Sportsipy] Package not installed. Install with: pip install sportsipy")
-        return self._sportsipy_available
+        # Always recheck - don't cache failures
+        try:
+            import sportsipy
+            from sportsipy.mlb import teams as test_import
+            self._sportsipy_available = True
+            logger.info("[Sportsipy] Package available")
+            return True
+        except ImportError as e:
+            self._sportsipy_available = False
+            logger.warning(f"[Sportsipy] Package not installed: {e}. Install with: pip install sportsipy")
+            return False
     
     def _get_module(self, sport_code: str):
         """Get sportsipy module for a sport."""
@@ -318,6 +320,7 @@ class SportsipyCollector(BaseCollector):
             sports = list(SPORT_CONFIGS.keys())
         
         current_year = datetime.now().year
+        current_month = datetime.now().month
         
         data = {
             "teams": [],
@@ -339,9 +342,55 @@ class SportsipyCollector(BaseCollector):
             logger.info(f"[Sportsipy] Collecting {sport_code} data ({years_back} years)...")
             
             try:
-                # Determine season range
-                start_year = current_year - years_back
-                end_year = current_year
+                # Different sports use different year conventions in sportsipy:
+                # MLB/NFL/NCAAF: Calendar year (2024 = 2024 season)
+                # NBA/NHL/NCAAB: End year (2025 = 2024-25 season)
+                
+                # Determine the LATEST season with available data
+                season_start_month = config.get("season_start_month", 1)
+                
+                # Be conservative - use seasons that are DEFINITELY complete on Sports-Reference
+                # Sports-Reference sometimes has delays in posting current/recent season data
+                
+                if sport_code in ["MLB"]:
+                    # MLB: Calendar year, season March-October
+                    # Latest COMPLETE season is always previous year if we're before October
+                    if current_month < 11:  # Before November
+                        latest_year = current_year - 1  # Use last year's completed season
+                    else:
+                        latest_year = current_year  # Current season should be complete
+                        
+                elif sport_code in ["NFL", "NCAAF"]:
+                    # NFL/NCAAF: Calendar year, season Aug/Sep-Jan/Feb
+                    # Latest COMPLETE season ends in Feb, so use year-1 if before March
+                    if current_month < 3:  # Jan-Feb (still in playoffs)
+                        latest_year = current_year - 2  # Previous COMPLETE season
+                    else:
+                        latest_year = current_year - 1  # Last completed season
+                        
+                elif sport_code in ["NBA", "NHL"]:
+                    # NBA/NHL: Use END year (2025 = 2024-25 season)
+                    # Season runs Oct-June, so latest complete is current year if after June
+                    if current_month < 7:  # Before July
+                        latest_year = current_year - 1  # Previous complete season
+                    else:
+                        latest_year = current_year  # Current season complete
+                        
+                elif sport_code == "NCAAB":
+                    # NCAAB: Uses END year (2025 = 2024-25 season)
+                    # Season runs Nov-April
+                    if current_month < 5:  # Before May
+                        latest_year = current_year - 1  # Previous complete season
+                    else:
+                        latest_year = current_year  # Current season complete
+                else:
+                    latest_year = current_year - 1
+                
+                # Calculate year range
+                start_year = latest_year - years_back + 1
+                end_year = latest_year
+                
+                logger.info(f"[Sportsipy] {sport_code}: Collecting years {start_year} to {end_year}")
                 
                 for year in range(start_year, end_year + 1):
                     logger.info(f"[Sportsipy] {sport_code} {year}...")

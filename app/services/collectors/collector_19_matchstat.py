@@ -40,7 +40,15 @@ class MatchstatCollector(BaseCollector):
     TOURS = ["atp", "wta"]
     
     def __init__(self, db_session=None):
-        super().__init__(db_session)
+        super().__init__(
+            name="matchstat",
+            base_url=self.BASE_URL,
+            rate_limit=2,  # 2 requests per second
+            rate_window=1,
+            timeout=30.0,
+            max_retries=3
+        )
+        self.db_session = db_session
         self.headers = {
             "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com",
             "x-rapidapi-key": self.API_KEY

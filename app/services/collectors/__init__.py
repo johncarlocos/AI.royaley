@@ -23,6 +23,7 @@ IMPLEMENTED COLLECTORS:
     collector_17_basketball_ref.py - Basketball Reference (NBA stats, box scores, injuries) - FREE (Requires Selenium)
     collector_18_cfbd.py          - College Football Data API (NCAAF advanced stats, SP+, recruiting, betting lines) - FREE
     collector_19_matchstat.py     - Matchstat Tennis API (ATP/WTA rankings, H2H, surface stats) - $49/mo
+    collector_20_realgm.py        - RealGM/ESPN NBA Salaries (salary data, contracts, rosters) - FREE
 """
 
 from app.services.collectors.base_collector import (
@@ -52,6 +53,7 @@ from app.services.collectors.collector_16_sportsipy import SportsipyCollector, s
 from app.services.collectors.collector_17_basketball_ref import BasketballRefCollector, basketball_ref_collector
 from app.services.collectors.collector_18_cfbd import CollegeFootballDataCollector, cfbd_collector
 from app.services.collectors.collector_19_matchstat import MatchstatCollector, matchstat_collector
+from app.services.collectors.collector_20_realgm import RealGMCollector, realgm_collector
 
 __all__ = [
     "BaseCollector",
@@ -97,4 +99,6 @@ __all__ = [
     "cfbd_collector",
     "MatchstatCollector",
     "matchstat_collector",
+    "RealGMCollector",
+    "realgm_collector",
 ]

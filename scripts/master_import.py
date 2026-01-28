@@ -2745,6 +2745,108 @@ async def import_sportsipy_stats(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# REALGM/ESPN NBA SALARY IMPORTS
+# =============================================================================
+
+async def import_realgm(sports: List[str] = None) -> ImportResult:
+    """Import current NBA salary data from ESPN/RealGM."""
+    result = ImportResult(source="realgm")
+    try:
+        from app.services.collectors import realgm_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await realgm_collector.collect_current_season()
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await realgm_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_realgm_history(years_back: int = 10) -> ImportResult:
+    """Import historical NBA salary data (10 years)."""
+    result = ImportResult(source="realgm_history")
+    try:
+        from app.services.collectors import realgm_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        logger.info(f"[RealGM] Collecting {years_back} years of NBA salary data")
+        
+        data = await realgm_collector.collect_history(years_back=years_back)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await realgm_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        import traceback
+        traceback.print_exc()
+    return result
+
+
+async def import_realgm_salaries(years: List[int] = None) -> ImportResult:
+    """Import NBA salary data for specific years."""
+    result = ImportResult(source="realgm_salaries")
+    try:
+        from app.services.collectors import realgm_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await realgm_collector.collect_salaries_only(years=years)
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await realgm_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_realgm_rosters() -> ImportResult:
+    """Import current NBA rosters with player details."""
+    result = ImportResult(source="realgm_rosters")
+    try:
+        from app.services.collectors import realgm_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await realgm_collector.collect_rosters_only()
+        if data.success and data.data:
+            async with db_manager.session() as session:
+                saved = await realgm_collector.save_to_database(data.data, session)
+                result.records = saved
+        
+        result.success = result.records >= 0
+        if data.error:
+            result.errors.append(data.error[:100])
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -2770,6 +2872,7 @@ IMPORT_MAP = {
     "basketball_ref": import_basketball_ref,
     "cfbd": import_cfbd,
     "matchstat": import_matchstat,
+    "realgm": import_realgm,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -2790,6 +2893,7 @@ IMPORT_MAP = {
     "basketball_ref_history": import_basketball_ref_history,
     "cfbd_history": import_cfbd_history,
     "matchstat_history": import_matchstat_history,
+    "realgm_history": import_realgm_history,
     
     # Specialized data
     "injuries": import_espn_injuries,
@@ -2850,6 +2954,10 @@ IMPORT_MAP = {
     "matchstat_atp": import_matchstat_atp,
     "matchstat_wta": import_matchstat_wta,
     
+    # RealGM/ESPN NBA Salaries
+    "realgm_salaries": import_realgm_salaries,
+    "realgm_rosters": import_realgm_rosters,
+    
     # Live data
     "sportsdb_live": import_sportsdb_livescores,
     
@@ -2861,10 +2969,10 @@ IMPORT_MAP = {
 }
 
 # Source groups
-CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat"]
-HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history"]
+CURRENT_SOURCES = ["espn", "odds_api", "pinnacle", "weather", "sportsdb", "nflfastr", "cfbfastr", "baseballr", "hockeyr", "wehoop", "hoopr", "cfl", "action_network", "nhl_api", "sportsipy", "basketball_ref", "cfbd", "matchstat", "realgm"]
+HISTORICAL_SOURCES = ["pinnacle_history", "espn_history", "odds_api_history", "sportsdb_history", "nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "cfl_history", "action_network_history", "nhl_api_history", "weather_history", "sportsipy_history", "basketball_ref_history", "cfbd_history", "matchstat_history", "realgm_history"]
 PLAYER_SOURCES = ["injuries", "players", "nfl_players", "ncaaf_players", "mlb_players", "nhl_players", "wnba_players", "nba_players", "cfl_rosters", "matchstat_players"]
-SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta"]
+SPECIALIZED_SOURCES = ["venues", "closing_lines", "sportsdb_players", "sportsdb_standings", "sportsdb_seasons", "mlb_rosters", "mlb_team_stats", "nhl_rosters", "nhl_team_stats", "wnba_rosters", "wnba_team_stats", "nba_team_stats", "hoopr_nba", "hoopr_ncaab", "cfl_teams", "cfl_standings", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_teams", "sportsipy_stats", "basketball_ref_teams", "basketball_ref_injuries", "cfbd_teams", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_rankings", "matchstat_matches", "matchstat_stats", "matchstat_atp", "matchstat_wta", "realgm_salaries", "realgm_rosters"]
 
 # Full ML training data - everything needed
 FULL_ML_SOURCES = (
@@ -2914,7 +3022,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings", "nhl_api_history"]:
                 result = await func(years_back=seasons)
-            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats", "basketball_ref_history", "cfbd_history", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_history", "matchstat_matches", "matchstat_atp", "matchstat_wta"]:
+            elif source in ["sportsipy_history", "sportsipy_mlb", "sportsipy_nba", "sportsipy_nfl", "sportsipy_nhl", "sportsipy_ncaaf", "sportsipy_ncaab", "sportsipy_stats", "basketball_ref_history", "cfbd_history", "cfbd_games", "cfbd_stats", "cfbd_ratings", "cfbd_recruiting", "cfbd_lines", "matchstat_history", "matchstat_matches", "matchstat_atp", "matchstat_wta", "realgm_history"]:
                 result = await func(years_back=seasons)
             elif source == "action_network_history":
                 result = await func(days_back=days)
@@ -2934,7 +3042,8 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                            "sportsipy", "sportsipy_teams",
                            "basketball_ref", "basketball_ref_teams", "basketball_ref_injuries",
                            "cfbd", "cfbd_teams",
-                           "matchstat", "matchstat_rankings", "matchstat_players", "matchstat_stats"]:
+                           "matchstat", "matchstat_rankings", "matchstat_players", "matchstat_stats",
+                           "realgm", "realgm_salaries", "realgm_rosters"]:
                 result = await func()
             elif source == "weather":
                 result = await func(sports=sports, days=7)
@@ -3032,6 +3141,12 @@ def show_status():
     console.print("  • sportsdb_standings → standings (from TheSportsDB)")
     console.print("  • sportsdb_seasons   → list available seasons")
     console.print("  • closing_lines → closing_lines (from Pinnacle)")
+    
+    console.print("\n[cyan]⚡ NBA SALARIES (RealGM/ESPN):[/cyan]")
+    console.print("  • realgm          → current season salaries + rosters")
+    console.print("  • realgm_history  → 10 years salary history")
+    console.print("  • realgm_salaries → salary data only")
+    console.print("  • realgm_rosters  → current rosters with details")
     
     console.print("\n[cyan]⚡ PLAY-BY-PLAY:[/cyan]")
     console.print("  • nflfastr_pbp      → PBP + EPA/WPA/CPOE")

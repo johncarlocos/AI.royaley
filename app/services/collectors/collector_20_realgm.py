@@ -553,11 +553,18 @@ class RealGMCollector(BaseCollector):
                         season = result.scalar_one_or_none()
                         
                         if not season:
+                            # NBA season: Oct of previous year to Jun of current year
+                            from datetime import date as date_type
+                            start_date = date_type(year - 1, 10, 1)  # Oct 1 of previous year
+                            end_date = date_type(year, 6, 30)  # Jun 30 of current year
+                            
                             season = Season(
                                 sport_id=sport_id,
                                 year=year,
                                 name=season_name,
-                                is_active=(year >= datetime.now().year)
+                                start_date=start_date,
+                                end_date=end_date,
+                                is_current=(year >= datetime.now().year)
                             )
                             session.add(season)
                             await session.flush()

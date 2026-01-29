@@ -37,6 +37,7 @@ services:
       - GPU_ENABLED=true
       - CUDA_VISIBLE_DEVICES=2
       - NVIDIA_VISIBLE_DEVICES=2
+      - KAGGLE_API_TOKEN=${KAGGLE_API_TOKEN}
     volumes:
       # NVMe 0 - Fast storage (active operations)
       - /nvme0n1-disk/royaley/models:/app/models

@@ -356,26 +356,43 @@ async def import_pinnacle_closing_lines(sports: List[str] = None) -> ImportResul
 
 
 async def import_espn_history(sports: List[str] = None, days: int = 30) -> ImportResult:
-    """Import ESPN historical games."""
+    """Import ESPN historical games.
+    
+    Note: For large historical imports (e.g., 10 years = 3650 days), consider using
+    sport-specific collectors (nflfastr, baseballr, hockeyr, etc.) which are more efficient.
+    
+    Usage:
+        --source espn_history --days 365          # 1 year
+        --source espn_history --days 3650         # 10 years (slow!)
+        --source espn_history --sport NBA --days 365
+    """
     result = ImportResult(source="espn_history")
     try:
         from app.services.collectors import espn_collector
         from app.core.database import db_manager
         
         sports = sports or ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "CFL", "WNBA", "ATP", "WTA"]
+        
         for sport in sports:
             try:
+                logger.info(f"[ESPN History] Collecting {sport} for {days} days...")
                 data = await espn_collector.collect_historical(
                     sport_code=sport, 
                     days_back=days
                 )
-                if data.success:
+                if data.success and data.data.get("games"):
                     result.records += data.records_count
                     await db_manager.initialize()
                     async with db_manager.session() as session:
-                        await espn_collector.save_historical_to_database(data.data, session)
+                        saved, updated = await espn_collector.save_historical_to_database(
+                            games_data=data.data["games"],
+                            sport_code=sport,
+                            session=session
+                        )
+                        logger.info(f"[ESPN History] {sport}: {saved} new, {updated} updated")
             except Exception as e:
                 result.errors.append(f"{sport}: {str(e)[:50]}")
+                logger.error(f"[ESPN History] Error with {sport}: {e}")
         result.success = result.records > 0
     except Exception as e:
         result.errors.append(str(e)[:100])
@@ -3565,6 +3582,107 @@ async def import_kalshi_history(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# COMPREHENSIVE 10-YEAR HISTORICAL IMPORT
+# =============================================================================
+
+async def import_full_10_year(years_back: int = 10) -> ImportResult:
+    """
+    Import 10 years of historical data for ALL 10 sports.
+    
+    Fills: games, teams, players, injuries tables
+    
+    Uses the best collector for each sport:
+    - NFL: nflfastr (games, players, stats)
+    - NCAAF: cfbfastr (games, players, stats)  
+    - MLB: baseballr (games, players, stats)
+    - NHL: hockeyr + nhl_api (games, players, stats)
+    - NBA: hoopr (games, players, stats)
+    - NCAAB: hoopr (games, players, stats)
+    - WNBA: wehoop (games, players, stats)
+    - CFL: cfl (games, rosters)
+    - ATP: tennis_abstract + matchstat (matches, players)
+    - WTA: tennis_abstract + matchstat (matches, players)
+    
+    Usage:
+        python scripts/master_import.py --source full_10_year --seasons 10
+    """
+    result = ImportResult(source="full_10_year")
+    
+    console.print("\n[bold blue]" + "="*60 + "[/bold blue]")
+    console.print("[bold]🏆 COMPREHENSIVE 10-YEAR HISTORICAL IMPORT[/bold]")
+    console.print("[bold blue]" + "="*60 + "[/bold blue]")
+    console.print(f"Years: {years_back}")
+    console.print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    
+    # Import order matters - teams first, then games, then players/injuries
+    import_steps = [
+        # Step 1: Teams & current data (needed for foreign keys)
+        ("espn", import_espn, None, "Teams from ESPN"),
+        ("sportsdb", import_sportsdb, None, "Teams from SportsDB"),
+        
+        # Step 2: Historical games by sport (using best collector)
+        ("nflfastr_history", import_nflfastr_history, years_back, "NFL Historical (games, players, stats)"),
+        ("cfbfastr_history", import_cfbfastr_history, years_back, "NCAAF Historical (games, players, stats)"),
+        ("baseballr_history", import_baseballr_history, years_back, "MLB Historical (games, players, stats)"),
+        ("hockeyr_history", import_hockeyr_history, years_back, "NHL Historical (games, players, stats)"),
+        ("hoopr_history", import_hoopr_history, years_back, "NBA/NCAAB Historical (games, players, stats)"),
+        ("wehoop_history", import_wehoop_history, years_back, "WNBA Historical (games, players, stats)"),
+        ("cfl_history", import_cfl_history, years_back, "CFL Historical (games, rosters)"),
+        ("tennis_abstract_history", import_tennis_abstract_history, years_back, "ATP/WTA Historical (matches)"),
+        
+        # Step 3: Additional player data
+        ("nfl_players", import_nflfastr_players, None, "NFL Players"),
+        ("mlb_players", import_baseballr_players, None, "MLB Players"),
+        ("nhl_players", import_hockeyr_players, None, "NHL Players"),
+        ("nba_players", import_hoopr_players, None, "NBA Players"),
+        ("wnba_players", import_wehoop_players, None, "WNBA Players"),
+        ("players", import_espn_players, None, "ESPN Players (remaining)"),
+        
+        # Step 4: Injuries
+        ("injuries", import_espn_injuries, None, "Current Injuries (ESPN)"),
+        ("kaggle_injuries", import_kaggle_injuries, None, "Historical Injuries (Kaggle)"),
+    ]
+    
+    total_records = 0
+    errors = []
+    
+    for source_name, func, years_param, description in import_steps:
+        console.print(f"\n[cyan]📊 {description}...[/cyan]")
+        
+        try:
+            if years_param is not None:
+                step_result = await func(years_back=years_param)
+            else:
+                step_result = await func()
+            
+            total_records += step_result.records
+            
+            if step_result.errors:
+                errors.extend(step_result.errors)
+                console.print(f"  [yellow]⚠️ {source_name}: {step_result.records} records, {len(step_result.errors)} errors[/yellow]")
+            else:
+                console.print(f"  [green]✅ {source_name}: {step_result.records} records[/green]")
+                
+        except Exception as e:
+            errors.append(f"{source_name}: {str(e)[:50]}")
+            console.print(f"  [red]❌ {source_name}: {e}[/red]")
+    
+    result.records = total_records
+    result.errors = errors
+    result.success = total_records > 0
+    
+    # Final summary
+    console.print("\n[bold blue]" + "="*60 + "[/bold blue]")
+    console.print("[bold]📊 IMPORT COMPLETE[/bold]")
+    console.print("[bold blue]" + "="*60 + "[/bold blue]")
+    console.print(f"Total Records: {total_records:,}")
+    console.print(f"Total Errors: {len(errors)}")
+    console.print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -3592,6 +3710,9 @@ IMPORT_MAP = {
     "matchstat": import_matchstat,
     "realgm": import_realgm,
     "tennis_abstract": import_tennis_abstract,
+    
+    # Comprehensive imports
+    "full_10_year": import_full_10_year,
     
     # Historical data
     "pinnacle_history": import_pinnacle_history,
@@ -3769,7 +3890,9 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
         
         try:
             # Call with appropriate parameters based on source
-            if source == "pinnacle_history":
+            if source == "full_10_year":
+                result = await func(years_back=seasons)
+            elif source == "pinnacle_history":
                 result = await func(sports=sports, pages=pages)
             elif source in ["espn_history", "odds_api_history"]:
                 result = await func(sports=sports, days=days)

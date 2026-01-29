@@ -602,7 +602,7 @@ async def import_odds_api_full_history(years: int = 5) -> ImportResult:
     return result
 
 
-async def import_odds_api_movements(days: int = 30, years: int = None) -> ImportResult:
+async def import_odds_api_movements(days: int = 30, years: int = None, sport: str = None) -> ImportResult:
     """
     Import line movements from OddsAPI with auto-game creation.
     
@@ -620,7 +620,10 @@ async def import_odds_api_movements(days: int = 30, years: int = None) -> Import
     
     Usage:
         python scripts/master_import.py --source odds_movements --days 30
-        python scripts/master_import.py --source odds_movements --seasons 5  # 5 years
+        python scripts/master_import.py --source odds_movements --days 30 --sport NFL
+        python scripts/master_import.py --source odds_movements --seasons 5 --sport NBA
+        
+    Supported sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL
         
     Tables filled: odds_movements, games (auto-created), teams, sports
     """
@@ -634,6 +637,10 @@ async def import_odds_api_movements(days: int = 30, years: int = None) -> Import
             days = years * 365
         
         console.print(f"\n[bold cyan]📉 COLLECTING LINE MOVEMENTS FROM ODDSAPI[/bold cyan]")
+        if sport:
+            console.print(f"[cyan]Sport: {sport.upper()}[/cyan]")
+        else:
+            console.print(f"[cyan]Sports: ALL (NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL)[/cyan]")
         if years:
             console.print(f"[yellow]⚠️ OddsAPI historical data limited to ~June 2020 (max 5 years)[/yellow]")
             console.print(f"Years: {years} (~{days} days)")
@@ -643,7 +650,7 @@ async def import_odds_api_movements(days: int = 30, years: int = None) -> Import
         console.print()
         
         data = await odds_collector.collect_movements_historical(
-            sport_code=None,  # All sports
+            sport_code=sport.upper() if sport else None,
             days_back=days,
             years_back=years,
         )
@@ -4252,7 +4259,9 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "odds_full_history":
                 result = await func(years=seasons)
             elif source == "odds_movements":
-                result = await func(days=days, years=seasons if seasons else None)
+                # Get sport from first item in sports list if provided
+                sport_single = sports[0] if sports else None
+                result = await func(days=days, years=seasons if seasons else None, sport=sport_single)
             elif source == "odds_movements_full_history":
                 result = await func(years=seasons if seasons else 5)
             elif source == "odds_current":

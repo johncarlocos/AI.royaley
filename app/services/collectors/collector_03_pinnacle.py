@@ -1287,3 +1287,143 @@ class PinnacleCollector(BaseCollector):
 # Create and register collector instance
 pinnacle_collector = PinnacleCollector()
 collector_manager.register(pinnacle_collector)
+
+
+# =============================================================================
+# COMPREHENSIVE PINNACLE DATA COLLECTION
+# =============================================================================
+
+async def collect_pinnacle_full(
+    sport_code: str = None,
+    max_archive_pages: int = 500,
+) -> Dict[str, Any]:
+    """
+    Comprehensive Pinnacle data collection - ALL data types for ALL 10 sports.
+    
+    ⚠️ CRITICAL LIMITATION - READ CAREFULLY:
+    =========================================
+    Pinnacle RapidAPI does NOT provide historical odds!
+    
+    What IS available:
+    - /kit/v1/markets → CURRENT/FUTURE odds only (today + upcoming)
+    - /kit/v1/archive → Historical game RESULTS (scores) - can go back years
+    
+    What is NOT available:
+    - Historical odds snapshots
+    - Past line movements
+    - Historical closing lines
+    
+    To build historical Pinnacle odds data, you MUST:
+    1. Run this collector every 15-30 minutes (via cron/scheduler)
+    2. Each run saves a new snapshot to your database
+    3. Over time (weeks/months), you accumulate historical odds data
+    
+    This function collects:
+    1. Current odds (spreads, moneylines, totals) for upcoming games
+    2. Line movements (comparing to previous snapshots in YOUR database)
+    3. Closing lines (for games that recently started)
+    4. Historical game results (scores from archive - can go back years)
+    
+    Args:
+        sport_code: Specific sport or None for all 10 sports
+        max_archive_pages: Maximum archive pages per sport (100 games/page)
+        
+    Returns:
+        Dict with collection statistics
+    """
+    from app.core.database import db_manager
+    from rich.console import Console
+    
+    console = Console()
+    
+    ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+    sports = [sport_code.upper()] if sport_code else ALL_SPORTS
+    
+    results = {
+        "current_odds": 0,
+        "movements": 0,
+        "closing_lines": 0,
+        "historical_games": 0,
+        "games_created": 0,
+        "errors": [],
+    }
+    
+    console.print(f"\n[bold cyan]{'═' * 65}[/bold cyan]")
+    console.print(f"[bold cyan]🎯 PINNACLE COMPREHENSIVE DATA COLLECTION[/bold cyan]")
+    console.print(f"[bold cyan]{'═' * 65}[/bold cyan]")
+    console.print(f"[yellow]⚠️ IMPORTANT: Pinnacle API provides CURRENT odds only![/yellow]")
+    console.print(f"[yellow]   Historical ODDS are NOT available from this API.[/yellow]")
+    console.print(f"[yellow]   Historical game RESULTS (scores) ARE available.[/yellow]")
+    console.print(f"[dim]   To build historical odds: run every 15-30 min via cron[/dim]")
+    console.print()
+    console.print(f"Sports: {', '.join(sports)}")
+    console.print(f"Archive pages per sport: {max_archive_pages}")
+    console.print()
+    
+    await db_manager.initialize()
+    
+    for sport in sports:
+        console.print(f"\n[bold cyan]━━━ {sport} ━━━[/bold cyan]")
+        
+        try:
+            # Step 1: Collect CURRENT odds
+            console.print(f"  [cyan]📊 Current odds...[/cyan]")
+            odds_result = await pinnacle_collector.collect(sport_code=sport)
+            
+            if odds_result.success and odds_result.data:
+                async with db_manager.session() as session:
+                    # Save current odds
+                    saved = await pinnacle_collector.save_to_database(odds_result.data, session)
+                    results["current_odds"] += saved
+                    console.print(f"    [green]✅ {saved} odds saved[/green]")
+                    
+                    # Track movements vs previous snapshot
+                    movements = await pinnacle_collector.track_line_movements(odds_result.data, session)
+                    results["movements"] += movements
+                    if movements > 0:
+                        console.print(f"    [green]✅ {movements} movements detected[/green]")
+                    
+                    # Capture closing lines for started games
+                    closing = await pinnacle_collector.capture_closing_lines(sport, session)
+                    results["closing_lines"] += closing
+                    if closing > 0:
+                        console.print(f"    [green]✅ {closing} closing lines[/green]")
+            else:
+                console.print(f"    [yellow]⚠️ No current odds available[/yellow]")
+            
+            # Step 2: Collect historical RESULTS from archive
+            console.print(f"  [cyan]📜 Historical results (up to {max_archive_pages} pages)...[/cyan]")
+            history_result = await pinnacle_collector.collect_historical(
+                sport_code=sport,
+                max_pages=max_archive_pages
+            )
+            
+            if history_result.success and history_result.data:
+                async with db_manager.session() as session:
+                    saved, updated = await pinnacle_collector.save_historical_to_database(
+                        history_result.data, sport, session
+                    )
+                    results["historical_games"] += saved + updated
+                    results["games_created"] += saved
+                    console.print(f"    [green]✅ {saved} new games, {updated} updated[/green]")
+            else:
+                console.print(f"    [yellow]⚠️ No historical data[/yellow]")
+                
+        except Exception as e:
+            results["errors"].append(f"{sport}: {str(e)[:50]}")
+            console.print(f"  [red]❌ Error: {str(e)[:50]}[/red]")
+    
+    # Summary
+    console.print(f"\n[bold green]{'═' * 65}[/bold green]")
+    console.print(f"[bold green]PINNACLE COLLECTION COMPLETE[/bold green]")
+    console.print(f"[bold green]{'═' * 65}[/bold green]")
+    console.print(f"[green]  Current odds saved:     {results['current_odds']}[/green]")
+    console.print(f"[green]  Line movements:         {results['movements']}[/green]")
+    console.print(f"[green]  Closing lines:          {results['closing_lines']}[/green]")
+    console.print(f"[green]  Historical games:       {results['historical_games']}[/green]")
+    console.print(f"[green]  New games created:      {results['games_created']}[/green]")
+    if results["errors"]:
+        console.print(f"[red]  Errors: {len(results['errors'])}[/red]")
+    console.print(f"[bold green]{'═' * 65}[/bold green]")
+    
+    return results

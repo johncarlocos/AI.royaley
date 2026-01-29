@@ -321,136 +321,292 @@ async def import_odds_api(sports: List[str] = None) -> ImportResult:
     return result
 
 
-async def import_pinnacle(sports: List[str] = None) -> ImportResult:
-    """Import Pinnacle odds with line movements and closing lines.
+async def import_pinnacle(sports: List[str] = None, sport: str = None) -> ImportResult:
+    """
+    Import Pinnacle odds with line movements and closing lines.
     
-    Fills: odds, odds_movements, sportsbooks tables
+    ⚠️ CRITICAL LIMITATION:
+    Pinnacle API (via RapidAPI) provides CURRENT odds ONLY, not historical odds.
+    
+    What you GET:
+    - Current/future odds (spreads, moneylines, totals)
+    - Line movements (comparing to previous snapshots in YOUR database)
+    - Closing lines (for games that recently started)
+    
+    What you DON'T GET:
+    - Historical odds from past games
+    - 10 years of historical odds data (not available)
+    
+    To build historical odds: run this every 15-30 min via cron/scheduler
+    
+    Usage:
+        python scripts/master_import.py --source pinnacle
+        python scripts/master_import.py --source pinnacle --sport NFL
+        python scripts/master_import.py --source pinnacle --sports NBA,NFL,NHL
+    
+    Fills: odds, odds_movements, closing_lines, sportsbooks tables
     Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
     """
     result = ImportResult(source="pinnacle")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
+        from rich.console import Console
         
-        # All 10 supported sports
+        console = Console()
+        
         ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
-        sports_to_collect = sports if sports else ALL_SPORTS
+        
+        # Handle single sport or list
+        if sport:
+            sports_to_collect = [sport.upper()]
+        elif sports:
+            sports_to_collect = [s.upper() for s in sports]
+        else:
+            sports_to_collect = ALL_SPORTS
         
         await db_manager.initialize()
         
-        logger.info(f"[Pinnacle] Starting collection for {len(sports_to_collect)} sports")
+        console.print(f"\n[bold cyan]🎯 PINNACLE DATA COLLECTION[/bold cyan]")
+        console.print(f"Sports: {', '.join(sports_to_collect)}")
+        console.print(f"[yellow]⚠️ Note: Pinnacle API = CURRENT odds only (no historical)[/yellow]")
+        console.print()
         
-        for sport in sports_to_collect:
+        total_odds = 0
+        total_movements = 0
+        total_closing = 0
+        
+        for sport_code in sports_to_collect:
             try:
-                data = await pinnacle_collector.collect(sport_code=sport)
-                if data.success:
+                console.print(f"[cyan]📊 {sport_code}...[/cyan]")
+                
+                data = await pinnacle_collector.collect(sport_code=sport_code)
+                if data.success and data.data:
                     result.records += data.records_count
                     async with db_manager.session() as session:
-                        # Save odds to database
                         saved = await pinnacle_collector.save_to_database(data.data, session)
-                        logger.info(f"[Pinnacle] {sport}: Saved {saved} odds records")
+                        total_odds += saved
                         
-                        # Track line movements
                         movements = await pinnacle_collector.track_line_movements(data.data, session)
-                        result.records += movements
-                        logger.info(f"[Pinnacle] {sport}: Tracked {movements} line movements")
+                        total_movements += movements
+                        
+                        closing = await pinnacle_collector.capture_closing_lines(sport_code, session)
+                        total_closing += closing
+                    
+                    console.print(f"  [green]✅ {saved} odds, {movements} movements, {closing} closing[/green]")
                 else:
-                    logger.warning(f"[Pinnacle] {sport}: No data collected")
+                    console.print(f"  [yellow]⚠️ No data[/yellow]")
             except Exception as e:
-                error_msg = f"{sport}: {str(e)[:50]}"
+                error_msg = f"{sport_code}: {str(e)[:50]}"
                 result.errors.append(error_msg)
-                logger.error(f"[Pinnacle] {error_msg}")
+                console.print(f"  [red]❌ {error_msg}[/red]")
         
-        result.success = result.records > 0
+        result.records = total_odds + total_movements + total_closing
+        result.success = total_odds > 0 or len(result.errors) == 0
+        
+        console.print(f"\n[bold green]Total: {total_odds} odds, {total_movements} movements, {total_closing} closing[/bold green]")
+        
     except Exception as e:
         result.errors.append(str(e)[:100])
         logger.error(f"[Pinnacle] Fatal error: {e}")
     return result
 
 
-async def import_pinnacle_history(sports: List[str] = None, pages: int = 100) -> ImportResult:
-    """Import historical Pinnacle game results (scores/outcomes only, NOT historical odds).
+async def import_pinnacle_full(sports: List[str] = None, sport: str = None, pages: int = 500) -> ImportResult:
+    """
+    COMPREHENSIVE Pinnacle collection - current odds + historical results.
     
-    Fills: games table with historical results for ML training labels
+    This is the MAXIMUM data collection from Pinnacle API.
+    
+    Collects:
+    1. Current odds (spreads, moneylines, totals)
+    2. Line movements (comparing to previous DB snapshots)
+    3. Closing lines (for recently started games)
+    4. Historical game RESULTS (scores from archive - can go back years!)
+    
+    ⚠️ LIMITATION: Historical ODDS are NOT available. Only current odds.
+    ⚠️ Historical game RESULTS (who won, scores) ARE available.
+    
+    Usage:
+        python scripts/master_import.py --source pinnacle_full --pages 500
+        python scripts/master_import.py --source pinnacle_full --sport NFL --pages 1000
+    
+    Fills: odds, odds_movements, closing_lines, games, teams, sportsbooks
+    """
+    result = ImportResult(source="pinnacle_full")
+    try:
+        from app.services.collectors.collector_03_pinnacle import collect_pinnacle_full
+        
+        ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        
+        if sport:
+            sports_to_collect = [sport.upper()]
+        elif sports:
+            sports_to_collect = [s.upper() for s in sports]
+        else:
+            sports_to_collect = None  # All sports
+        
+        # Run comprehensive collection
+        for sport_code in (sports_to_collect or [None]):
+            try:
+                data = await collect_pinnacle_full(
+                    sport_code=sport_code,
+                    max_archive_pages=pages
+                )
+                result.records += data.get("current_odds", 0)
+                result.records += data.get("historical_games", 0)
+                if data.get("errors"):
+                    result.errors.extend(data["errors"])
+            except Exception as e:
+                result.errors.append(f"{sport_code or 'ALL'}: {str(e)[:50]}")
+        
+        result.success = result.records > 0 or len(result.errors) == 0
+        
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        logger.error(f"[Pinnacle Full] Fatal error: {e}")
+    return result
+
+
+async def import_pinnacle_history(sports: List[str] = None, pages: int = 500, sport: str = None) -> ImportResult:
+    """
+    Import historical Pinnacle game RESULTS (scores/outcomes).
+    
+    ⚠️ IMPORTANT: This collects game RESULTS (scores), NOT historical odds.
+    The Pinnacle archive contains:
+    - Game scores
+    - Winners/losers  
+    - Final margins
+    
+    It does NOT contain historical odds data.
+    
+    The archive can go back several years, providing valuable outcome data
+    for ML training labels.
+    
+    Usage:
+        python scripts/master_import.py --source pinnacle_history --pages 500
+        python scripts/master_import.py --source pinnacle_history --sport NFL --pages 1000
+    
+    Fills: games table with historical results
     Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
-    
-    IMPORTANT: This provides game RESULTS for ML training, not historical odds.
-    Historical odds can only be built by running collect() continuously over time.
     """
     result = ImportResult(source="pinnacle_history")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
+        from rich.console import Console
         
-        # All 10 supported sports
+        console = Console()
+        
         ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
-        sports_to_collect = sports if sports else ALL_SPORTS
+        
+        if sport:
+            sports_to_collect = [sport.upper()]
+        elif sports:
+            sports_to_collect = [s.upper() for s in sports]
+        else:
+            sports_to_collect = ALL_SPORTS
         
         await db_manager.initialize()
         
-        logger.info(f"[Pinnacle History] Starting collection for {len(sports_to_collect)} sports (max {pages} pages each)")
+        console.print(f"\n[bold cyan]📜 PINNACLE HISTORICAL RESULTS[/bold cyan]")
+        console.print(f"Sports: {', '.join(sports_to_collect)}")
+        console.print(f"Max pages per sport: {pages} (100 games/page)")
+        console.print(f"[yellow]⚠️ Archive = Game RESULTS (scores), NOT historical odds[/yellow]")
+        console.print()
         
-        for sport in sports_to_collect:
+        total_saved = 0
+        total_updated = 0
+        
+        for sport_code in sports_to_collect:
             try:
+                console.print(f"[cyan]📊 {sport_code} (up to {pages} pages)...[/cyan]")
+                
                 data = await pinnacle_collector.collect_historical(
-                    sport_code=sport, 
+                    sport_code=sport_code, 
                     max_pages=pages
                 )
-                if data.success:
-                    result.records += data.records_count
+                
+                if data.success and data.data:
                     async with db_manager.session() as session:
                         saved, updated = await pinnacle_collector.save_historical_to_database(
-                            data.data, sport, session
+                            data.data, sport_code, session
                         )
-                        logger.info(f"[Pinnacle History] {sport}: {saved} new, {updated} updated games")
+                        total_saved += saved
+                        total_updated += updated
+                    console.print(f"  [green]✅ {saved} new, {updated} updated games[/green]")
                 else:
-                    logger.warning(f"[Pinnacle History] {sport}: No data collected")
+                    console.print(f"  [yellow]⚠️ No data[/yellow]")
             except Exception as e:
-                error_msg = f"{sport}: {str(e)[:50]}"
+                error_msg = f"{sport_code}: {str(e)[:50]}"
                 result.errors.append(error_msg)
-                logger.error(f"[Pinnacle History] {error_msg}")
+                console.print(f"  [red]❌ {error_msg}[/red]")
         
-        result.success = result.records > 0
+        result.records = total_saved + total_updated
+        result.success = result.records > 0 or len(result.errors) == 0
+        
+        console.print(f"\n[bold green]Total: {total_saved} new games, {total_updated} updated[/bold green]")
+        
     except Exception as e:
         result.errors.append(str(e)[:100])
         logger.error(f"[Pinnacle History] Fatal error: {e}")
     return result
 
 
-async def import_pinnacle_closing_lines(sports: List[str] = None) -> ImportResult:
-    """Capture closing lines from Pinnacle for games that have started.
+async def import_pinnacle_closing_lines(sports: List[str] = None, sport: str = None) -> ImportResult:
+    """
+    Capture closing lines from Pinnacle for games that have started.
     
-    Fills: closing_lines table (benchmark for CLV calculation)
+    Closing lines are the final odds before game start - the industry 
+    benchmark for CLV (Closing Line Value) calculation.
+    
+    Usage:
+        python scripts/master_import.py --source closing_lines
+        python scripts/master_import.py --source closing_lines --sport NFL
+    
+    Fills: closing_lines table
     Sports: NFL, NBA, NHL, MLB, NCAAF, NCAAB, WNBA, CFL, ATP, WTA
-    
-    Run this periodically to capture final lines before game starts.
     """
     result = ImportResult(source="closing_lines")
     try:
         from app.services.collectors import pinnacle_collector
         from app.core.database import db_manager
+        from rich.console import Console
         
-        # All 10 supported sports
+        console = Console()
+        
         ALL_SPORTS = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
-        sports_to_collect = sports if sports else ALL_SPORTS
+        
+        if sport:
+            sports_to_collect = [sport.upper()]
+        elif sports:
+            sports_to_collect = [s.upper() for s in sports]
+        else:
+            sports_to_collect = ALL_SPORTS
         
         await db_manager.initialize()
         
-        logger.info(f"[Closing Lines] Capturing closing lines for {len(sports_to_collect)} sports")
+        console.print(f"\n[bold cyan]🎯 CAPTURING CLOSING LINES[/bold cyan]")
+        console.print(f"Sports: {', '.join(sports_to_collect)}")
+        console.print()
         
-        for sport in sports_to_collect:
+        total = 0
+        
+        for sport_code in sports_to_collect:
             try:
                 async with db_manager.session() as session:
-                    saved = await pinnacle_collector.capture_closing_lines(sport, session)
-                    result.records += saved
+                    saved = await pinnacle_collector.capture_closing_lines(sport_code, session)
+                    total += saved
                     if saved > 0:
-                        logger.info(f"[Closing Lines] {sport}: Captured {saved} closing lines")
+                        console.print(f"  [green]✅ {sport_code}: {saved} closing lines[/green]")
             except Exception as e:
-                error_msg = f"{sport}: {str(e)[:50]}"
-                result.errors.append(error_msg)
-                logger.error(f"[Closing Lines] {error_msg}")
+                result.errors.append(f"{sport_code}: {str(e)[:50]}")
         
-        result.success = result.records >= 0  # Success even if no new lines captured
+        result.records = total
+        result.success = True
+        
+        console.print(f"\n[bold green]Total: {total} closing lines captured[/bold green]")
+        
     except Exception as e:
         result.errors.append(str(e)[:100])
         logger.error(f"[Closing Lines] Fatal error: {e}")
@@ -4045,6 +4201,7 @@ IMPORT_MAP = {
     "espn": import_espn,
     "odds_api": import_odds_api,
     "pinnacle": import_pinnacle,
+    "pinnacle_full": import_pinnacle_full,
     "weather": import_weather,
     "sportsdb": import_sportsdb,
     "nflfastr": import_nflfastr,
@@ -4252,8 +4409,18 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             # Call with appropriate parameters based on source
             if source == "full_10_year":
                 result = await func(years_back=seasons)
+            elif source == "pinnacle":
+                sport_single = sports[0] if sports else None
+                result = await func(sports=sports, sport=sport_single)
+            elif source == "pinnacle_full":
+                sport_single = sports[0] if sports else None
+                result = await func(sports=sports, sport=sport_single, pages=pages)
             elif source == "pinnacle_history":
-                result = await func(sports=sports, pages=pages)
+                sport_single = sports[0] if sports else None
+                result = await func(sports=sports, sport=sport_single, pages=pages)
+            elif source == "closing_lines":
+                sport_single = sports[0] if sports else None
+                result = await func(sports=sports, sport=sport_single)
             elif source in ["espn_history", "odds_api_history"]:
                 result = await func(sports=sports, days=days)
             elif source == "odds_full_history":
@@ -4279,7 +4446,7 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "weather_history":
                 result = await func(sports=sports, days=days)
             elif source in ["sportsdb_live", "nflfastr_pbp", "cfbfastr_pbp", 
-                           "cfbfastr_sp", "cfbfastr_recruiting", "closing_lines",
+                           "cfbfastr_sp", "cfbfastr_recruiting",
                            "nfl_players", "ncaaf_players", "mlb_players", 
                            "mlb_rosters", "mlb_team_stats",
                            "nhl_players", "nhl_rosters", "nhl_team_stats",

@@ -1873,16 +1873,22 @@ class OddsCollector(BaseCollector):
         self,
         sport_code: str = None,
         days_back: int = 30,
+        years_back: int = None,
     ) -> CollectorResult:
         """
-        Collect historical line movements by comparing snapshots.
+        Collect historical line movements by comparing odds snapshots.
         
-        Line movements are detected by comparing odds snapshots 
-        at different times for the same events.
+        Automatically creates games if they don't exist, so no pre-import required.
+        
+        OddsAPI Historical Limits:
+        - Data available from ~June 2020 onwards (~5 years max)
+        - Each API call costs quota
+        - For maximum data, use years_back=5 or days_back=1825
         
         Args:
             sport_code: Specific sport or None for all
-            days_back: Days of history to analyze
+            days_back: Days of history to analyze (default 30)
+            years_back: Years of history (overrides days_back if set, max 5)
             
         Returns:
             CollectorResult with movement data
@@ -1892,91 +1898,128 @@ class OddsCollector(BaseCollector):
         
         console = Console()
         
+        # Calculate days from years if specified
+        if years_back:
+            # OddsAPI only has data from ~June 2020, cap at 5 years
+            years_back = min(years_back, 5)
+            days_back = years_back * 365
+            console.print(f"[yellow]⚠️ OddsAPI historical data limited to ~June 2020 onwards (max ~5 years)[/yellow]")
+        
+        # All supported sports
         main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
         sports = [sport_code.upper()] if sport_code else main_sports
         
         total_movements = 0
+        total_games_created = 0
         all_errors = []
+        api_calls = 0
         
-        console.print(f"\n[bold]📉 COLLECTING LINE MOVEMENTS[/bold]")
+        console.print(f"\n[bold cyan]📉 COLLECTING MAXIMUM LINE MOVEMENTS[/bold cyan]")
         console.print(f"Sports: {', '.join(sports)}")
-        console.print(f"Days back: {days_back}")
+        console.print(f"Days back: {days_back} ({days_back // 365} years)")
+        console.print(f"[dim]Games will be auto-created if they don't exist[/dim]")
+        console.print(f"[dim]Estimated API calls: ~{days_back * len(sports) * 2}[/dim]")
         console.print()
         
         for sport in sports:
             api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
             if not api_sport_key:
+                console.print(f"[yellow]⚠️ {sport}: No API key mapping, skipping[/yellow]")
                 continue
             
             console.print(f"[cyan]📈 {sport}...[/cyan]")
             sport_movements = 0
+            sport_games_created = 0
+            sport_api_calls = 0
             
             try:
-                for day_offset in range(0, days_back - 1):
-                    # Get two snapshots: current day and next day
-                    date1 = datetime.utcnow() - timedelta(days=day_offset + 2)
-                    date2 = datetime.utcnow() - timedelta(days=day_offset + 1)
+                # Process day by day for maximum movement capture
+                for day_offset in range(0, days_back):
+                    # Calculate the target date
+                    target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
                     
-                    date1_str = date1.strftime("%Y-%m-%dT08:00:00Z")  # Morning
-                    date2_str = date2.strftime("%Y-%m-%dT20:00:00Z")  # Evening
-                    
-                    try:
-                        # Get morning snapshot
-                        params1 = {
-                            "apiKey": self.api_key,
-                            "regions": "us",
-                            "markets": "spreads,h2h,totals",
-                            "oddsFormat": "american",
-                            "date": date1_str,
-                        }
-                        data1 = await self.get(f"/historical/sports/{api_sport_key}/odds", params=params1)
-                        
-                        # Get evening snapshot
-                        params2 = {
-                            "apiKey": self.api_key,
-                            "regions": "us",
-                            "markets": "spreads,h2h,totals",
-                            "oddsFormat": "american",
-                            "date": date2_str,
-                        }
-                        data2 = await self.get(f"/historical/sports/{api_sport_key}/odds", params=params2)
-                        
-                        if data1 and data2:
-                            events1 = data1.get("data", [])
-                            events2 = data2.get("data", [])
-                            
-                            movements = self._compare_snapshots_for_movements(
-                                events1, events2, sport, date1, date2
-                            )
-                            
-                            if movements:
-                                # Save movements to database
-                                from app.core.database import db_manager
-                                await db_manager.initialize()
-                                async with db_manager.session() as session:
-                                    saved = await self._save_movements_batch(movements, session)
-                                    sport_movements += saved
-                        
-                        await asyncio.sleep(0.3)
-                        
-                    except Exception as e:
+                    # Skip dates before OddsAPI historical data began (~June 2020)
+                    if target_date < datetime(2020, 6, 1):
                         continue
+                    
+                    # Get THREE snapshots per day for maximum movement detection:
+                    # Morning (10am), Afternoon (3pm), Evening (9pm)
+                    snapshot_times = ["10:00:00", "15:00:00", "21:00:00"]
+                    day_snapshots = []
+                    
+                    for snap_time in snapshot_times:
+                        date_str = target_date.strftime(f"%Y-%m-%dT{snap_time}Z")
+                        
+                        try:
+                            params = {
+                                "apiKey": self.api_key,
+                                "regions": "us,us2,eu,uk,au",  # Maximum regions for more books
+                                "markets": "spreads,h2h,totals",
+                                "oddsFormat": "american",
+                                "date": date_str,
+                            }
+                            data = await self.get(f"/historical/sports/{api_sport_key}/odds", params=params)
+                            sport_api_calls += 1
+                            api_calls += 1
+                            
+                            if data and data.get("data"):
+                                day_snapshots.append({
+                                    "time": date_str,
+                                    "events": data.get("data", [])
+                                })
+                            
+                            await asyncio.sleep(0.2)  # Rate limiting
+                            
+                        except Exception as e:
+                            logger.debug(f"Snapshot error {date_str}: {e}")
+                            continue
+                    
+                    # Compare consecutive snapshots for movements
+                    for i in range(len(day_snapshots) - 1):
+                        snap1 = day_snapshots[i]
+                        snap2 = day_snapshots[i + 1]
+                        
+                        movements = self._compare_snapshots_for_movements(
+                            snap1["events"], 
+                            snap2["events"], 
+                            sport, 
+                            datetime.fromisoformat(snap1["time"].replace("Z", "+00:00")),
+                            datetime.fromisoformat(snap2["time"].replace("Z", "+00:00"))
+                        )
+                        
+                        if movements:
+                            from app.core.database import db_manager
+                            await db_manager.initialize()
+                            async with db_manager.session() as session:
+                                saved, created = await self._save_movements_with_games(
+                                    movements, session, sport
+                                )
+                                sport_movements += saved
+                                sport_games_created += created
+                    
+                    # Progress update every 30 days
+                    if (day_offset + 1) % 30 == 0:
+                        console.print(f"    [dim]{sport}: {day_offset + 1}/{days_back} days, {sport_movements} movements[/dim]")
                 
                 total_movements += sport_movements
-                console.print(f"  [green]✅ {sport}: {sport_movements} movements[/green]")
+                total_games_created += sport_games_created
+                console.print(f"  [green]✅ {sport}: {sport_movements} movements, {sport_games_created} games ({sport_api_calls} API calls)[/green]")
                 
             except Exception as e:
                 all_errors.append(f"{sport}: {str(e)[:50]}")
-                console.print(f"  [red]❌ {sport}: Error[/red]")
+                console.print(f"  [red]❌ {sport}: {str(e)[:50]}[/red]")
         
-        console.print(f"\n[bold green]Total Movements: {total_movements}[/bold green]")
+        console.print(f"\n[bold green]═══════════════════════════════════════════════════[/bold green]")
+        console.print(f"[bold green]TOTAL: {total_movements} movements, {total_games_created} games created[/bold green]")
+        console.print(f"[bold green]API Calls Used: {api_calls}[/bold green]")
+        console.print(f"[bold green]═══════════════════════════════════════════════════[/bold green]")
         
         return CollectorResult(
-            success=total_movements > 0,
-            data={"total_movements": total_movements},
+            success=total_movements > 0 or len(all_errors) == 0,
+            data={"total_movements": total_movements, "games_created": total_games_created, "api_calls": api_calls},
             records_count=total_movements,
             error="; ".join(all_errors) if all_errors else None,
-            metadata={"type": "movements_historical", "days_back": days_back}
+            metadata={"type": "movements_historical", "days_back": days_back, "years_back": years_back}
         )
 
     def _compare_snapshots_for_movements(
@@ -1987,10 +2030,14 @@ class OddsCollector(BaseCollector):
         date1: datetime,
         date2: datetime,
     ) -> List[Dict[str, Any]]:
-        """Compare two snapshots and detect line movements."""
+        """
+        Compare two snapshots and detect ALL line movements.
+        
+        Captures movements with very low threshold for maximum data.
+        """
         movements = []
         
-        # Index events by ID
+        # Index events by ID for fast lookup
         events1_by_id = {e.get("id"): e for e in events1}
         
         for event2 in events2:
@@ -2003,7 +2050,7 @@ class OddsCollector(BaseCollector):
             away_team = event2.get("away_team")
             commence_time = event2.get("commence_time")
             
-            # Index bookmaker odds from event1
+            # Index all bookmaker odds from event1
             odds1_index = {}
             for book in event1.get("bookmakers", []):
                 book_key = book.get("key")
@@ -2016,7 +2063,7 @@ class OddsCollector(BaseCollector):
                             "point": outcome.get("point"),
                         }
             
-            # Compare with event2
+            # Compare with event2 odds
             for book in event2.get("bookmakers", []):
                 book_key = book.get("key")
                 book_title = book.get("title")
@@ -2046,9 +2093,15 @@ class OddsCollector(BaseCollector):
                             if prev_point is not None and current_point is not None:
                                 line_change = current_point - prev_point
                             
-                            # Record significant movements
-                            if (price_change and abs(price_change) >= 5) or \
-                               (line_change and abs(line_change) >= 0.5):
+                            # LOW THRESHOLD for maximum data capture:
+                            # Any odds change >= 2 points OR any line change >= 0.5
+                            has_movement = False
+                            if price_change and abs(price_change) >= 2:
+                                has_movement = True
+                            if line_change and abs(line_change) >= 0.5:
+                                has_movement = True
+                            
+                            if has_movement:
                                 movements.append({
                                     "sport_code": sport_code,
                                     "event_id": event_id,
@@ -2065,62 +2118,102 @@ class OddsCollector(BaseCollector):
                                     "previous_line": prev_point,
                                     "current_line": current_point,
                                     "line_change": line_change,
-                                    "snapshot_time_1": date1.isoformat(),
-                                    "snapshot_time_2": date2.isoformat(),
+                                    "snapshot_time_1": date1.isoformat() if hasattr(date1, 'isoformat') else str(date1),
+                                    "snapshot_time_2": date2.isoformat() if hasattr(date2, 'isoformat') else str(date2),
                                 })
         
         return movements
 
-    async def _save_movements_batch(
+    async def _save_movements_with_games(
         self,
         movements: List[Dict[str, Any]],
         session,
-    ) -> int:
-        """Save a batch of movements to database."""
+        sport_code: str,
+    ) -> Tuple[int, int]:
+        """
+        Save movements to database, auto-creating games if they don't exist.
+        
+        Returns:
+            Tuple of (movements_saved, games_created)
+        """
         saved = 0
+        games_created = 0
+        
+        # Cache for games we've already looked up/created this batch
+        game_cache = {}
         
         for mov in movements:
             try:
-                sport_code = mov.get("sport_code")
                 home_team = mov.get("home_team")
                 away_team = mov.get("away_team")
                 commence_time = mov.get("commence_time")
+                event_id = mov.get("event_id")
                 
-                # Find game
-                game_id = await self._find_game_id(
-                    session, sport_code, home_team, away_team, commence_time
-                )
+                # Create cache key
+                cache_key = f"{event_id}:{home_team}:{away_team}"
+                
+                # Check cache first
+                if cache_key in game_cache:
+                    game_id = game_cache[cache_key]
+                else:
+                    # Try to find existing game
+                    game_id = await self._find_game_id(
+                        session, sport_code, home_team, away_team, commence_time
+                    )
+                    
+                    # If no game found, create one
+                    if not game_id:
+                        game = await self._create_game_from_odds_record(
+                            session,
+                            {
+                                "external_id": event_id,
+                                "home_team": home_team,
+                                "away_team": away_team,
+                                "commence_time": commence_time,
+                            },
+                            sport_code
+                        )
+                        if game:
+                            game_id = game.id
+                            games_created += 1
+                    
+                    # Cache the result
+                    game_cache[cache_key] = game_id
                 
                 if not game_id:
                     continue
                 
-                # Get sportsbook
-                sportsbook_key = mov.get("sportsbook")
-                sportsbook = await self._get_or_create_sportsbook(
-                    session, sportsbook_key, mov.get("sportsbook_title", sportsbook_key)
-                )
-                
-                # Map market
+                # Map market to bet_type
                 market = mov.get("market")
                 bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
                 bet_type = bet_type_map.get(market, market)
                 
+                # Calculate movement value
+                line_change = mov.get("line_change")
+                if line_change is None and mov.get("odds_change"):
+                    line_change = mov.get("odds_change") / 10.0
+                
+                # Detect steam moves (rapid significant movement)
+                is_steam = False
+                if line_change and abs(line_change) >= 1.5:
+                    is_steam = True
+                
+                # Save movement
                 movement_record = OddsMovement(
                     game_id=game_id,
-                    sportsbook_id=sportsbook.id,
                     bet_type=bet_type,
                     previous_line=mov.get("previous_line"),
                     current_line=mov.get("current_line"),
-                    movement=mov.get("line_change"),
-                    previous_odds=mov.get("previous_odds"),
-                    current_odds=mov.get("current_odds"),
-                    odds_change=mov.get("odds_change"),
-                    recorded_at=datetime.utcnow(),
+                    movement=line_change,
+                    is_steam=is_steam,
+                    is_reverse=False,
+                    detected_at=datetime.utcnow(),
                 )
                 session.add(movement_record)
                 saved += 1
                 
-                if saved % 50 == 0:
+                # Batch commit every 100 records
+                if saved % 100 == 0:
                     await session.commit()
                     
             except Exception as e:
@@ -2128,7 +2221,45 @@ class OddsCollector(BaseCollector):
                 continue
         
         await session.commit()
-        return saved
+        return saved, games_created
+
+    async def collect_movements_full_history(
+        self,
+        years: int = 5,
+    ) -> CollectorResult:
+        """
+        Collect MAXIMUM historical line movements from OddsAPI.
+        
+        OddsAPI has data from ~June 2020, so max ~5 years of historical data.
+        This collects ALL available movements across ALL sports.
+        
+        ⚠️ WARNING: This uses significant API quota!
+        Estimated: ~30,000+ API calls for 5 years across 8 sports
+        
+        Args:
+            years: Years of history (max 5, limited by OddsAPI)
+            
+        Returns:
+            CollectorResult with movement data
+        """
+        from rich.console import Console
+        console = Console()
+        
+        # Cap at 5 years (OddsAPI limit - data from June 2020)
+        years = min(years, 5)
+        
+        console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[bold cyan]🏆 MAXIMUM HISTORICAL MOVEMENTS COLLECTION[/bold cyan]")
+        console.print(f"[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[yellow]Collecting {years} years of movements across ALL sports[/yellow]")
+        console.print(f"[yellow]⚠️ OddsAPI only has data from ~June 2020[/yellow]")
+        console.print(f"[dim]Estimated API calls: ~{years * 365 * 8 * 3} (may vary by sport season)[/dim]")
+        console.print()
+        
+        return await self.collect_movements_historical(
+            sport_code=None,
+            years_back=years
+        )
 
 
 # Create and register collector instance

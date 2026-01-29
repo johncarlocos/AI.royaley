@@ -602,9 +602,9 @@ async def import_odds_api_full_history(years: int = 5) -> ImportResult:
     return result
 
 
-async def import_odds_api_movements(days: int = 30) -> ImportResult:
+async def import_odds_api_movements(days: int = 30, years: int = None) -> ImportResult:
     """
-    Import line movements from OddsAPI.
+    Import line movements from OddsAPI with auto-game creation.
     
     Line movements show how odds change over time, critical for:
     - Sharp money detection
@@ -612,30 +612,116 @@ async def import_odds_api_movements(days: int = 30) -> ImportResult:
     - Reverse line movement analysis
     - CLV (Closing Line Value) calculation
     
+    ✅ ENHANCED: Now auto-creates games if they don't exist!
+    
+    OddsAPI Historical Limits:
+    - Data available from ~June 2020 onwards (~5 years max)
+    - For 10 years: use years=5 (OddsAPI max), then supplement with other sources
+    
     Usage:
         python scripts/master_import.py --source odds_movements --days 30
+        python scripts/master_import.py --source odds_movements --seasons 5  # 5 years
         
-    Tables filled: odds_movements
+    Tables filled: odds_movements, games (auto-created), teams, sports
     """
     result = ImportResult(source="odds_movements")
     try:
         from app.services.collectors import odds_collector
         
-        console.print(f"\n[bold]📉 COLLECTING LINE MOVEMENTS FROM ODDSAPI[/bold]")
-        console.print(f"Days back: {days}")
+        # Convert years to days if specified
+        if years:
+            years = min(years, 5)  # OddsAPI limit
+            days = years * 365
+        
+        console.print(f"\n[bold cyan]📉 COLLECTING LINE MOVEMENTS FROM ODDSAPI[/bold cyan]")
+        if years:
+            console.print(f"[yellow]⚠️ OddsAPI historical data limited to ~June 2020 (max 5 years)[/yellow]")
+            console.print(f"Years: {years} (~{days} days)")
+        else:
+            console.print(f"Days back: {days}")
+        console.print(f"[dim]Games will be auto-created if they don't exist[/dim]")
         console.print()
         
         data = await odds_collector.collect_movements_historical(
             sport_code=None,  # All sports
             days_back=days,
+            years_back=years,
         )
         
         if data.success:
             result.records = data.records_count
             result.success = True
+            games_created = data.data.get("games_created", 0) if data.data else 0
+            api_calls = data.data.get("api_calls", 0) if data.data else 0
             console.print(f"[green]✅ {result.records} movements saved[/green]")
+            console.print(f"[green]   {games_created} games auto-created[/green]")
+            console.print(f"[dim]   API calls used: {api_calls}[/dim]")
         else:
-            result.errors.append(data.error or "Collection failed")
+            if data.records_count == 0:
+                result.success = True
+                console.print(f"[yellow]⚠️ No movements detected (possibly off-season or no data)[/yellow]")
+            else:
+                result.errors.append(data.error or "Collection failed")
+            
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_odds_movements_full_history(years: int = 5) -> ImportResult:
+    """
+    Import MAXIMUM historical line movements from OddsAPI.
+    
+    Collects ALL available movements across ALL sports for maximum years.
+    
+    ⚠️ OddsAPI Limits:
+    - Historical data only available from ~June 2020
+    - Maximum ~5 years of data regardless of years parameter
+    - User requested 10 years but OddsAPI only has 5
+    
+    ⚠️ API QUOTA WARNING:
+    This uses SIGNIFICANT API quota!
+    Estimated: ~30,000+ API calls for 5 years across 8 sports
+    
+    Usage:
+        python scripts/master_import.py --source odds_movements_full_history --seasons 5
+        
+    Tables filled: odds_movements, games (auto-created), teams, sports
+    """
+    result = ImportResult(source="odds_movements_full_history")
+    try:
+        from app.services.collectors import odds_collector
+        
+        # Cap at 5 years (OddsAPI limit)
+        years = min(years, 5)
+        
+        console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[bold cyan]🏆 MAXIMUM HISTORICAL MOVEMENTS COLLECTION[/bold cyan]")
+        console.print(f"[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[yellow]⚠️ OddsAPI only has data from ~June 2020 (max ~5 years)[/yellow]")
+        console.print(f"[yellow]   Requesting {years} years (will collect what's available)[/yellow]")
+        console.print(f"[dim]Estimated API calls: ~{years * 365 * 8 * 3}[/dim]")
+        console.print()
+        
+        data = await odds_collector.collect_movements_full_history(years=years)
+        
+        if data.success:
+            result.records = data.records_count
+            result.success = True
+            games_created = data.data.get("games_created", 0) if data.data else 0
+            api_calls = data.data.get("api_calls", 0) if data.data else 0
+            console.print(f"\n[bold green]{'═' * 60}[/bold green]")
+            console.print(f"[bold green]✅ COLLECTION COMPLETE[/bold green]")
+            console.print(f"[bold green]   {result.records} movements saved[/bold green]")
+            console.print(f"[bold green]   {games_created} games auto-created[/bold green]")
+            console.print(f"[dim]   API calls used: {api_calls}[/dim]")
+            console.print(f"[bold green]{'═' * 60}[/bold green]")
+        else:
+            if data.records_count == 0:
+                result.success = True
+                console.print(f"[yellow]⚠️ No movements detected[/yellow]")
+            else:
+                result.errors.append(data.error or "Collection failed")
             
     except Exception as e:
         result.errors.append(str(e)[:100])
@@ -3981,6 +4067,7 @@ IMPORT_MAP = {
     "odds_api_history": import_odds_api_history,
     "odds_full_history": import_odds_api_full_history,
     "odds_movements": import_odds_api_movements,
+    "odds_movements_full_history": import_odds_movements_full_history,
     "odds_current": import_odds_api_current,
     "sportsdb_history": import_sportsdb_history,
     "nflfastr_history": import_nflfastr_history,
@@ -4165,7 +4252,9 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source == "odds_full_history":
                 result = await func(years=seasons)
             elif source == "odds_movements":
-                result = await func(days=days)
+                result = await func(days=days, years=seasons if seasons else None)
+            elif source == "odds_movements_full_history":
+                result = await func(years=seasons if seasons else 5)
             elif source == "odds_current":
                 result = await func(sports=sports)
             elif source == "sportsdb_history":

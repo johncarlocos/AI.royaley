@@ -522,20 +522,43 @@ class ESPNCollector(BaseCollector):
                 if not team_name:
                     continue
                 
-                # Check if team exists by name (primary) or external_id
+                # Check if team exists - try exact name match first (most specific)
+                team = None
+                
+                # 1. Try by exact name match first
                 existing = await session.execute(
                     select(Team).where(
                         and_(
                             Team.sport_id == sport.id,
-                            or_(
-                                Team.name == team_name,
+                            Team.name == team_name,
+                        )
+                    )
+                )
+                team = existing.scalars().first()
+                
+                # 2. If not found by name, try external_id
+                if not team and external_id:
+                    existing = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
                                 Team.external_id == external_id,
+                            )
+                        )
+                    )
+                    team = existing.scalars().first()
+                
+                # 3. If still not found, try abbreviation
+                if not team and abbreviation:
+                    existing = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
                                 Team.abbreviation == abbreviation,
                             )
                         )
                     )
-                )
-                team = existing.scalar_one_or_none()
+                    team = existing.scalars().first()
                 
                 if team:
                     # Update existing team
@@ -588,7 +611,7 @@ class ESPNCollector(BaseCollector):
                     Team.name == team_name,
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 # Update external_id if different
                 if external_id and team.external_id != external_id:
@@ -603,7 +626,7 @@ class ESPNCollector(BaseCollector):
                     Team.external_id == external_id,
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         
@@ -615,7 +638,7 @@ class ESPNCollector(BaseCollector):
                     Team.abbreviation == abbreviation,
                 )
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if team:
                 return team
         

@@ -1807,7 +1807,7 @@ class KaggleCollector(BaseCollector):
         Returns:
             Dict with counts of saved records by type
         """
-        from app.core.database import get_async_session
+        from app.core.database import db_manager
         
         counts = {
             "sports": 0,
@@ -1823,7 +1823,7 @@ class KaggleCollector(BaseCollector):
         }
         
         try:
-            async with get_async_session() as session:
+            async with db_manager.session() as session:
                 # 1. Create/update sports
                 sport_cache = {}
                 sports_in_data = set()

@@ -3206,6 +3206,48 @@ async def import_kaggle_tennis(years_back: int = 10) -> ImportResult:
     return result
 
 
+async def import_kaggle_injuries(sports: List[str] = None) -> ImportResult:
+    """
+    Import historical injury data from Kaggle datasets.
+    
+    Datasets included:
+    - NBA: loganlauton/nba-injury-stats-1951-2023 (70+ years, ~50,000 records)
+    - NBA: ghopkins/nba-injuries-2010-2018 (detailed, ~5,000 records)
+    - NFL: thedevastator/nfl-injury-analysis-2012-2017 (~8,000 records)
+    - NFL: rishidamarla/concussions-in-the-nfl-20122014 (~500 records)
+    
+    Args:
+        sports: List of sports to collect (None = all: NBA, NFL)
+        
+    Returns:
+        ImportResult with injury records count
+        
+    Usage:
+        docker exec -it royaley_api python scripts/master_import.py --source kaggle_injuries
+        docker exec -it royaley_api python scripts/master_import.py --source kaggle_injuries --sport NBA
+    """
+    result = ImportResult(source="kaggle_injuries")
+    try:
+        from app.services.collectors import kaggle_collector
+        from app.core.database import db_manager
+        
+        await db_manager.initialize()
+        
+        data = await kaggle_collector.collect_injuries(sports=sports)
+        if data.success and data.data:
+            counts = await kaggle_collector.save_to_database(data.data)
+            result.records = counts.get("injuries", 0)
+            logger.info(f"[Kaggle Injuries] Saved {result.records} injuries")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        logger.error(f"[Kaggle Injuries] Import error: {e}")
+        import traceback
+        traceback.print_exc()
+        result.errors.append(str(e)[:100])
+    return result
+
+
 # =============================================================================
 # TENNIS ABSTRACT IMPORT FUNCTIONS (Collector 23)
 # =============================================================================
@@ -3655,6 +3697,7 @@ IMPORT_MAP = {
     "kaggle_ncaab": import_kaggle_ncaab,
     "kaggle_mma": import_kaggle_mma,
     "kaggle_tennis": import_kaggle_tennis,
+    "kaggle_injuries": import_kaggle_injuries,
     
     # Tennis Abstract (Collector 23)
     "tennis_abstract_atp": import_tennis_abstract_atp,

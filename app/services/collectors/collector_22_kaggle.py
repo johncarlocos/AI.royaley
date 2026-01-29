@@ -5,8 +5,8 @@ Phase 1: Data Collection Services
 Collector 22: Kaggle sports datasets for backtesting and model training.
 
 Downloads comprehensive historical sports data from Kaggle datasets:
-- NFL: Games, scores, betting data, player stats
-- NBA: Games, odds, player stats, betting data  
+- NFL: Games, scores, betting data, player stats, injuries
+- NBA: Games, odds, player stats, betting data, injuries
 - MLB: Game data, player stats
 - NHL: Game data, player stats
 - Soccer: Match results, betting odds
@@ -14,6 +14,12 @@ Downloads comprehensive historical sports data from Kaggle datasets:
 - College Basketball: Game stats
 - Tennis: Match results
 - UFC/MMA: Fight data, odds
+
+INJURY DATASETS (10+ years historical):
+- NBA: loganlauton/nba-injury-stats-1951-2023 (70+ years, ~50,000 records)
+- NBA: ghopkins/nba-injuries-2010-2018 (detailed, ~5,000 records)
+- NFL: thedevastator/nfl-injury-analysis-2012-2017 (~8,000 records)
+- NFL: rishidamarla/concussions-in-the-nfl-20122014 (~500 records)
 
 Data Source: Kaggle Datasets (https://www.kaggle.com/datasets)
 API Documentation: https://github.com/Kaggle/kaggle-api
@@ -32,6 +38,7 @@ Tables Filled:
 - player_stats - Player statistics
 - team_stats - Team statistics
 - seasons - Season definitions
+- injuries - Historical injury data (NEW)
 
 Usage:
     from app.services.collectors import kaggle_collector
@@ -41,6 +48,10 @@ Usage:
     
     # Collect specific sport
     result = await kaggle_collector.collect(sports=["nfl"])
+    
+    # Collect historical injuries (NEW)
+    result = await kaggle_collector.collect_injuries()
+    result = await kaggle_collector.collect_injuries(sports=["NBA"])
     
     # Save to database
     await kaggle_collector.save_to_database(result.data)
@@ -195,6 +206,44 @@ KAGGLE_DATASETS = {
         "description": "UFC/MMA fight data with odds",
         "files": [],
         "data_types": ["games", "players", "odds"],
+    },
+}
+
+# =============================================================================
+# KAGGLE INJURY DATASETS - Historical injury data (10+ years)
+# =============================================================================
+
+KAGGLE_INJURY_DATASETS = {
+    # NBA Injury Datasets
+    "nba_injuries_historical": {
+        "dataset": "loganlauton/nba-injury-stats-1951-2023",
+        "sport": "NBA",
+        "description": "NBA Injury Stats 1951-2023 (70+ years)",
+        "data_types": ["injuries"],
+        "expected_records": 50000,
+    },
+    "nba_injuries_detailed": {
+        "dataset": "ghopkins/nba-injuries-2010-2018",
+        "sport": "NBA",
+        "description": "NBA Injuries 2010-2020 with game context",
+        "data_types": ["injuries"],
+        "expected_records": 5000,
+    },
+    
+    # NFL Injury Datasets
+    "nfl_injuries_analysis": {
+        "dataset": "thedevastator/nfl-injury-analysis-2012-2017",
+        "sport": "NFL",
+        "description": "NFL Injury Analysis 2012-2017",
+        "data_types": ["injuries"],
+        "expected_records": 8000,
+    },
+    "nfl_concussions": {
+        "dataset": "rishidamarla/concussions-in-the-nfl-20122014",
+        "sport": "NFL",
+        "description": "NFL Concussions 2012-2014",
+        "data_types": ["injuries"],
+        "expected_records": 500,
     },
 }
 
@@ -407,6 +456,7 @@ class KaggleCollector(BaseCollector):
             "player_stats": [],
             "team_stats": [],
             "venues": [],
+            "injuries": [],
         }
         
         total_records = 0
@@ -500,6 +550,7 @@ class KaggleCollector(BaseCollector):
             "player_stats": [],
             "team_stats": [],
             "venues": [],
+            "injuries": [],
         }
         
         sport = config["sport"]
@@ -537,6 +588,13 @@ class KaggleCollector(BaseCollector):
             
         elif dataset_key == "ufc_data":
             result = self._parse_ufc_data(df, sport, min_year)
+        
+        # Injury datasets
+        elif dataset_key in ["nba_injuries_historical", "nba_injuries_detailed"]:
+            result["injuries"] = self._parse_nba_injuries(df, sport)
+            
+        elif dataset_key in ["nfl_injuries_analysis", "nfl_concussions"]:
+            result["injuries"] = self._parse_nfl_injuries(df, sport)
             
         else:
             # Generic parser
@@ -1492,6 +1550,249 @@ class KaggleCollector(BaseCollector):
             return int(-100 / (decimal_odds - 1))
     
     # =========================================================================
+    # INJURY PARSERS
+    # =========================================================================
+    
+    def _find_column(self, df: pd.DataFrame, possible_names: List[str]) -> Optional[str]:
+        """Find a column from a list of possible names (case-insensitive)."""
+        df_columns_lower = {col.lower(): col for col in df.columns}
+        for name in possible_names:
+            if name.lower() in df_columns_lower:
+                return df_columns_lower[name.lower()]
+        return None
+    
+    def _parse_nba_injuries(self, df: pd.DataFrame, sport: str) -> List[Dict[str, Any]]:
+        """
+        Parse NBA injury data from Kaggle datasets.
+        
+        Handles:
+        - loganlauton/nba-injury-stats-1951-2023
+        - ghopkins/nba-injuries-2010-2018
+        """
+        injuries = []
+        
+        logger.info(f"[Kaggle] Parsing NBA injuries from {len(df)} rows")
+        logger.debug(f"[Kaggle] Columns: {list(df.columns)}")
+        
+        # Column mappings for NBA injury datasets
+        player_cols = ['Player', 'player', 'PLAYER', 'player_name', 'Name', 'Relinquished', 'Acquired']
+        team_cols = ['Team', 'team', 'TEAM', 'team_name', 'Tm', 'Team_Name']
+        injury_cols = ['Injury', 'injury', 'INJURY', 'injury_type', 'Notes', 'Description', 'type']
+        status_cols = ['Status', 'status', 'STATUS', 'Designation', 'Category']
+        position_cols = ['Position', 'position', 'POS', 'Pos']
+        date_cols = ['Date', 'date', 'DATE', 'injury_date', 'Game_Date', 'date_injured']
+        season_cols = ['Season', 'season', 'SEASON', 'Year', 'year']
+        games_missed_cols = ['Games_Missed', 'games_missed', 'GM', 'G', 'Games']
+        
+        # Find actual columns
+        player_col = self._find_column(df, player_cols)
+        team_col = self._find_column(df, team_cols)
+        injury_col = self._find_column(df, injury_cols)
+        status_col = self._find_column(df, status_cols)
+        position_col = self._find_column(df, position_cols)
+        date_col = self._find_column(df, date_cols)
+        season_col = self._find_column(df, season_cols)
+        games_missed_col = self._find_column(df, games_missed_cols)
+        
+        if not player_col:
+            logger.warning(f"[Kaggle] No player column found for NBA injuries")
+            return []
+        
+        logger.info(f"[Kaggle] Found columns - Player: {player_col}, Team: {team_col}, Injury: {injury_col}")
+        
+        for idx, row in df.iterrows():
+            try:
+                player_name = str(row.get(player_col, '')).strip()
+                if not player_name or player_name.lower() in ['nan', 'none', '']:
+                    continue
+                
+                injury = {
+                    'player_name': player_name[:200],
+                    'team_name': None,
+                    'injury_type': None,
+                    'status': 'Historical',
+                    'position': None,
+                    'sport_code': sport,
+                    'source': 'kaggle_nba_injuries',
+                    'season': None,
+                    'games_missed': None,
+                }
+                
+                # Team
+                if team_col and pd.notna(row.get(team_col)):
+                    team_val = str(row[team_col]).strip()
+                    if team_val.lower() not in ['nan', 'none', '']:
+                        injury['team_name'] = team_val[:100]
+                
+                # Injury type
+                if injury_col and pd.notna(row.get(injury_col)):
+                    injury_val = str(row[injury_col]).strip()
+                    if injury_val.lower() not in ['nan', 'none', '']:
+                        injury['injury_type'] = injury_val[:200]
+                
+                # Status
+                if status_col and pd.notna(row.get(status_col)):
+                    status_val = str(row[status_col]).strip()
+                    if status_val.lower() not in ['nan', 'none', '']:
+                        injury['status'] = status_val[:50]
+                
+                # Position
+                if position_col and pd.notna(row.get(position_col)):
+                    pos_val = str(row[position_col]).strip()
+                    if pos_val.lower() not in ['nan', 'none', '']:
+                        injury['position'] = pos_val[:50]
+                
+                # Season
+                if season_col and pd.notna(row.get(season_col)):
+                    try:
+                        season_val = row[season_col]
+                        if isinstance(season_val, (int, float)):
+                            injury['season'] = str(int(season_val))
+                        else:
+                            injury['season'] = str(season_val)[:20]
+                    except:
+                        pass
+                
+                # Games missed
+                if games_missed_col and pd.notna(row.get(games_missed_col)):
+                    try:
+                        injury['games_missed'] = int(row[games_missed_col])
+                    except:
+                        pass
+                
+                # Injury date
+                if date_col and pd.notna(row.get(date_col)):
+                    try:
+                        injury['injury_date'] = pd.to_datetime(row[date_col]).date()
+                    except:
+                        pass
+                
+                injuries.append(injury)
+                
+            except Exception as e:
+                logger.debug(f"[Kaggle] Error parsing NBA injury row {idx}: {e}")
+                continue
+        
+        logger.info(f"[Kaggle] Parsed {len(injuries)} NBA injuries")
+        return injuries
+    
+    def _parse_nfl_injuries(self, df: pd.DataFrame, sport: str) -> List[Dict[str, Any]]:
+        """
+        Parse NFL injury data from Kaggle datasets.
+        
+        Handles:
+        - thedevastator/nfl-injury-analysis-2012-2017
+        - rishidamarla/concussions-in-the-nfl-20122014
+        """
+        injuries = []
+        
+        logger.info(f"[Kaggle] Parsing NFL injuries from {len(df)} rows")
+        logger.debug(f"[Kaggle] Columns: {list(df.columns)}")
+        
+        # Column mappings for NFL injury datasets
+        player_cols = ['Player', 'player', 'PLAYER', 'player_name', 'Name', 'Player Name']
+        team_cols = ['Team', 'team', 'TEAM', 'team_name', 'Team Name']
+        position_cols = ['Position', 'position', 'POS', 'Pos', 'Player Position']
+        injury_cols = ['Injury', 'injury', 'INJURY', 'injury_type', 'Body_Part', 'Injury Type', 'type', 'Injury Location']
+        status_cols = ['Status', 'status', 'STATUS', 'Game_Status', 'Designation', 'Injury Status']
+        season_cols = ['Season', 'season', 'Year', 'year', 'Season Year']
+        week_cols = ['Week', 'week', 'WEEK', 'Game Week']
+        games_missed_cols = ['Games_Missed', 'games_missed', 'Weeks Missed']
+        
+        # Find actual columns
+        player_col = self._find_column(df, player_cols)
+        team_col = self._find_column(df, team_cols)
+        position_col = self._find_column(df, position_cols)
+        injury_col = self._find_column(df, injury_cols)
+        status_col = self._find_column(df, status_cols)
+        season_col = self._find_column(df, season_cols)
+        week_col = self._find_column(df, week_cols)
+        games_missed_col = self._find_column(df, games_missed_cols)
+        
+        if not player_col:
+            logger.warning(f"[Kaggle] No player column found for NFL injuries")
+            return []
+        
+        logger.info(f"[Kaggle] Found columns - Player: {player_col}, Team: {team_col}, Injury: {injury_col}")
+        
+        for idx, row in df.iterrows():
+            try:
+                player_name = str(row.get(player_col, '')).strip()
+                if not player_name or player_name.lower() in ['nan', 'none', '']:
+                    continue
+                
+                injury = {
+                    'player_name': player_name[:200],
+                    'team_name': None,
+                    'injury_type': None,
+                    'status': 'Historical',
+                    'position': None,
+                    'sport_code': sport,
+                    'source': 'kaggle_nfl_injuries',
+                    'season': None,
+                    'week': None,
+                    'games_missed': None,
+                }
+                
+                # Team
+                if team_col and pd.notna(row.get(team_col)):
+                    team_val = str(row[team_col]).strip()
+                    if team_val.lower() not in ['nan', 'none', '']:
+                        injury['team_name'] = team_val[:100]
+                
+                # Position
+                if position_col and pd.notna(row.get(position_col)):
+                    pos_val = str(row[position_col]).strip()
+                    if pos_val.lower() not in ['nan', 'none', '']:
+                        injury['position'] = pos_val[:50]
+                
+                # Injury type
+                if injury_col and pd.notna(row.get(injury_col)):
+                    injury_val = str(row[injury_col]).strip()
+                    if injury_val.lower() not in ['nan', 'none', '']:
+                        injury['injury_type'] = injury_val[:200]
+                
+                # Status
+                if status_col and pd.notna(row.get(status_col)):
+                    status_val = str(row[status_col]).strip()
+                    if status_val.lower() not in ['nan', 'none', '']:
+                        injury['status'] = status_val[:50]
+                
+                # Season
+                if season_col and pd.notna(row.get(season_col)):
+                    try:
+                        season_val = row[season_col]
+                        if isinstance(season_val, (int, float)):
+                            injury['season'] = str(int(season_val))
+                        else:
+                            injury['season'] = str(season_val)[:20]
+                    except:
+                        pass
+                
+                # Week
+                if week_col and pd.notna(row.get(week_col)):
+                    try:
+                        injury['week'] = int(row[week_col])
+                    except:
+                        pass
+                
+                # Games missed
+                if games_missed_col and pd.notna(row.get(games_missed_col)):
+                    try:
+                        injury['games_missed'] = int(row[games_missed_col])
+                    except:
+                        pass
+                
+                injuries.append(injury)
+                
+            except Exception as e:
+                logger.debug(f"[Kaggle] Error parsing NFL injury row {idx}: {e}")
+                continue
+        
+        logger.info(f"[Kaggle] Parsed {len(injuries)} NFL injuries")
+        return injuries
+    
+    # =========================================================================
     # DATABASE SAVE METHODS
     # =========================================================================
     
@@ -1518,6 +1819,7 @@ class KaggleCollector(BaseCollector):
             "player_stats": 0,
             "team_stats": 0,
             "venues": 0,
+            "injuries": 0,
         }
         
         try:
@@ -1846,6 +2148,68 @@ class KaggleCollector(BaseCollector):
                         logger.debug(f"[Kaggle] Error saving team stat: {e}")
                         continue
                 
+                # 9. Create injuries
+                for injury_data in data.get("injuries", []):
+                    try:
+                        from app.models.injury_models import Injury
+                        
+                        player_name = injury_data.get("player_name", "")
+                        if not player_name:
+                            continue
+                        
+                        sport_code = injury_data.get("sport_code", "")
+                        
+                        # Find team if available
+                        team_id = None
+                        team_name = injury_data.get("team_name")
+                        if team_name and sport_code:
+                            team_key = (sport_code, team_name)
+                            team_id = team_cache.get(team_key)
+                            
+                            # Try partial match
+                            if not team_id:
+                                for (s, t), tid in team_cache.items():
+                                    if s == sport_code and (team_name.lower() in t.lower() or t.lower() in team_name.lower()):
+                                        team_id = tid
+                                        break
+                        
+                        # Create unique external_id for deduplication
+                        season = injury_data.get("season", "")
+                        injury_type = (injury_data.get("injury_type") or "")[:30]
+                        external_id = f"kg_{sport_code}_{player_name}_{season}_{injury_type}".replace(" ", "_")[:100]
+                        
+                        # Check if already exists
+                        existing = await session.execute(
+                            select(Injury).where(Injury.external_id == external_id)
+                        )
+                        if existing.scalar_one_or_none():
+                            continue
+                        
+                        injury = Injury(
+                            team_id=team_id,
+                            sport_code=sport_code,
+                            player_name=player_name[:200],
+                            position=injury_data.get("position", "")[:50] if injury_data.get("position") else None,
+                            injury_type=injury_data.get("injury_type", "")[:200] if injury_data.get("injury_type") else None,
+                            status=(injury_data.get("status") or "Historical")[:50],
+                            source=(injury_data.get("source") or "kaggle")[:50],
+                            external_id=external_id,
+                        )
+                        session.add(injury)
+                        counts["injuries"] += 1
+                        
+                        # Commit in batches to avoid memory issues
+                        if counts["injuries"] % 1000 == 0:
+                            await session.commit()
+                            logger.info(f"[Kaggle] Saved {counts['injuries']} injuries...")
+                        
+                    except ImportError:
+                        logger.warning("[Kaggle] Injury model not available, skipping injuries")
+                        break
+                    except Exception as e:
+                        logger.debug(f"[Kaggle] Error saving injury: {e}")
+                        continue
+                
                 await session.commit()
                 logger.info(f"[Kaggle] Database save complete: {counts}")
                 
@@ -1881,6 +2245,127 @@ class KaggleCollector(BaseCollector):
         """
         logger.info(f"[Kaggle] Collecting {years_back} years of {sport} data...")
         return await self.collect(sports=[sport], years_back=years_back, **kwargs)
+    
+    async def collect_injuries(
+        self,
+        sports: Optional[List[str]] = None,
+        force_download: bool = False,
+        **kwargs
+    ) -> CollectorResult:
+        """
+        Collect historical injury data from Kaggle datasets.
+        
+        This method specifically targets injury datasets:
+        - NBA: loganlauton/nba-injury-stats-1951-2023 (70+ years)
+        - NBA: ghopkins/nba-injuries-2010-2018 (detailed)
+        - NFL: thedevastator/nfl-injury-analysis-2012-2017
+        - NFL: rishidamarla/concussions-in-the-nfl-20122014
+        
+        Args:
+            sports: List of sports to collect (None = all: NBA, NFL)
+            force_download: Force re-download of datasets
+            
+        Returns:
+            CollectorResult with injury data
+            
+        Usage:
+            # Collect all injury data
+            result = await kaggle_collector.collect_injuries()
+            
+            # Collect NBA injuries only
+            result = await kaggle_collector.collect_injuries(sports=["NBA"])
+            
+            # Save to database
+            counts = await kaggle_collector.save_to_database(result.data)
+        """
+        if not self._load_kaggle_api():
+            return CollectorResult(
+                success=False,
+                error="Kaggle API not available. Install kaggle and configure credentials.",
+                records_count=0
+            )
+        
+        # Filter injury datasets by sport if specified
+        target_datasets = KAGGLE_INJURY_DATASETS
+        if sports:
+            sports_upper = [s.upper() for s in sports]
+            target_datasets = {
+                k: v for k, v in KAGGLE_INJURY_DATASETS.items()
+                if v["sport"] in sports_upper
+            }
+        
+        logger.info(f"[Kaggle] Collecting injury data from {len(target_datasets)} datasets...")
+        
+        all_data = {
+            "games": [],
+            "odds": [],
+            "teams": [],
+            "players": [],
+            "player_stats": [],
+            "team_stats": [],
+            "venues": [],
+            "injuries": [],
+        }
+        
+        total_records = 0
+        errors = []
+        
+        for dataset_key, config in target_datasets.items():
+            try:
+                logger.info(f"[Kaggle] Processing injury dataset: {dataset_key} ({config['sport']})")
+                
+                # Download dataset
+                dataset_dir = self._download_dataset(config["dataset"], force=force_download)
+                if not dataset_dir:
+                    errors.append(f"Failed to download {dataset_key}")
+                    continue
+                
+                # Find CSV files
+                csv_files = list(dataset_dir.glob("**/*.csv"))
+                if not csv_files:
+                    logger.warning(f"[Kaggle] No CSV files found in {dataset_key}")
+                    continue
+                
+                # Process each CSV file
+                for csv_file in csv_files:
+                    df = self._read_csv_safely(csv_file)
+                    if df is None or df.empty:
+                        continue
+                    
+                    # Parse injuries based on sport
+                    sport = config["sport"]
+                    if sport == "NBA":
+                        injuries = self._parse_nba_injuries(df, sport)
+                    elif sport == "NFL":
+                        injuries = self._parse_nfl_injuries(df, sport)
+                    else:
+                        continue
+                    
+                    all_data["injuries"].extend(injuries)
+                    total_records += len(injuries)
+                
+                logger.info(f"[Kaggle] Completed {dataset_key}: {len(all_data['injuries'])} total injuries")
+                
+                # Small delay between datasets
+                await asyncio.sleep(1.0)
+                
+            except Exception as e:
+                logger.error(f"[Kaggle] Error processing {dataset_key}: {e}")
+                errors.append(str(e))
+        
+        logger.info(f"[Kaggle] Injury collection complete: {total_records} total records")
+        
+        return CollectorResult(
+            success=total_records > 0,
+            data=all_data,
+            records_count=total_records,
+            error="; ".join(errors) if errors else None,
+            metadata={
+                "datasets_processed": len(target_datasets),
+                "sports": list(set(d["sport"] for d in target_datasets.values())),
+                "data_type": "injuries",
+            }
+        )
 
 
 # =============================================================================

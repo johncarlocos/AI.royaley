@@ -966,6 +966,167 @@ class ESPNCollector(BaseCollector):
             logger.error(f"[ESPN] Error collecting injuries: {e}")
         
         return {"injuries": injuries, "sport_code": sport_code}
+
+    async def collect_injuries_comprehensive(self, sport_code: str) -> Dict[str, Any]:
+        """
+        Collect comprehensive injury data from multiple ESPN sources.
+        
+        Sources:
+        1. Main injuries endpoint (/injuries)
+        2. Team roster pages (injured players have injury status)
+        3. Team depth charts (shows who's out)
+        
+        This gets MORE injury data than collect_injuries alone.
+        """
+        sport_path = ESPN_SPORT_PATHS.get(sport_code)
+        if not sport_path:
+            logger.warning(f"[ESPN] Sport not supported: {sport_code}")
+            return {"injuries": []}
+        
+        all_injuries = []
+        seen_players = set()  # Avoid duplicates by player_id
+        
+        # 1. Get injuries from main endpoint
+        logger.info(f"[ESPN] Collecting injuries for {sport_code} from main endpoint...")
+        main_injuries = await self.collect_injuries(sport_code)
+        for inj in main_injuries.get("injuries", []):
+            player_id = inj.get("player_id")
+            if player_id and player_id not in seen_players:
+                seen_players.add(player_id)
+                all_injuries.append(inj)
+        
+        logger.info(f"[ESPN] Main endpoint: {len(all_injuries)} injuries")
+        
+        # 2. Get injuries from team rosters
+        logger.info(f"[ESPN] Checking team rosters for additional injuries...")
+        try:
+            teams_endpoint = f"/{sport_path['sport']}/{sport_path['league']}/teams"
+            teams_data = await self.get(teams_endpoint, params={"limit": 500})
+            teams_list = teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+            
+            roster_injuries = 0
+            for team_item in teams_list:
+                team = team_item.get("team", {})
+                team_id = team.get("id")
+                team_name = team.get("displayName", "")
+                team_abbr = team.get("abbreviation", "")
+                
+                if not team_id:
+                    continue
+                
+                # Get roster with injury info
+                try:
+                    roster_endpoint = f"/{sport_path['sport']}/{sport_path['league']}/teams/{team_id}/roster"
+                    roster_data = await self.get(roster_endpoint)
+                    
+                    for group in roster_data.get("athletes", []):
+                        for athlete in group.get("items", []):
+                            # Check for injury status
+                            injuries_list = athlete.get("injuries", [])
+                            status = athlete.get("status", {})
+                            
+                            # Also check if player has injury indicators
+                            if injuries_list or status.get("type") == "injury":
+                                player_id = str(athlete.get("id", ""))
+                                
+                                if player_id and player_id not in seen_players:
+                                    seen_players.add(player_id)
+                                    
+                                    # Parse injury details
+                                    injury_info = injuries_list[0] if injuries_list else {}
+                                    
+                                    all_injuries.append({
+                                        "player_name": athlete.get("displayName", ""),
+                                        "player_id": player_id,
+                                        "position": athlete.get("position", {}).get("abbreviation", ""),
+                                        "team_name": team_name,
+                                        "team_abbr": team_abbr,
+                                        "injury_type": injury_info.get("type", {}).get("description", "") or status.get("name", ""),
+                                        "status": injury_info.get("status", "") or status.get("name", "Unknown"),
+                                        "details": injury_info.get("details", {}).get("detail", ""),
+                                        "return_date": injury_info.get("details", {}).get("returnDate"),
+                                        "is_starter": athlete.get("starter", False),
+                                        "short_comment": injury_info.get("shortComment", ""),
+                                    })
+                                    roster_injuries += 1
+                    
+                    await asyncio.sleep(0.05)  # Rate limiting
+                    
+                except Exception as e:
+                    logger.debug(f"[ESPN] Roster error for team {team_id}: {e}")
+                    continue
+            
+            logger.info(f"[ESPN] Roster scan: {roster_injuries} additional injuries")
+            
+        except Exception as e:
+            logger.warning(f"[ESPN] Error scanning rosters: {e}")
+        
+        # 3. Try news/transactions endpoint for recent injuries (if available)
+        try:
+            news_endpoint = f"/{sport_path['sport']}/{sport_path['league']}/news"
+            news_data = await self.get(news_endpoint, params={"limit": 100})
+            
+            # Parse news for injury-related headlines
+            # (This is supplementary - news doesn't always have structured injury data)
+            articles = news_data.get("articles", [])
+            injury_keywords = ["injury", "injured", "out", "questionable", "doubtful", "IR", "IL", "surgery"]
+            
+            injury_news_count = 0
+            for article in articles:
+                headline = article.get("headline", "").lower()
+                if any(kw in headline for kw in injury_keywords):
+                    injury_news_count += 1
+            
+            if injury_news_count > 0:
+                logger.info(f"[ESPN] Found {injury_news_count} injury-related news items")
+                
+        except Exception as e:
+            logger.debug(f"[ESPN] News endpoint not available: {e}")
+        
+        logger.info(f"[ESPN] Total comprehensive injuries for {sport_code}: {len(all_injuries)}")
+        
+        return {"injuries": all_injuries, "sport_code": sport_code}
+
+    async def collect_all_injuries(self) -> Dict[str, Any]:
+        """
+        Collect injuries for ALL 10 sports at once.
+        Uses comprehensive collection for maximum data.
+        
+        Returns combined injury data for all sports.
+        """
+        all_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL", "ATP", "WTA"]
+        all_injuries = []
+        sport_counts = {}
+        
+        logger.info(f"[ESPN] Collecting injuries for all {len(all_sports)} sports...")
+        
+        for sport_code in all_sports:
+            try:
+                # Use comprehensive collection
+                data = await self.collect_injuries_comprehensive(sport_code)
+                injuries = data.get("injuries", [])
+                
+                # Add sport_code to each injury
+                for inj in injuries:
+                    inj["sport_code"] = sport_code
+                
+                all_injuries.extend(injuries)
+                sport_counts[sport_code] = len(injuries)
+                
+                logger.info(f"[ESPN] {sport_code}: {len(injuries)} injuries")
+                
+            except Exception as e:
+                logger.error(f"[ESPN] Error collecting injuries for {sport_code}: {e}")
+                sport_counts[sport_code] = 0
+        
+        logger.info(f"[ESPN] Total injuries collected: {len(all_injuries)}")
+        logger.info(f"[ESPN] By sport: {sport_counts}")
+        
+        return {
+            "injuries": all_injuries,
+            "sport_counts": sport_counts,
+            "total": len(all_injuries)
+        }
     
     async def save_injuries_to_database(
         self, 

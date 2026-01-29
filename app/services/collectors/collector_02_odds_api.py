@@ -1932,19 +1932,20 @@ class OddsCollector(BaseCollector):
             sport_games_created = 0
             sport_api_calls = 0
             
+            # Accumulate movements for batch save
+            accumulated_movements = []
+            
             try:
-                # Process day by day for maximum movement capture
+                # Process day by day
                 for day_offset in range(0, days_back):
-                    # Calculate the target date
                     target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
                     
                     # Skip dates before OddsAPI historical data began (~June 2020)
                     if target_date < datetime(2020, 6, 1):
                         continue
                     
-                    # Get THREE snapshots per day for maximum movement detection:
-                    # Morning (10am), Afternoon (3pm), Evening (9pm)
-                    snapshot_times = ["10:00:00", "15:00:00", "21:00:00"]
+                    # Get TWO snapshots per day (morning/evening) - faster than 3
+                    snapshot_times = ["10:00:00", "21:00:00"]
                     day_snapshots = []
                     
                     for snap_time in snapshot_times:
@@ -1953,7 +1954,7 @@ class OddsCollector(BaseCollector):
                         try:
                             params = {
                                 "apiKey": self.api_key,
-                                "regions": "us,us2,eu,uk,au",  # Maximum regions for more books
+                                "regions": "us,us2,eu",  # Main regions
                                 "markets": "spreads,h2h,totals",
                                 "oddsFormat": "american",
                                 "date": date_str,
@@ -1968,38 +1969,38 @@ class OddsCollector(BaseCollector):
                                     "events": data.get("data", [])
                                 })
                             
-                            await asyncio.sleep(0.2)  # Rate limiting
+                            await asyncio.sleep(0.15)  # Rate limiting
                             
                         except Exception as e:
                             logger.debug(f"Snapshot error {date_str}: {e}")
                             continue
                     
-                    # Compare consecutive snapshots for movements
-                    for i in range(len(day_snapshots) - 1):
-                        snap1 = day_snapshots[i]
-                        snap2 = day_snapshots[i + 1]
-                        
+                    # Compare snapshots for movements
+                    if len(day_snapshots) >= 2:
                         movements = self._compare_snapshots_for_movements(
-                            snap1["events"], 
-                            snap2["events"], 
+                            day_snapshots[0]["events"], 
+                            day_snapshots[1]["events"], 
                             sport, 
-                            datetime.fromisoformat(snap1["time"].replace("Z", "+00:00")),
-                            datetime.fromisoformat(snap2["time"].replace("Z", "+00:00"))
+                            datetime.fromisoformat(day_snapshots[0]["time"].replace("Z", "+00:00")),
+                            datetime.fromisoformat(day_snapshots[1]["time"].replace("Z", "+00:00"))
                         )
-                        
-                        if movements:
+                        accumulated_movements.extend(movements)
+                    
+                    # Save batch every 7 days OR at end
+                    if (day_offset + 1) % 7 == 0 or day_offset == days_back - 1:
+                        if accumulated_movements:
                             from app.core.database import db_manager
                             await db_manager.initialize()
                             async with db_manager.session() as session:
                                 saved, created = await self._save_movements_with_games(
-                                    movements, session, sport
+                                    accumulated_movements, session, sport
                                 )
                                 sport_movements += saved
                                 sport_games_created += created
-                    
-                    # Progress update every 30 days
-                    if (day_offset + 1) % 30 == 0:
-                        console.print(f"    [dim]{sport}: {day_offset + 1}/{days_back} days, {sport_movements} movements[/dim]")
+                            accumulated_movements = []  # Reset
+                        
+                        # Progress update
+                        console.print(f"    [dim]{sport}: {day_offset + 1}/{days_back} days, {sport_movements} movements, {sport_api_calls} calls[/dim]")
                 
                 total_movements += sport_movements
                 total_games_created += sport_games_created
@@ -2131,96 +2132,137 @@ class OddsCollector(BaseCollector):
         sport_code: str,
     ) -> Tuple[int, int]:
         """
-        Save movements to database, auto-creating games if they don't exist.
+        Save movements to database with FAST batch processing.
+        
+        Optimized approach:
+        1. Pre-fetch/create all unique games at once
+        2. Bulk insert movements
+        3. Minimal database roundtrips
         
         Returns:
             Tuple of (movements_saved, games_created)
         """
+        if not movements:
+            return 0, 0
+        
         saved = 0
         games_created = 0
         
-        # Cache for games we've already looked up/created this batch
-        game_cache = {}
+        # Step 1: Get or create sport ONCE
+        sport = await self._get_or_create_sport(session, sport_code)
+        if not sport:
+            logger.warning(f"Could not get/create sport {sport_code}")
+            return 0, 0
+        
+        # Step 2: Collect unique events and teams
+        unique_events = {}  # event_id -> event_data
+        unique_teams = set()
         
         for mov in movements:
-            try:
-                home_team = mov.get("home_team")
-                away_team = mov.get("away_team")
-                commence_time = mov.get("commence_time")
-                event_id = mov.get("event_id")
-                
-                # Create cache key
-                cache_key = f"{event_id}:{home_team}:{away_team}"
-                
-                # Check cache first
-                if cache_key in game_cache:
-                    game_id = game_cache[cache_key]
-                else:
-                    # Try to find existing game
-                    game_id = await self._find_game_id(
-                        session, sport_code, home_team, away_team, commence_time
-                    )
-                    
-                    # If no game found, create one
-                    if not game_id:
-                        game = await self._create_game_from_odds_record(
-                            session,
-                            {
-                                "external_id": event_id,
-                                "home_team": home_team,
-                                "away_team": away_team,
-                                "commence_time": commence_time,
-                            },
-                            sport_code
-                        )
-                        if game:
-                            game_id = game.id
-                            games_created += 1
-                    
-                    # Cache the result
-                    game_cache[cache_key] = game_id
-                
-                if not game_id:
-                    continue
-                
-                # Map market to bet_type
-                market = mov.get("market")
-                bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
-                bet_type = bet_type_map.get(market, market)
-                
-                # Calculate movement value
-                line_change = mov.get("line_change")
-                if line_change is None and mov.get("odds_change"):
-                    line_change = mov.get("odds_change") / 10.0
-                
-                # Detect steam moves (rapid significant movement)
-                is_steam = False
-                if line_change and abs(line_change) >= 1.5:
-                    is_steam = True
-                
-                # Save movement
-                movement_record = OddsMovement(
-                    game_id=game_id,
-                    bet_type=bet_type,
-                    previous_line=mov.get("previous_line"),
-                    current_line=mov.get("current_line"),
-                    movement=line_change,
-                    is_steam=is_steam,
-                    is_reverse=False,
-                    detected_at=datetime.utcnow(),
-                )
-                session.add(movement_record)
-                saved += 1
-                
-                # Batch commit every 100 records
-                if saved % 100 == 0:
-                    await session.commit()
-                    
-            except Exception as e:
-                logger.debug(f"Error saving movement: {e}")
-                continue
+            event_id = mov.get("event_id")
+            if event_id not in unique_events:
+                unique_events[event_id] = {
+                    "external_id": event_id,
+                    "home_team": mov.get("home_team"),
+                    "away_team": mov.get("away_team"),
+                    "commence_time": mov.get("commence_time"),
+                }
+                unique_teams.add(mov.get("home_team"))
+                unique_teams.add(mov.get("away_team"))
+        
+        # Step 3: Batch create/fetch all teams at once
+        team_cache = {}
+        for team_name in unique_teams:
+            if team_name:
+                team = await self._get_or_create_team(session, sport.id, team_name)
+                if team:
+                    team_cache[team_name] = team.id
         
         await session.commit()
+        
+        # Step 4: Batch create/fetch all games at once
+        game_cache = {}  # event_id -> game_id
+        
+        for event_id, event_data in unique_events.items():
+            home_team = event_data.get("home_team")
+            away_team = event_data.get("away_team")
+            
+            home_team_id = team_cache.get(home_team)
+            away_team_id = team_cache.get(away_team)
+            
+            if not home_team_id or not away_team_id:
+                continue
+            
+            # Try to find existing game by external_id first (fastest)
+            from sqlalchemy import select
+            result = await session.execute(
+                select(Game.id).where(Game.external_id == event_id)
+            )
+            existing_game = result.scalar_one_or_none()
+            
+            if existing_game:
+                game_cache[event_id] = existing_game
+            else:
+                # Create new game
+                try:
+                    commence_time = event_data.get("commence_time")
+                    if isinstance(commence_time, str):
+                        from dateutil.parser import parse as parse_date
+                        commence_time = parse_date(commence_time).replace(tzinfo=None)
+                    
+                    game = Game(
+                        sport_id=sport.id,
+                        external_id=event_id,
+                        home_team_id=home_team_id,
+                        away_team_id=away_team_id,
+                        scheduled_at=commence_time,
+                        status=GameStatus.SCHEDULED,
+                    )
+                    session.add(game)
+                    await session.flush()
+                    game_cache[event_id] = game.id
+                    games_created += 1
+                except Exception as e:
+                    logger.debug(f"Error creating game {event_id}: {e}")
+                    continue
+        
+        await session.commit()
+        
+        # Step 5: Bulk insert movements
+        movement_records = []
+        for mov in movements:
+            event_id = mov.get("event_id")
+            game_id = game_cache.get(event_id)
+            
+            if not game_id:
+                continue
+            
+            market = mov.get("market")
+            bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
+            bet_type = bet_type_map.get(market, market)
+            
+            line_change = mov.get("line_change")
+            if line_change is None and mov.get("odds_change"):
+                line_change = mov.get("odds_change") / 10.0
+            
+            is_steam = bool(line_change and abs(line_change) >= 1.5)
+            
+            movement_records.append(OddsMovement(
+                game_id=game_id,
+                bet_type=bet_type,
+                previous_line=mov.get("previous_line"),
+                current_line=mov.get("current_line"),
+                movement=line_change,
+                is_steam=is_steam,
+                is_reverse=False,
+                detected_at=datetime.utcnow(),
+            ))
+        
+        # Bulk add all movements
+        session.add_all(movement_records)
+        await session.commit()
+        saved = len(movement_records)
+        
         return saved, games_created
 
     async def collect_movements_full_history(

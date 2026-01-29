@@ -129,3 +129,4 @@ webdriver-manager>=4.0.1
 aiofiles>=23.0.0
 sportsipy>=0.6.0
 nfl_data_py>=0.3.0
+kaggle>=1.5.16

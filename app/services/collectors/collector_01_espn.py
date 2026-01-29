@@ -984,15 +984,27 @@ class ESPNCollector(BaseCollector):
             return {"injuries": []}
         
         all_injuries = []
-        seen_players = set()  # Avoid duplicates by player_id
+        seen_keys = set()  # Avoid duplicates by player_id OR player_name+team
         
         # 1. Get injuries from main endpoint
         logger.info(f"[ESPN] Collecting injuries for {sport_code} from main endpoint...")
         main_injuries = await self.collect_injuries(sport_code)
         for inj in main_injuries.get("injuries", []):
+            # Create unique key: prefer player_id, fallback to name+team
             player_id = inj.get("player_id")
-            if player_id and player_id not in seen_players:
-                seen_players.add(player_id)
+            player_name = inj.get("player_name", "")
+            team_abbr = inj.get("team_abbr", "")
+            
+            if player_id:
+                key = f"id:{player_id}"
+            elif player_name:
+                key = f"name:{player_name}:{team_abbr}"
+            else:
+                # No identifier, skip
+                continue
+            
+            if key not in seen_keys:
+                seen_keys.add(key)
                 all_injuries.append(inj)
         
         logger.info(f"[ESPN] Main endpoint: {len(all_injuries)} injuries")
@@ -1028,15 +1040,24 @@ class ESPNCollector(BaseCollector):
                             # Also check if player has injury indicators
                             if injuries_list or status.get("type") == "injury":
                                 player_id = str(athlete.get("id", ""))
+                                player_name = athlete.get("displayName", "")
                                 
-                                if player_id and player_id not in seen_players:
-                                    seen_players.add(player_id)
+                                # Create unique key
+                                if player_id:
+                                    key = f"id:{player_id}"
+                                elif player_name:
+                                    key = f"name:{player_name}:{team_abbr}"
+                                else:
+                                    continue
+                                
+                                if key not in seen_keys:
+                                    seen_keys.add(key)
                                     
                                     # Parse injury details
                                     injury_info = injuries_list[0] if injuries_list else {}
                                     
                                     all_injuries.append({
-                                        "player_name": athlete.get("displayName", ""),
+                                        "player_name": player_name,
                                         "player_id": player_id,
                                         "position": athlete.get("position", {}).get("abbreviation", ""),
                                         "team_name": team_name,

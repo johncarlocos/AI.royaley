@@ -1897,8 +1897,25 @@ class KaggleCollector(BaseCollector):
                     
                     season_cache[(sport_code, year)] = season.id
                 
-                # 3. Create teams
+                # 3. Create teams AND load existing teams into cache
                 team_cache = {}
+                
+                # First, load ALL existing teams from database for injury matching
+                existing_teams_result = await session.execute(
+                    select(Team, Sport.code).join(Sport)
+                )
+                for team, sport_code in existing_teams_result:
+                    team_cache[(sport_code, team.name)] = team.id
+                    # Also add by abbreviation for better matching
+                    if team.abbreviation:
+                        team_cache[(sport_code, team.abbreviation)] = team.id
+                    # Also add by city + name pattern
+                    if team.city:
+                        team_cache[(sport_code, f"{team.city} {team.name}")] = team.id
+                
+                logger.info(f"[Kaggle] Loaded {len(team_cache)} existing team mappings")
+                
+                # Then process new teams from data
                 for team_data in data.get("teams", []):
                     try:
                         sport_code = team_data.get("sport")
@@ -2149,6 +2166,7 @@ class KaggleCollector(BaseCollector):
                         continue
                 
                 # 9. Create injuries
+                skipped_no_team = 0
                 for injury_data in data.get("injuries", []):
                     try:
                         from app.models.injury_models import Injury
@@ -2172,6 +2190,11 @@ class KaggleCollector(BaseCollector):
                                     if s == sport_code and (team_name.lower() in t.lower() or t.lower() in team_name.lower()):
                                         team_id = tid
                                         break
+                        
+                        # Skip injuries without team_id (database requires it)
+                        if not team_id:
+                            skipped_no_team += 1
+                            continue
                         
                         # Create unique external_id for deduplication
                         season = injury_data.get("season", "")
@@ -2209,6 +2232,9 @@ class KaggleCollector(BaseCollector):
                     except Exception as e:
                         logger.debug(f"[Kaggle] Error saving injury: {e}")
                         continue
+                
+                if skipped_no_team > 0:
+                    logger.info(f"[Kaggle] Skipped {skipped_no_team} injuries without matching team")
                 
                 await session.commit()
                 logger.info(f"[Kaggle] Database save complete: {counts}")

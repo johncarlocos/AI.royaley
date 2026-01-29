@@ -34,10 +34,10 @@ services:
       - RAPIDAPI_KEY=${RAPIDAPI_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - KAGGLE_API_TOKEN=${KAGGLE_API_TOKEN}
       - GPU_ENABLED=true
       - CUDA_VISIBLE_DEVICES=2
       - NVIDIA_VISIBLE_DEVICES=2
-      - KAGGLE_API_TOKEN=${KAGGLE_API_TOKEN}
     volumes:
       # NVMe 0 - Fast storage (active operations)
       - /nvme0n1-disk/royaley/models:/app/models

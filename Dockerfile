@@ -76,9 +76,9 @@ RUN pip install --no-cache-dir /wheels/* \
 # Copy application code
 COPY --chown=appuser:appgroup . .
 
-# Create necessary directories
-RUN mkdir -p /app/models /app/logs /app/data \
-    && chown -R appuser:appgroup /app
+# Create necessary directories (including kaggle config)
+RUN mkdir -p /app/models /app/logs /app/data /home/appuser/.config/kaggle \
+    && chown -R appuser:appgroup /app /home/appuser/.config
 
 # Switch to non-root user
 USER appuser
@@ -90,5 +90,5 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
 # Expose port
 EXPOSE 8000
 
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Run application with Kaggle setup inline (creates kaggle.json from env var at startup)
+CMD sh -c 'if [ -n "$KAGGLE_API_TOKEN" ]; then mkdir -p /home/appuser/.config/kaggle && echo "{\"username\":\"_\",\"key\":\"$KAGGLE_API_TOKEN\"}" > /home/appuser/.config/kaggle/kaggle.json && chmod 600 /home/appuser/.config/kaggle/kaggle.json; fi && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4'

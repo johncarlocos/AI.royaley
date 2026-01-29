@@ -538,6 +538,165 @@ async def import_odds_api_history(sports: List[str] = None, days: int = 30) -> I
     return result
 
 
+async def import_odds_api_full_history(years: int = 5) -> ImportResult:
+    """
+    Import COMPREHENSIVE historical odds from OddsAPI.
+    
+    IMPORTANT: OddsAPI historical data only goes back to 2020 (~5 years max).
+    10-year data is NOT available. Use years=5 for maximum data.
+    
+    This is the MAIN function for getting all historical odds from OddsAPI.
+    Includes all 10 sports (8 main + ATP/WTA tennis tournaments).
+    
+    $119/mo Plan: ~10,000 requests/month
+    - Samples every 3 days for 5 years = ~600 days × 8 sports = ~4,800 requests
+    - Plus tennis tournaments
+    
+    Usage:
+        python scripts/master_import.py --source odds_full_history --years 5
+        
+    Tables filled: odds, odds_movements
+    """
+    result = ImportResult(source="odds_full_history")
+    try:
+        from app.services.collectors import odds_collector
+        
+        console.print(f"\n[bold blue]{'='*70}[/bold blue]")
+        console.print(f"[bold]📊 COMPREHENSIVE ODDSAPI HISTORICAL DATA IMPORT[/bold]")
+        console.print(f"[bold blue]{'='*70}[/bold blue]")
+        console.print(f"[yellow]⚠️  NOTE: OddsAPI only has data back to 2020 (~5 years max)[/yellow]")
+        console.print(f"[yellow]   10-year historical odds data is NOT available from OddsAPI.[/yellow]")
+        console.print(f"[yellow]   For older data, use sport-specific sources (nflfastr, baseballr, etc.)[/yellow]")
+        console.print()
+        
+        # Limit to actual available data
+        years = min(years, 5)
+        
+        # Use comprehensive collection with tennis
+        data = await odds_collector.collect_full_historical(
+            sport_code=None,  # All sports
+            years_back=years,
+            sample_interval=3,  # Every 3 days to stay within API limits
+            include_tennis=True,
+        )
+        
+        if data.success:
+            result.records = data.records_count
+            result.success = True
+            
+            # Also collect movements
+            console.print(f"\n[cyan]📉 Now collecting line movements...[/cyan]")
+            movements = await odds_collector.collect_movements_historical(
+                sport_code=None,
+                days_back=min(years * 365, 180),  # Last 6 months of movements
+            )
+            if movements.success:
+                result.records += movements.records_count
+                console.print(f"[green]✅ {movements.records_count} movements collected[/green]")
+        else:
+            result.errors.append(data.error or "Collection failed")
+            
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        console.print(f"[red]❌ Error: {str(e)[:80]}[/red]")
+    return result
+
+
+async def import_odds_api_movements(days: int = 30) -> ImportResult:
+    """
+    Import line movements from OddsAPI.
+    
+    Line movements show how odds change over time, critical for:
+    - Sharp money detection
+    - Steam move identification
+    - Reverse line movement analysis
+    - CLV (Closing Line Value) calculation
+    
+    Usage:
+        python scripts/master_import.py --source odds_movements --days 30
+        
+    Tables filled: odds_movements
+    """
+    result = ImportResult(source="odds_movements")
+    try:
+        from app.services.collectors import odds_collector
+        
+        console.print(f"\n[bold]📉 COLLECTING LINE MOVEMENTS FROM ODDSAPI[/bold]")
+        console.print(f"Days back: {days}")
+        console.print()
+        
+        data = await odds_collector.collect_movements_historical(
+            sport_code=None,  # All sports
+            days_back=days,
+        )
+        
+        if data.success:
+            result.records = data.records_count
+            result.success = True
+            console.print(f"[green]✅ {result.records} movements saved[/green]")
+        else:
+            result.errors.append(data.error or "Collection failed")
+            
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
+async def import_odds_api_current(sports: List[str] = None) -> ImportResult:
+    """
+    Import current/live odds from OddsAPI.
+    
+    Gets real-time odds for all upcoming games across all sportsbooks.
+    Use this for daily odds collection.
+    
+    Usage:
+        python scripts/master_import.py --source odds_current
+        
+    Tables filled: odds
+    """
+    result = ImportResult(source="odds_current")
+    try:
+        from app.services.collectors import odds_collector
+        from app.core.database import db_manager
+        
+        # All 10 sports
+        all_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports_to_collect = sports if sports else all_sports
+        
+        await db_manager.initialize()
+        
+        console.print(f"[bold]🎲 COLLECTING CURRENT ODDS[/bold]")
+        
+        for sport in sports_to_collect:
+            try:
+                data = await odds_collector.collect(sport_code=sport)
+                if data.success and data.data:
+                    async with db_manager.session() as session:
+                        saved = await odds_collector.save_to_database(data.data, session)
+                        result.records += saved
+                        console.print(f"  [green]✅ {sport}: {saved} odds[/green]")
+            except Exception as e:
+                result.errors.append(f"{sport}: {str(e)[:30]}")
+        
+        # Also collect tennis
+        try:
+            tennis_data = await odds_collector.collect_tennis()
+            if tennis_data.success and tennis_data.data:
+                async with db_manager.session() as session:
+                    saved = await odds_collector.save_to_database(tennis_data.data, session)
+                    result.records += saved
+                    console.print(f"  [green]✅ Tennis: {saved} odds[/green]")
+        except Exception as e:
+            result.errors.append(f"Tennis: {str(e)[:30]}")
+        
+        result.success = result.records > 0
+        console.print(f"\n[bold green]Total: {result.records} odds records[/bold green]")
+        
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    return result
+
+
 async def import_weather(sports: List[str] = None, days: int = 7) -> ImportResult:
     """Import weather for upcoming outdoor games.
     
@@ -3820,6 +3979,9 @@ IMPORT_MAP = {
     "pinnacle_history": import_pinnacle_history,
     "espn_history": import_espn_history,
     "odds_api_history": import_odds_api_history,
+    "odds_full_history": import_odds_api_full_history,
+    "odds_movements": import_odds_api_movements,
+    "odds_current": import_odds_api_current,
     "sportsdb_history": import_sportsdb_history,
     "nflfastr_history": import_nflfastr_history,
     "cfbfastr_history": import_cfbfastr_history,
@@ -4000,6 +4162,12 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
                 result = await func(sports=sports, pages=pages)
             elif source in ["espn_history", "odds_api_history"]:
                 result = await func(sports=sports, days=days)
+            elif source == "odds_full_history":
+                result = await func(years=seasons)
+            elif source == "odds_movements":
+                result = await func(days=days)
+            elif source == "odds_current":
+                result = await func(sports=sports)
             elif source == "sportsdb_history":
                 result = await func(sports=sports, seasons=seasons)
             elif source in ["nflfastr_history", "cfbfastr_history", "baseballr_history", "hockeyr_history", "wehoop_history", "hoopr_history", "hoopr_nba", "hoopr_ncaab", "cfl_history", "cfl_rosters", "cfl_standings", "nhl_api_history"]:

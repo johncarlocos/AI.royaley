@@ -769,6 +769,378 @@ class OddsCollector(BaseCollector):
             error="; ".join(errors) if errors else None,
             metadata={"type": "historical_odds", "sports": sports, "days_back": days_back}
         )
+
+    async def collect_historical_comprehensive(
+        self,
+        sport_code: str = None,
+        years_back: int = 5,
+        save_to_db: bool = True,
+    ) -> CollectorResult:
+        """
+        Collect COMPREHENSIVE historical odds data from TheOddsAPI.
+        
+        Optimized for the $119/mo Mega plan (10,000 requests/month):
+        - Samples every 3rd day to stay within limits
+        - Tracks progress for resumability
+        - Saves to database incrementally
+        
+        For 5 years of data across 8 sports:
+        - 5 years = 1,825 days
+        - Sample every 3 days = ~608 days
+        - 8 sports × 608 = ~4,864 requests (within 10k limit)
+        
+        Args:
+            sport_code: Specific sport or None for all
+            years_back: Years of historical data (default 5, max ~7 for OddsAPI)
+            save_to_db: Save to database incrementally
+            
+        Returns:
+            CollectorResult with statistics
+        """
+        from datetime import datetime, timedelta
+        from rich.console import Console
+        from rich.progress import Progress, TaskID
+        
+        console = Console()
+        
+        # Sports to collect (exclude tennis - different endpoints)
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports = [sport_code.upper()] if sport_code else main_sports
+        sports = [s for s in sports if s in main_sports]
+        
+        markets = ["spreads", "h2h", "totals"]
+        
+        # Calculate date range
+        days_back = years_back * 365
+        sample_interval = 3  # Every 3rd day to save API calls
+        
+        total_records = 0
+        total_movements = 0
+        errors = []
+        
+        console.print(f"\n[bold blue]{'='*60}[/bold blue]")
+        console.print(f"[bold]📊 COMPREHENSIVE HISTORICAL ODDS COLLECTION[/bold]")
+        console.print(f"[bold blue]{'='*60}[/bold blue]")
+        console.print(f"Sports: {', '.join(sports)}")
+        console.print(f"Years back: {years_back} ({days_back} days)")
+        console.print(f"Sample interval: Every {sample_interval} days")
+        console.print(f"Estimated API calls: {len(sports) * (days_back // sample_interval)}")
+        console.print()
+        
+        for sport in sports:
+            api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
+            if not api_sport_key:
+                continue
+            
+            sport_records = 0
+            console.print(f"[cyan]📈 {sport}...[/cyan]")
+            
+            # Fetch in batches
+            for day_offset in range(0, days_back, sample_interval):
+                target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
+                date_str = target_date.strftime("%Y-%m-%dT12:00:00Z")
+                
+                try:
+                    params = {
+                        "apiKey": self.api_key,
+                        "regions": "us",
+                        "markets": ",".join(markets),
+                        "oddsFormat": "american",
+                        "date": date_str,
+                    }
+                    
+                    # Historical endpoint
+                    endpoint = f"/historical/sports/{api_sport_key}/odds"
+                    
+                    data = await self.get(endpoint, params=params)
+                    
+                    if data and isinstance(data, dict):
+                        events = data.get("data", [])
+                        timestamp = data.get("timestamp")
+                        
+                        batch_records = []
+                        for event in events:
+                            parsed = self._parse_historical_event(event, sport, timestamp)
+                            batch_records.extend(parsed)
+                        
+                        sport_records += len(batch_records)
+                        
+                        # Save incrementally if enabled
+                        if save_to_db and batch_records:
+                            from app.core.database import db_manager
+                            await db_manager.initialize()
+                            async with db_manager.session() as session:
+                                saved, _ = await self.save_historical_to_database(batch_records, session)
+                                total_records += saved
+                    
+                    # Progress every 30 days
+                    if day_offset % 90 == 0 and day_offset > 0:
+                        console.print(f"    {day_offset}/{days_back} days, {sport_records} records...")
+                    
+                    # Rate limiting - respect API limits
+                    await asyncio.sleep(0.3)
+                    
+                except Exception as e:
+                    if "401" in str(e) or "403" in str(e):
+                        errors.append(f"{sport}: API key issue - {str(e)[:30]}")
+                        console.print(f"  [red]❌ API key issue for {sport}[/red]")
+                        break
+                    # Continue on other errors
+                    continue
+            
+            console.print(f"  [green]✅ {sport}: {sport_records} odds records[/green]")
+        
+        console.print(f"\n[bold green]Total: {total_records} odds records saved[/bold green]")
+        
+        return CollectorResult(
+            success=total_records > 0,
+            data={"total_records": total_records},
+            records_count=total_records,
+            error="; ".join(errors) if errors else None,
+            metadata={"type": "historical_odds_comprehensive", "years_back": years_back}
+        )
+
+    async def collect_odds_movements(
+        self,
+        sport_code: str = None,
+        hours_back: int = 24,
+    ) -> CollectorResult:
+        """
+        Track line movements by comparing current odds to previous snapshots.
+        
+        Fills: odds_movements table
+        
+        Line movements are critical for:
+        - Sharp money detection
+        - Steam move identification
+        - Reverse line movement analysis
+        
+        Args:
+            sport_code: Specific sport or None for all
+            hours_back: How far back to look for movements (default 24)
+            
+        Returns:
+            CollectorResult with movement data
+        """
+        from datetime import datetime, timedelta
+        
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports = [sport_code.upper()] if sport_code else main_sports
+        
+        all_movements = []
+        errors = []
+        
+        logger.info(f"[OddsAPI] Collecting odds movements for {len(sports)} sports...")
+        
+        for sport in sports:
+            api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
+            if not api_sport_key:
+                continue
+            
+            try:
+                # Get current odds
+                params = {
+                    "apiKey": self.api_key,
+                    "regions": "us",
+                    "markets": "spreads,h2h,totals",
+                    "oddsFormat": "american",
+                }
+                
+                current_data = await self.get(f"/sports/{api_sport_key}/odds", params=params)
+                
+                if not current_data:
+                    continue
+                
+                # Get historical snapshot from X hours ago
+                past_time = datetime.utcnow() - timedelta(hours=hours_back)
+                past_date_str = past_time.strftime("%Y-%m-%dT%H:00:00Z")
+                
+                params["date"] = past_date_str
+                endpoint = f"/historical/sports/{api_sport_key}/odds"
+                
+                try:
+                    past_data = await self.get(endpoint, params=params)
+                    past_events = past_data.get("data", []) if past_data else []
+                except:
+                    past_events = []
+                
+                # Compare and detect movements
+                movements = self._detect_line_movements(
+                    current_data, past_events, sport, hours_back
+                )
+                all_movements.extend(movements)
+                
+                logger.info(f"[OddsAPI Movements] {sport}: {len(movements)} movements detected")
+                
+                await asyncio.sleep(0.3)
+                
+            except Exception as e:
+                errors.append(f"{sport}: {str(e)[:50]}")
+                logger.error(f"[OddsAPI Movements] Error for {sport}: {e}")
+        
+        return CollectorResult(
+            success=len(all_movements) > 0,
+            data=all_movements,
+            records_count=len(all_movements),
+            error="; ".join(errors) if errors else None,
+            metadata={"type": "odds_movements", "hours_back": hours_back}
+        )
+
+    def _detect_line_movements(
+        self,
+        current_events: List[Dict],
+        past_events: List[Dict],
+        sport_code: str,
+        hours_back: int,
+    ) -> List[Dict[str, Any]]:
+        """Detect line movements between two snapshots."""
+        movements = []
+        
+        # Index past events by event_id
+        past_by_id = {}
+        for event in past_events:
+            event_id = event.get("id")
+            if event_id:
+                past_by_id[event_id] = event
+        
+        for current_event in current_events:
+            event_id = current_event.get("id")
+            if not event_id or event_id not in past_by_id:
+                continue
+            
+            past_event = past_by_id[event_id]
+            home_team = current_event.get("home_team")
+            away_team = current_event.get("away_team")
+            commence_time = current_event.get("commence_time")
+            
+            # Index past bookmaker odds
+            past_odds = {}
+            for book in past_event.get("bookmakers", []):
+                book_key = book.get("key")
+                for market in book.get("markets", []):
+                    market_key = market.get("key")
+                    for outcome in market.get("outcomes", []):
+                        key = f"{book_key}:{market_key}:{outcome.get('name')}"
+                        past_odds[key] = {
+                            "price": outcome.get("price"),
+                            "point": outcome.get("point"),
+                        }
+            
+            # Compare current to past
+            for book in current_event.get("bookmakers", []):
+                book_key = book.get("key")
+                book_title = book.get("title")
+                
+                for market in book.get("markets", []):
+                    market_key = market.get("key")
+                    
+                    for outcome in market.get("outcomes", []):
+                        selection = outcome.get("name")
+                        current_price = outcome.get("price")
+                        current_point = outcome.get("point")
+                        
+                        key = f"{book_key}:{market_key}:{selection}"
+                        
+                        if key in past_odds:
+                            past_price = past_odds[key].get("price")
+                            past_point = past_odds[key].get("point")
+                            
+                            # Detect movement
+                            price_change = None
+                            line_change = None
+                            
+                            if past_price and current_price:
+                                price_change = current_price - past_price
+                            
+                            if past_point is not None and current_point is not None:
+                                line_change = current_point - past_point
+                            
+                            # Only record if there's actual movement
+                            if price_change or line_change:
+                                movements.append({
+                                    "sport_code": sport_code,
+                                    "event_id": event_id,
+                                    "home_team": home_team,
+                                    "away_team": away_team,
+                                    "commence_time": commence_time,
+                                    "sportsbook": book_key,
+                                    "sportsbook_title": book_title,
+                                    "market": market_key,
+                                    "selection": selection,
+                                    "previous_odds": past_price,
+                                    "current_odds": current_price,
+                                    "odds_change": price_change,
+                                    "previous_line": past_point,
+                                    "current_line": current_point,
+                                    "line_change": line_change,
+                                    "hours_elapsed": hours_back,
+                                    "detected_at": datetime.utcnow().isoformat(),
+                                })
+        
+        return movements
+
+    async def save_movements_to_database(
+        self,
+        movements_data: List[Dict[str, Any]],
+        session,
+    ) -> int:
+        """Save odds movements to database."""
+        from app.models.models import OddsMovement, Game, Sportsbook, Sport
+        
+        saved = 0
+        
+        for movement in movements_data:
+            try:
+                sport_code = movement.get("sport_code")
+                home_team = movement.get("home_team")
+                away_team = movement.get("away_team")
+                commence_time = movement.get("commence_time")
+                
+                # Find game
+                game_id = await self._find_game_id(
+                    session, sport_code, home_team, away_team, commence_time
+                )
+                
+                if not game_id:
+                    continue
+                
+                # Get or create sportsbook
+                sportsbook_key = movement.get("sportsbook")
+                sportsbook = await self._get_or_create_sportsbook(
+                    session, sportsbook_key, movement.get("sportsbook_title", sportsbook_key)
+                )
+                
+                # Map market to bet_type
+                market = movement.get("market")
+                bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
+                bet_type = bet_type_map.get(market, market)
+                
+                # Create movement record
+                odds_movement = OddsMovement(
+                    game_id=game_id,
+                    sportsbook_id=sportsbook.id,
+                    bet_type=bet_type,
+                    previous_line=movement.get("previous_line"),
+                    current_line=movement.get("current_line"),
+                    line_change=movement.get("line_change"),
+                    previous_odds=movement.get("previous_odds"),
+                    current_odds=movement.get("current_odds"),
+                    odds_change=movement.get("odds_change"),
+                    recorded_at=datetime.utcnow(),
+                )
+                session.add(odds_movement)
+                saved += 1
+                
+                if saved % 50 == 0:
+                    await session.commit()
+                    
+            except Exception as e:
+                logger.debug(f"Error saving movement: {e}")
+                continue
+        
+        await session.commit()
+        logger.info(f"[OddsAPI] Saved {saved} odds movements")
+        return saved
     
     async def _fetch_historical_odds(
         self,
@@ -1276,6 +1648,487 @@ class OddsCollector(BaseCollector):
         
         logger.info(f"[OddsAPI] Tracked {movements_saved} line movements")
         return movements_saved
+
+    # =========================================================================
+    # COMPREHENSIVE 5-YEAR HISTORICAL DATA COLLECTION
+    # =========================================================================
+    
+    async def collect_full_historical(
+        self,
+        sport_code: str = None,
+        years_back: int = 5,
+        sample_interval: int = 1,
+        include_tennis: bool = True,
+    ) -> CollectorResult:
+        """
+        Collect MAXIMUM historical odds data from TheOddsAPI.
+        
+        IMPORTANT: OddsAPI historical data only goes back to 2020 (~5 years max).
+        10-year historical data is NOT available from OddsAPI.
+        
+        $119/mo Mega Plan Strategy:
+        - 10,000 requests/month
+        - Each request costs 10 per region per market (3 markets = 30)
+        - Daily collection for 8 sports × 30 days = 240 requests/month
+        - For 5 years: sample every 3-7 days to stay within limits
+        
+        Args:
+            sport_code: Specific sport or None for all 10 sports
+            years_back: Years back (max 5, OddsAPI limit)
+            sample_interval: Days between samples (1=daily, 3=every 3rd day)
+            include_tennis: Include ATP/WTA tournaments
+            
+        Returns:
+            CollectorResult with comprehensive odds data
+        """
+        from datetime import datetime, timedelta
+        from rich.console import Console
+        
+        console = Console()
+        
+        # Limit to OddsAPI's available history
+        years_back = min(years_back, 5)
+        days_back = years_back * 365
+        
+        # Main sports
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        
+        if sport_code:
+            sports = [sport_code.upper()]
+        else:
+            sports = main_sports.copy()
+        
+        markets = ["spreads", "h2h", "totals"]
+        
+        total_odds = 0
+        total_movements = 0
+        all_errors = []
+        sport_stats = {}
+        
+        console.print(f"\n[bold blue]{'='*70}[/bold blue]")
+        console.print(f"[bold]📊 ODDSAPI COMPREHENSIVE HISTORICAL DATA COLLECTION[/bold]")
+        console.print(f"[bold blue]{'='*70}[/bold blue]")
+        console.print(f"[yellow]⚠️  NOTE: OddsAPI only has data back to 2020 (~5 years max)[/yellow]")
+        console.print(f"Sports: {', '.join(sports)}")
+        console.print(f"Years: {years_back} ({days_back} days)")
+        console.print(f"Sample interval: Every {sample_interval} day(s)")
+        console.print(f"Estimated API requests: ~{len(sports) * (days_back // sample_interval)}")
+        console.print()
+        
+        # Collect main sports
+        for sport in sports:
+            api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
+            if not api_sport_key:
+                console.print(f"  [yellow]⚠️ {sport}: No API key mapping[/yellow]")
+                continue
+            
+            console.print(f"[cyan]📈 {sport}...[/cyan]")
+            sport_odds = 0
+            sport_movements = 0
+            
+            try:
+                # Collect by season chunks for efficiency
+                for day_offset in range(0, days_back, sample_interval):
+                    target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
+                    date_str = target_date.strftime("%Y-%m-%dT12:00:00Z")
+                    
+                    try:
+                        params = {
+                            "apiKey": self.api_key,
+                            "regions": "us",
+                            "markets": ",".join(markets),
+                            "oddsFormat": "american",
+                            "date": date_str,
+                        }
+                        
+                        endpoint = f"/historical/sports/{api_sport_key}/odds"
+                        data = await self.get(endpoint, params=params)
+                        
+                        if data and isinstance(data, dict):
+                            events = data.get("data", [])
+                            timestamp = data.get("timestamp")
+                            
+                            for event in events:
+                                parsed = self._parse_historical_event(event, sport, timestamp)
+                                sport_odds += len(parsed)
+                                
+                                # Save to database
+                                from app.core.database import db_manager
+                                await db_manager.initialize()
+                                async with db_manager.session() as session:
+                                    saved, _ = await self.save_historical_to_database(parsed, session)
+                        
+                        # Progress update every 90 days
+                        if day_offset % 90 == 0 and day_offset > 0:
+                            console.print(f"    Progress: {day_offset}/{days_back} days, {sport_odds} odds...")
+                        
+                        # Rate limiting
+                        await asyncio.sleep(0.2)
+                        
+                    except Exception as e:
+                        if "401" in str(e) or "403" in str(e) or "429" in str(e):
+                            console.print(f"  [red]❌ API limit/auth error: {str(e)[:50]}[/red]")
+                            all_errors.append(f"{sport}: {str(e)[:50]}")
+                            break
+                        continue
+                
+                sport_stats[sport] = {"odds": sport_odds, "movements": sport_movements}
+                total_odds += sport_odds
+                console.print(f"  [green]✅ {sport}: {sport_odds:,} odds records[/green]")
+                
+            except Exception as e:
+                all_errors.append(f"{sport}: {str(e)[:50]}")
+                console.print(f"  [red]❌ {sport}: Error - {str(e)[:40]}[/red]")
+        
+        # Collect tennis tournaments if enabled
+        if include_tennis and not sport_code:
+            console.print(f"\n[cyan]🎾 Tennis Tournaments...[/cyan]")
+            tennis_odds = await self._collect_tennis_historical(years_back, sample_interval)
+            total_odds += tennis_odds
+            sport_stats["Tennis"] = {"odds": tennis_odds, "movements": 0}
+            console.print(f"  [green]✅ Tennis: {tennis_odds:,} odds records[/green]")
+        
+        # Summary
+        console.print(f"\n[bold blue]{'='*70}[/bold blue]")
+        console.print(f"[bold green]📊 COLLECTION COMPLETE[/bold green]")
+        console.print(f"[bold]Total Odds Records: {total_odds:,}[/bold]")
+        for sport, stats in sport_stats.items():
+            console.print(f"  {sport}: {stats['odds']:,} odds")
+        if all_errors:
+            console.print(f"[yellow]Errors: {len(all_errors)}[/yellow]")
+        console.print(f"[bold blue]{'='*70}[/bold blue]\n")
+        
+        return CollectorResult(
+            success=total_odds > 0,
+            data={"total_odds": total_odds, "by_sport": sport_stats},
+            records_count=total_odds,
+            error="; ".join(all_errors) if all_errors else None,
+            metadata={"type": "full_historical", "years_back": years_back}
+        )
+
+    async def _collect_tennis_historical(
+        self,
+        years_back: int = 5,
+        sample_interval: int = 7,
+    ) -> int:
+        """Collect historical tennis odds from major tournaments."""
+        from datetime import datetime, timedelta
+        
+        total_odds = 0
+        days_back = years_back * 365
+        
+        # Combine ATP and WTA tournaments
+        all_tournaments = []
+        for tour_list in ODDS_API_TENNIS_TOURNAMENTS.values():
+            all_tournaments.extend(tour_list)
+        
+        for tournament_key in all_tournaments:
+            try:
+                for day_offset in range(0, days_back, sample_interval):
+                    target_date = datetime.utcnow() - timedelta(days=day_offset + 1)
+                    date_str = target_date.strftime("%Y-%m-%dT12:00:00Z")
+                    
+                    params = {
+                        "apiKey": self.api_key,
+                        "regions": "us",
+                        "markets": "h2h",  # Tennis only has moneyline
+                        "oddsFormat": "american",
+                        "date": date_str,
+                    }
+                    
+                    endpoint = f"/historical/sports/{tournament_key}/odds"
+                    
+                    try:
+                        data = await self.get(endpoint, params=params)
+                        
+                        if data and isinstance(data, dict):
+                            events = data.get("data", [])
+                            timestamp = data.get("timestamp")
+                            
+                            sport_code = "ATP" if "atp" in tournament_key else "WTA"
+                            
+                            for event in events:
+                                parsed = self._parse_historical_event(event, sport_code, timestamp)
+                                total_odds += len(parsed)
+                                
+                                # Save to database
+                                from app.core.database import db_manager
+                                await db_manager.initialize()
+                                async with db_manager.session() as session:
+                                    await self.save_historical_to_database(parsed, session)
+                        
+                        await asyncio.sleep(0.2)
+                        
+                    except Exception as e:
+                        # Tournament might not have data for this date
+                        continue
+                        
+            except Exception as e:
+                logger.debug(f"Tennis tournament {tournament_key} error: {e}")
+                continue
+        
+        return total_odds
+
+    async def collect_movements_historical(
+        self,
+        sport_code: str = None,
+        days_back: int = 30,
+    ) -> CollectorResult:
+        """
+        Collect historical line movements by comparing snapshots.
+        
+        Line movements are detected by comparing odds snapshots 
+        at different times for the same events.
+        
+        Args:
+            sport_code: Specific sport or None for all
+            days_back: Days of history to analyze
+            
+        Returns:
+            CollectorResult with movement data
+        """
+        from datetime import datetime, timedelta
+        from rich.console import Console
+        
+        console = Console()
+        
+        main_sports = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "WNBA", "CFL"]
+        sports = [sport_code.upper()] if sport_code else main_sports
+        
+        total_movements = 0
+        all_errors = []
+        
+        console.print(f"\n[bold]📉 COLLECTING LINE MOVEMENTS[/bold]")
+        console.print(f"Sports: {', '.join(sports)}")
+        console.print(f"Days back: {days_back}")
+        console.print()
+        
+        for sport in sports:
+            api_sport_key = ODDS_API_SPORT_KEYS.get(sport)
+            if not api_sport_key:
+                continue
+            
+            console.print(f"[cyan]📈 {sport}...[/cyan]")
+            sport_movements = 0
+            
+            try:
+                for day_offset in range(0, days_back - 1):
+                    # Get two snapshots: current day and next day
+                    date1 = datetime.utcnow() - timedelta(days=day_offset + 2)
+                    date2 = datetime.utcnow() - timedelta(days=day_offset + 1)
+                    
+                    date1_str = date1.strftime("%Y-%m-%dT08:00:00Z")  # Morning
+                    date2_str = date2.strftime("%Y-%m-%dT20:00:00Z")  # Evening
+                    
+                    try:
+                        # Get morning snapshot
+                        params1 = {
+                            "apiKey": self.api_key,
+                            "regions": "us",
+                            "markets": "spreads,h2h,totals",
+                            "oddsFormat": "american",
+                            "date": date1_str,
+                        }
+                        data1 = await self.get(f"/historical/sports/{api_sport_key}/odds", params=params1)
+                        
+                        # Get evening snapshot
+                        params2 = {
+                            "apiKey": self.api_key,
+                            "regions": "us",
+                            "markets": "spreads,h2h,totals",
+                            "oddsFormat": "american",
+                            "date": date2_str,
+                        }
+                        data2 = await self.get(f"/historical/sports/{api_sport_key}/odds", params=params2)
+                        
+                        if data1 and data2:
+                            events1 = data1.get("data", [])
+                            events2 = data2.get("data", [])
+                            
+                            movements = self._compare_snapshots_for_movements(
+                                events1, events2, sport, date1, date2
+                            )
+                            
+                            if movements:
+                                # Save movements to database
+                                from app.core.database import db_manager
+                                await db_manager.initialize()
+                                async with db_manager.session() as session:
+                                    saved = await self._save_movements_batch(movements, session)
+                                    sport_movements += saved
+                        
+                        await asyncio.sleep(0.3)
+                        
+                    except Exception as e:
+                        continue
+                
+                total_movements += sport_movements
+                console.print(f"  [green]✅ {sport}: {sport_movements} movements[/green]")
+                
+            except Exception as e:
+                all_errors.append(f"{sport}: {str(e)[:50]}")
+                console.print(f"  [red]❌ {sport}: Error[/red]")
+        
+        console.print(f"\n[bold green]Total Movements: {total_movements}[/bold green]")
+        
+        return CollectorResult(
+            success=total_movements > 0,
+            data={"total_movements": total_movements},
+            records_count=total_movements,
+            error="; ".join(all_errors) if all_errors else None,
+            metadata={"type": "movements_historical", "days_back": days_back}
+        )
+
+    def _compare_snapshots_for_movements(
+        self,
+        events1: List[Dict],
+        events2: List[Dict],
+        sport_code: str,
+        date1: datetime,
+        date2: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Compare two snapshots and detect line movements."""
+        movements = []
+        
+        # Index events by ID
+        events1_by_id = {e.get("id"): e for e in events1}
+        
+        for event2 in events2:
+            event_id = event2.get("id")
+            if event_id not in events1_by_id:
+                continue
+            
+            event1 = events1_by_id[event_id]
+            home_team = event2.get("home_team")
+            away_team = event2.get("away_team")
+            commence_time = event2.get("commence_time")
+            
+            # Index bookmaker odds from event1
+            odds1_index = {}
+            for book in event1.get("bookmakers", []):
+                book_key = book.get("key")
+                for market in book.get("markets", []):
+                    market_key = market.get("key")
+                    for outcome in market.get("outcomes", []):
+                        key = f"{book_key}:{market_key}:{outcome.get('name')}"
+                        odds1_index[key] = {
+                            "price": outcome.get("price"),
+                            "point": outcome.get("point"),
+                        }
+            
+            # Compare with event2
+            for book in event2.get("bookmakers", []):
+                book_key = book.get("key")
+                book_title = book.get("title")
+                
+                for market in book.get("markets", []):
+                    market_key = market.get("key")
+                    
+                    for outcome in market.get("outcomes", []):
+                        selection = outcome.get("name")
+                        current_price = outcome.get("price")
+                        current_point = outcome.get("point")
+                        
+                        key = f"{book_key}:{market_key}:{selection}"
+                        
+                        if key in odds1_index:
+                            prev = odds1_index[key]
+                            prev_price = prev.get("price")
+                            prev_point = prev.get("point")
+                            
+                            # Calculate changes
+                            price_change = None
+                            line_change = None
+                            
+                            if prev_price and current_price:
+                                price_change = current_price - prev_price
+                            
+                            if prev_point is not None and current_point is not None:
+                                line_change = current_point - prev_point
+                            
+                            # Record significant movements
+                            if (price_change and abs(price_change) >= 5) or \
+                               (line_change and abs(line_change) >= 0.5):
+                                movements.append({
+                                    "sport_code": sport_code,
+                                    "event_id": event_id,
+                                    "home_team": home_team,
+                                    "away_team": away_team,
+                                    "commence_time": commence_time,
+                                    "sportsbook": book_key,
+                                    "sportsbook_title": book_title,
+                                    "market": market_key,
+                                    "selection": selection,
+                                    "previous_odds": prev_price,
+                                    "current_odds": current_price,
+                                    "odds_change": price_change,
+                                    "previous_line": prev_point,
+                                    "current_line": current_point,
+                                    "line_change": line_change,
+                                    "snapshot_time_1": date1.isoformat(),
+                                    "snapshot_time_2": date2.isoformat(),
+                                })
+        
+        return movements
+
+    async def _save_movements_batch(
+        self,
+        movements: List[Dict[str, Any]],
+        session,
+    ) -> int:
+        """Save a batch of movements to database."""
+        saved = 0
+        
+        for mov in movements:
+            try:
+                sport_code = mov.get("sport_code")
+                home_team = mov.get("home_team")
+                away_team = mov.get("away_team")
+                commence_time = mov.get("commence_time")
+                
+                # Find game
+                game_id = await self._find_game_id(
+                    session, sport_code, home_team, away_team, commence_time
+                )
+                
+                if not game_id:
+                    continue
+                
+                # Get sportsbook
+                sportsbook_key = mov.get("sportsbook")
+                sportsbook = await self._get_or_create_sportsbook(
+                    session, sportsbook_key, mov.get("sportsbook_title", sportsbook_key)
+                )
+                
+                # Map market
+                market = mov.get("market")
+                bet_type_map = {"h2h": "moneyline", "spreads": "spread", "totals": "total"}
+                bet_type = bet_type_map.get(market, market)
+                
+                movement_record = OddsMovement(
+                    game_id=game_id,
+                    sportsbook_id=sportsbook.id,
+                    bet_type=bet_type,
+                    previous_line=mov.get("previous_line"),
+                    current_line=mov.get("current_line"),
+                    movement=mov.get("line_change"),
+                    previous_odds=mov.get("previous_odds"),
+                    current_odds=mov.get("current_odds"),
+                    odds_change=mov.get("odds_change"),
+                    recorded_at=datetime.utcnow(),
+                )
+                session.add(movement_record)
+                saved += 1
+                
+                if saved % 50 == 0:
+                    await session.commit()
+                    
+            except Exception as e:
+                logger.debug(f"Error saving movement: {e}")
+                continue
+        
+        await session.commit()
+        return saved
 
 
 # Create and register collector instance

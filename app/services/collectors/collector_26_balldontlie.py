@@ -86,8 +86,6 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
-        "odds_uses_dates": False,  # NFL uses season+week, NOT dates[]!
-        "odds_requires_week": True,
         "standings_requires_season": True,
     },
     "MLB": {
@@ -163,8 +161,6 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
-        "odds_uses_dates": False,  # NCAAF uses season+week like NFL
-        "odds_requires_week": True,
         "standings_requires_season": True,
     },
     "NCAAB": {
@@ -1271,9 +1267,7 @@ class BallDontLieCollectorV2(BaseCollector):
     ) -> List[Dict]:
         """Collect odds for a sport.
         
-        Different sports have different parameter requirements:
-        - NFL/NCAAF: requires (season AND week) OR game_ids[]
-        - Other sports: requires dates[] OR game_ids[]
+        The unified /v2/odds endpoint uses dates[] parameter for all sports.
         """
         config = SPORT_CONFIG.get(sport_code)
         if not config:
@@ -1285,49 +1279,31 @@ class BallDontLieCollectorV2(BaseCollector):
         
         params = {}
         
-        # Check if this sport requires season+week (NFL, NCAAF)
-        requires_week = config.get("odds_requires_week", False)
-        uses_dates = config.get("odds_uses_dates", True)
-        
-        if requires_week:
-            # NFL/NCAAF: use season + week
-            if game_ids:
-                for gid in game_ids[:10]:
-                    params["game_ids[]"] = gid
-            else:
-                # Default to current season and recent weeks
-                current_year = datetime.now().year
-                s = season or current_year
-                # Try multiple weeks (current and recent)
-                weeks_to_try = [week] if week else list(range(1, 19))  # NFL has 18 weeks
-                
-                all_odds = []
-                for w in weeks_to_try[-4:]:  # Last 4 weeks
-                    params = {"season": s, "week": w}
-                    console.print(f"[bold blue]💰 Collecting {sport_code} odds (season={s}, week={w})...[/bold blue]")
-                    try:
-                        odds = await self._paginated_request(endpoint, sport_code, params, max_pages=2)
-                        all_odds.extend(odds)
-                        if odds:
-                            console.print(f"[green]✅ {sport_code} week {w}: {len(odds)} odds[/green]")
-                    except Exception as e:
-                        logger.warning(f"[BallDontLie] No odds for {sport_code} week {w}: {e}")
-                
-                console.print(f"[green]✅ {sport_code}: {len(all_odds)} total odds records collected[/green]")
-                return all_odds
+        # Unified /v2/odds endpoint uses dates[] for ALL sports
+        if game_ids:
+            for gid in game_ids[:10]:
+                params["game_ids[]"] = gid
+        elif dates:
+            for d in dates[:10]:
+                params["dates[]"] = d
         else:
-            # Other sports: use dates[] or game_ids[]
-            if game_ids:
-                for gid in game_ids[:10]:
-                    params["game_ids[]"] = gid
-            elif dates:
-                for d in dates[:10]:
-                    params["dates[]"] = d
-            else:
-                # Default to recent dates
-                today = datetime.now()
-                recent_date = (today - timedelta(days=3)).strftime("%Y-%m-%d")
-                params["dates[]"] = recent_date
+            # Default to recent dates (last 7 days)
+            today = datetime.now()
+            all_odds = []
+            for i in range(7):
+                date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                params = {"dates[]": date}
+                console.print(f"[bold blue]💰 Collecting {sport_code} odds ({date})...[/bold blue]")
+                try:
+                    odds = await self._paginated_request(endpoint, sport_code, params, max_pages=2)
+                    if odds:
+                        all_odds.extend(odds)
+                        console.print(f"[green]✅ {sport_code} {date}: {len(odds)} odds[/green]")
+                except Exception as e:
+                    logger.warning(f"[BallDontLie] No odds for {sport_code} {date}: {e}")
+            
+            console.print(f"[green]✅ {sport_code}: {len(all_odds)} total odds records collected[/green]")
+            return all_odds
         
         console.print(f"[bold blue]💰 Collecting {sport_code} odds...[/bold blue]")
         odds = await self._paginated_request(endpoint, sport_code, params, max_pages=max_pages)

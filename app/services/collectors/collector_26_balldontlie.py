@@ -249,6 +249,24 @@ class BallDontLieCollectorV2(BaseCollector):
             await self.client.aclose()
             self.client = None
     
+    async def validate(self, data: Any) -> bool:
+        """
+        Validate collected data.
+        
+        Args:
+            data: Data to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        if data is None:
+            return False
+        if isinstance(data, list):
+            return len(data) > 0
+        if isinstance(data, dict):
+            return bool(data)
+        return True
+    
     async def _api_request(
         self, 
         endpoint: str, 

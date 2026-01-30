@@ -34,7 +34,7 @@ from app.models.models import (
 )
 from app.models.injury_models import Injury
 from app.services.collectors.base_collector import (
-    BaseCollector, CollectorResult, register_collector
+    BaseCollector, CollectorResult
 )
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,6 @@ STAT_FIELDS = {
 # BALLDONTLIE COLLECTOR V2
 # =============================================================================
 
-@register_collector("balldontlie_v2")
 class BallDontLieCollectorV2(BaseCollector):
     """
     BallDontLie API Collector V2 - Fixed version.

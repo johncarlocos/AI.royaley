@@ -620,7 +620,7 @@ class BallDontLieCollectorV2(BaseCollector):
         sport_code: str, 
         session: AsyncSession
     ) -> Dict[str, int]:
-        """Create pseudo-teams for tennis players."""
+        """Create pseudo-teams for tennis players - one at a time to handle duplicates."""
         if sport_code not in ["ATP", "WTA"]:
             return {"saved": 0}
         
@@ -638,7 +638,7 @@ class BallDontLieCollectorV2(BaseCollector):
                 is_active=True
             )
             session.add(sport)
-            await session.flush()
+            await session.commit()
         
         saved = 0
         skipped = 0
@@ -682,14 +682,15 @@ class BallDontLieCollectorV2(BaseCollector):
                         is_active=True,
                     )
                     session.add(team)
+                    await session.commit()  # Commit each one individually
                     saved += 1
                 else:
                     skipped += 1
             except Exception as e:
+                await session.rollback()  # Rollback on error
                 logger.warning(f"[BallDontLie] Error creating pseudo-team: {e}")
                 skipped += 1
         
-        await session.commit()
         console.print(f"[green]💾 {sport_code} Pseudo-Teams: {saved} created, {skipped} skipped[/green]")
         return {"saved": saved, "skipped": skipped}
 

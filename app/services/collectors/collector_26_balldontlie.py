@@ -17,6 +17,7 @@ FIXES in V2:
 """
 
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -27,7 +28,6 @@ from rich.console import Console
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
 from app.models.models import (
     Game, Team, Player, Sport, PlayerStats, TeamStats, 
     Injury, Odds, Sportsbook, GameStatus
@@ -36,7 +36,7 @@ from app.services.collectors.base_collector import (
     BaseCollector, CollectorResult, register_collector
 )
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 console = Console()
 
 # =============================================================================

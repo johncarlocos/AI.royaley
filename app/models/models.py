@@ -226,6 +226,7 @@ class Team(Base):
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     conference: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     division: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    venue_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id"), nullable=True)
     elo_rating: Mapped[float] = mapped_column(Float, default=1500.0)
     logo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -233,6 +234,7 @@ class Team(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     
     sport: Mapped["Sport"] = relationship(back_populates="teams")
+    venue: Mapped[Optional["Venue"]] = relationship(back_populates="teams")
     players: Mapped[List["Player"]] = relationship(back_populates="team")
     home_games: Mapped[List["Game"]] = relationship(back_populates="home_team", foreign_keys="Game.home_team_id")
     away_games: Mapped[List["Game"]] = relationship(back_populates="away_team", foreign_keys="Game.away_team_id")
@@ -286,6 +288,7 @@ class Venue(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     games: Mapped[List["Game"]] = relationship(back_populates="venue")
+    teams: Mapped[List["Team"]] = relationship(back_populates="venue")
 
 
 class Season(Base):

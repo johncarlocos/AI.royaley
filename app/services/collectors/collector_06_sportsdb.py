@@ -1102,9 +1102,9 @@ class SportsDBCollector(BaseCollector):
     async def link_venues_to_teams(self, session: AsyncSession) -> int:
         """Link venues to teams based on team name matching."""
         try:
-            from app.models import Venue
+            from app.models import Venue, Team
         except ImportError:
-            from app.models.models import Venue
+            from app.models.models import Venue, Team
         
         linked = 0
         try:
@@ -1149,9 +1149,9 @@ class SportsDBCollector(BaseCollector):
     async def link_venues_to_games(self, session: AsyncSession) -> int:
         """Link venues to games based on home team's venue."""
         try:
-            from app.models import Venue
+            from app.models import Venue, Team
         except ImportError:
-            from app.models.models import Venue
+            from app.models.models import Venue, Team
         
         linked = 0
         try:

@@ -29,6 +29,7 @@ IMPLEMENTED COLLECTORS:
     collector_23_tennis_abstract.py - Tennis Abstract (ATP/WTA matches, H2H, surface splits from Jeff Sackmann GitHub) - FREE
     collector_24_polymarket.py    - Polymarket (Prediction markets for crowd wisdom analysis) - FREE
     collector_25_kalshi.py        - Kalshi (CFTC-regulated prediction markets for sports events) - FREE
+    collector_26_balldontlie.py   - BallDontLie (9 sports: NBA,NFL,MLB,NHL,WNBA,NCAAF,NCAAB,ATP,WTA) - $299/mo
 """
 
 from app.services.collectors.base_collector import (
@@ -64,6 +65,7 @@ from app.services.collectors.collector_22_kaggle import KaggleCollector, kaggle_
 from app.services.collectors.collector_23_tennis_abstract import TennisAbstractCollector, tennis_abstract_collector
 from app.services.collectors.collector_24_polymarket import PolymarketCollector
 from app.services.collectors.collector_25_kalshi import KalshiCollector
+from app.services.collectors.collector_26_balldontlie import BallDontLieCollector, balldontlie_collector
 
 __all__ = [
     "BaseCollector",
@@ -119,4 +121,6 @@ __all__ = [
     "tennis_abstract_collector",
     "PolymarketCollector",
     "KalshiCollector",
+    "BallDontLieCollector",
+    "balldontlie_collector",
 ]

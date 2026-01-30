@@ -4193,6 +4193,304 @@ async def import_full_10_year(years_back: int = 10) -> ImportResult:
 
 
 # =============================================================================
+# BALLDONTLIE IMPORT FUNCTIONS (Collector 26)
+# =============================================================================
+
+async def import_balldontlie(sports: List[str] = None) -> ImportResult:
+    """
+    Import data from BallDontLie API.
+    
+    BallDontLie provides comprehensive multi-sport data for 9 leagues:
+    - NBA (National Basketball Association)
+    - NFL (National Football League)
+    - MLB (Major League Baseball)
+    - NHL (National Hockey League)
+    - WNBA (Women's National Basketball Association)
+    - NCAAF (NCAA Football)
+    - NCAAB (NCAA Basketball)
+    - ATP (Men's Tennis)
+    - WTA (Women's Tennis)
+    
+    Data collected:
+    - Teams (sports, teams tables)
+    - Players (players table)
+    - Games (games table)
+    - Player Stats (player_stats table)
+    - Injuries (injuries table)
+    - Standings (team_stats table)
+    
+    Args:
+        sports: Optional list of sports to import (default: all 9)
+        
+    Returns:
+        ImportResult with collection statistics
+        
+    API Cost: $299/month (All-Access plan)
+    """
+    result = ImportResult(source="balldontlie")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        sports_to_import = sports or ["NBA", "NFL", "MLB", "NHL", "WNBA", "NCAAF", "NCAAB", "ATP", "WTA"]
+        
+        console.print(f"\n[bold blue]{'='*50}[/bold blue]")
+        console.print(f"[bold]🏀 BALLDONTLIE IMPORT[/bold]")
+        console.print(f"[bold blue]{'='*50}[/bold blue]")
+        console.print(f"Sports: {', '.join(sports_to_import)}")
+        
+        collector_result = await balldontlie_collector.collect(
+            sports=sports_to_import,
+            seasons=1,  # Current season only
+            collect_teams=True,
+            collect_players=True,
+            collect_games=True,
+            collect_stats=False,  # Skip stats for quick import
+            collect_injuries=True,
+            collect_standings=True,
+        )
+        
+        result.records = collector_result.records_count
+        result.success = collector_result.success
+        
+        if collector_result.error:
+            result.errors.append(collector_result.error)
+        
+        console.print(f"  [green]✓[/green] BallDontLie: {result.records} records imported")
+        
+    except Exception as e:
+        logger.error(f"[BallDontLie] Import error: {e}")
+        result.errors.append(str(e)[:100])
+        console.print(f"  [red]✗[/red] BallDontLie: {e}")
+    
+    return result
+
+
+async def import_balldontlie_full(sports: List[str] = None, years_back: int = 10) -> ImportResult:
+    """
+    Import full 10-year historical data from BallDontLie.
+    
+    Comprehensive import of all available data for 9 sports.
+    
+    Args:
+        sports: Optional list of sports (default: all 9)
+        years_back: Number of years to import (default: 10)
+        
+    Returns:
+        ImportResult with collection statistics
+    """
+    result = ImportResult(source="balldontlie_full")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        sports_to_import = sports or ["NBA", "NFL", "MLB", "NHL", "WNBA", "NCAAF", "NCAAB", "ATP", "WTA"]
+        
+        console.print(f"\n[bold magenta]{'='*60}[/bold magenta]")
+        console.print(f"[bold]🏆 BALLDONTLIE FULL HISTORICAL IMPORT ({years_back} YEARS)[/bold]")
+        console.print(f"[bold magenta]{'='*60}[/bold magenta]")
+        console.print(f"Sports: {', '.join(sports_to_import)}")
+        console.print(f"Years: {years_back}")
+        
+        totals = await balldontlie_collector.collect_full_history(
+            sports=sports_to_import,
+            years=years_back,
+        )
+        
+        result.records = totals.get("total", 0)
+        result.success = result.records > 0
+        
+        console.print(f"\n  [green]✓[/green] BallDontLie Full: {result.records:,} total records")
+        console.print(f"    - Teams: {totals.get('teams', 0):,}")
+        console.print(f"    - Players: {totals.get('players', 0):,}")
+        console.print(f"    - Games: {totals.get('games', 0):,}")
+        console.print(f"    - Player Stats: {totals.get('player_stats', 0):,}")
+        console.print(f"    - Team Stats: {totals.get('team_stats', 0):,}")
+        console.print(f"    - Injuries: {totals.get('injuries', 0):,}")
+        
+    except Exception as e:
+        logger.error(f"[BallDontLie Full] Import error: {e}")
+        result.errors.append(str(e)[:100])
+        console.print(f"  [red]✗[/red] BallDontLie Full: {e}")
+    
+    return result
+
+
+async def import_balldontlie_history(years_back: int = 10) -> ImportResult:
+    """
+    Import historical data from BallDontLie for all sports.
+    
+    Alias for import_balldontlie_full for consistency with other collectors.
+    """
+    return await import_balldontlie_full(years_back=years_back)
+
+
+async def import_balldontlie_sport(sport_code: str, years_back: int = 10) -> ImportResult:
+    """
+    Import full historical data for a single sport from BallDontLie.
+    
+    Args:
+        sport_code: Sport code (NBA, NFL, MLB, NHL, WNBA, NCAAF, NCAAB, ATP, WTA)
+        years_back: Number of years to import (default: 10)
+        
+    Returns:
+        ImportResult with collection statistics
+    """
+    result = ImportResult(source=f"balldontlie_{sport_code.lower()}")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        console.print(f"\n[bold cyan]BallDontLie {sport_code} Historical Import[/bold cyan]")
+        
+        collector_result = await balldontlie_collector.collect(
+            sport_code=sport_code,
+            seasons=years_back,
+            collect_teams=True,
+            collect_players=True,
+            collect_games=True,
+            collect_stats=True,
+            collect_injuries=True,
+            collect_standings=True,
+        )
+        
+        result.records = collector_result.records_count
+        result.success = collector_result.success
+        
+        if collector_result.error:
+            result.errors.append(collector_result.error)
+            
+        console.print(f"  [green]✓[/green] {sport_code}: {result.records:,} records")
+        
+    except Exception as e:
+        logger.error(f"[BallDontLie {sport_code}] Import error: {e}")
+        result.errors.append(str(e)[:100])
+        console.print(f"  [red]✗[/red] {sport_code}: {e}")
+    
+    return result
+
+
+async def import_balldontlie_nba(years_back: int = 10) -> ImportResult:
+    """Import NBA data from BallDontLie."""
+    return await import_balldontlie_sport("NBA", years_back)
+
+
+async def import_balldontlie_nfl(years_back: int = 10) -> ImportResult:
+    """Import NFL data from BallDontLie."""
+    return await import_balldontlie_sport("NFL", years_back)
+
+
+async def import_balldontlie_mlb(years_back: int = 10) -> ImportResult:
+    """Import MLB data from BallDontLie."""
+    return await import_balldontlie_sport("MLB", years_back)
+
+
+async def import_balldontlie_nhl(years_back: int = 10) -> ImportResult:
+    """Import NHL data from BallDontLie."""
+    return await import_balldontlie_sport("NHL", years_back)
+
+
+async def import_balldontlie_wnba(years_back: int = 10) -> ImportResult:
+    """Import WNBA data from BallDontLie."""
+    return await import_balldontlie_sport("WNBA", years_back)
+
+
+async def import_balldontlie_ncaaf(years_back: int = 10) -> ImportResult:
+    """Import NCAAF data from BallDontLie."""
+    return await import_balldontlie_sport("NCAAF", years_back)
+
+
+async def import_balldontlie_ncaab(years_back: int = 10) -> ImportResult:
+    """Import NCAAB data from BallDontLie."""
+    return await import_balldontlie_sport("NCAAB", years_back)
+
+
+async def import_balldontlie_atp(years_back: int = 10) -> ImportResult:
+    """Import ATP Tennis data from BallDontLie."""
+    return await import_balldontlie_sport("ATP", years_back)
+
+
+async def import_balldontlie_wta(years_back: int = 10) -> ImportResult:
+    """Import WTA Tennis data from BallDontLie."""
+    return await import_balldontlie_sport("WTA", years_back)
+
+
+async def import_balldontlie_teams() -> ImportResult:
+    """Import teams only from BallDontLie (all 9 sports)."""
+    result = ImportResult(source="balldontlie_teams")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        collector_result = await balldontlie_collector.collect(
+            collect_teams=True,
+            collect_players=False,
+            collect_games=False,
+            collect_stats=False,
+            collect_injuries=False,
+            collect_standings=False,
+        )
+        
+        result.records = collector_result.records_count
+        result.success = collector_result.success
+        
+        console.print(f"  [green]✓[/green] BallDontLie Teams: {result.records} teams")
+        
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    
+    return result
+
+
+async def import_balldontlie_players() -> ImportResult:
+    """Import players only from BallDontLie (all 9 sports)."""
+    result = ImportResult(source="balldontlie_players")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        collector_result = await balldontlie_collector.collect(
+            collect_teams=True,  # Need teams first for foreign keys
+            collect_players=True,
+            collect_games=False,
+            collect_stats=False,
+            collect_injuries=False,
+            collect_standings=False,
+        )
+        
+        result.records = collector_result.records_count
+        result.success = collector_result.success
+        
+        console.print(f"  [green]✓[/green] BallDontLie Players: {result.records} players")
+        
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    
+    return result
+
+
+async def import_balldontlie_injuries() -> ImportResult:
+    """Import current injuries from BallDontLie (all 9 sports)."""
+    result = ImportResult(source="balldontlie_injuries")
+    try:
+        from app.services.collectors import balldontlie_collector
+        
+        collector_result = await balldontlie_collector.collect(
+            collect_teams=True,  # Need teams and players for foreign keys
+            collect_players=True,
+            collect_games=False,
+            collect_stats=False,
+            collect_injuries=True,
+            collect_standings=False,
+        )
+        
+        result.records = collector_result.records_count
+        result.success = collector_result.success
+        
+        console.print(f"  [green]✓[/green] BallDontLie Injuries: {result.records} injury records")
+        
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+    
+    return result
+
+
+# =============================================================================
 # SOURCE MAPPING
 # =============================================================================
 
@@ -4250,6 +4548,23 @@ IMPORT_MAP = {
     "matchstat_history": import_matchstat_history,
     "realgm_history": import_realgm_history,
     "tennis_abstract_history": import_tennis_abstract_history,
+    
+    # BallDontLie imports (Collector 26 - $299/mo All-Access)
+    "balldontlie": import_balldontlie,
+    "balldontlie_full": import_balldontlie_full,
+    "balldontlie_history": import_balldontlie_history,
+    "balldontlie_nba": import_balldontlie_nba,
+    "balldontlie_nfl": import_balldontlie_nfl,
+    "balldontlie_mlb": import_balldontlie_mlb,
+    "balldontlie_nhl": import_balldontlie_nhl,
+    "balldontlie_wnba": import_balldontlie_wnba,
+    "balldontlie_ncaaf": import_balldontlie_ncaaf,
+    "balldontlie_ncaab": import_balldontlie_ncaab,
+    "balldontlie_atp": import_balldontlie_atp,
+    "balldontlie_wta": import_balldontlie_wta,
+    "balldontlie_teams": import_balldontlie_teams,
+    "balldontlie_players": import_balldontlie_players,
+    "balldontlie_injuries": import_balldontlie_injuries,
     
     # Specialized data
     "injuries": import_espn_injuries,

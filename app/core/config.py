@@ -101,11 +101,11 @@ class Settings(BaseSettings):
     ESPN_API_BASE_URL: str = "https://site.api.espn.com/apis/site/v2"
     
     # RapidAPI (Pinnacle Odds, etc.)
-    RAPIDAPI_KEY: str = ""
+    RAPIDAPI_KEY: str = "4d3f34e709msh3ef002f589a50a2p10d455jsnfd280f6cde41"
     PINNACLE_API_HOST: str = "pinnacle-odds-api.p.rapidapi.com"
     
     # Weather API
-    WEATHER_API_KEY: str = ""
+    WEATHER_API_KEY: str = "abe3901572b1aeb9dd945080094d1898"
     WEATHER_API_BASE_URL: str = "https://api.openweathermap.org/data/2.5"
     
     # TheSportsDB API
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     GOOGLE_MAPS_API_KEY: str = ""
     
     # BallDontLie API
-    BALLDONTLIE_API_KEY: str = ""
+    BALLDONTLIE_API_KEY: str = "a43e51d8-eba5-4ccd-b9dd-340d89d5e0c8"
     BALLDONTLIE_BASE_URL: str = "https://api.balldontlie.io/v1"
     
     # ML Configuration

@@ -4537,6 +4537,100 @@ async def import_balldontlie_wta(years_back: int = 10) -> ImportResult:
     return await import_balldontlie_sport("WTA", years_back)
 
 
+# =============================================================================
+# BALLDONTLIE V2 - FIXED COLLECTOR
+# =============================================================================
+
+async def import_balldontlie_v2_sport(sport_code: str, years_back: int = 10) -> ImportResult:
+    """
+    Import data for a single sport using BallDontLie V2 collector (FIXED).
+    
+    Properly handles:
+    - Tennis (ATP/WTA) with player_1/player_2 → creates pseudo-teams
+    - All team sports (NBA, NFL, MLB, NHL, WNBA, NCAAF, NCAAB)
+    
+    Args:
+        sport_code: Sport code (NBA, NFL, MLB, NHL, WNBA, NCAAF, NCAAB, ATP, WTA)
+        years_back: Number of years to import (default: 10)
+        
+    Returns:
+        ImportResult with collection statistics
+    """
+    result = ImportResult(source=f"bdl_v2_{sport_code.lower()}")
+    try:
+        from app.services.collectors.collector_26_balldontlie_v2 import BallDontLieCollectorV2
+        
+        console.print(f"\n[bold cyan]BallDontLie V2 - {sport_code} Historical Import[/bold cyan]")
+        console.print(f"[cyan]Years: {years_back}[/cyan]")
+        
+        collector = BallDontLieCollectorV2()
+        sport_results = await collector.collect_sport(sport_code, years=years_back)
+        await collector.close()
+        
+        # Sum up all saved records
+        total_saved = 0
+        for key, val in sport_results.items():
+            if isinstance(val, dict):
+                total_saved += val.get("saved", 0)
+        
+        result.records = total_saved
+        result.success = True
+        
+        console.print(f"  [green]✓[/green] {sport_code}: {result.records:,} records saved")
+        
+    except Exception as e:
+        logger.error(f"[BallDontLie V2 {sport_code}] Import error: {e}")
+        result.errors.append(str(e)[:100])
+        console.print(f"  [red]✗[/red] {sport_code}: {e}")
+    
+    return result
+
+
+async def import_bdl_nba(years_back: int = 10) -> ImportResult:
+    """Import NBA data using V2 collector."""
+    return await import_balldontlie_v2_sport("NBA", years_back)
+
+
+async def import_bdl_nfl(years_back: int = 10) -> ImportResult:
+    """Import NFL data using V2 collector."""
+    return await import_balldontlie_v2_sport("NFL", years_back)
+
+
+async def import_bdl_mlb(years_back: int = 10) -> ImportResult:
+    """Import MLB data using V2 collector."""
+    return await import_balldontlie_v2_sport("MLB", years_back)
+
+
+async def import_bdl_nhl(years_back: int = 10) -> ImportResult:
+    """Import NHL data using V2 collector."""
+    return await import_balldontlie_v2_sport("NHL", years_back)
+
+
+async def import_bdl_wnba(years_back: int = 10) -> ImportResult:
+    """Import WNBA data using V2 collector."""
+    return await import_balldontlie_v2_sport("WNBA", years_back)
+
+
+async def import_bdl_ncaaf(years_back: int = 10) -> ImportResult:
+    """Import NCAAF data using V2 collector."""
+    return await import_balldontlie_v2_sport("NCAAF", years_back)
+
+
+async def import_bdl_ncaab(years_back: int = 10) -> ImportResult:
+    """Import NCAAB data using V2 collector."""
+    return await import_balldontlie_v2_sport("NCAAB", years_back)
+
+
+async def import_bdl_atp(years_back: int = 10) -> ImportResult:
+    """Import ATP Tennis data using V2 collector (FIXED for tennis)."""
+    return await import_balldontlie_v2_sport("ATP", years_back)
+
+
+async def import_bdl_wta(years_back: int = 10) -> ImportResult:
+    """Import WTA Tennis data using V2 collector (FIXED for tennis)."""
+    return await import_balldontlie_v2_sport("WTA", years_back)
+
+
 async def import_balldontlie_teams() -> ImportResult:
     """Import teams only from BallDontLie (all 9 sports)."""
     result = ImportResult(source="balldontlie_teams")
@@ -4692,6 +4786,17 @@ IMPORT_MAP = {
     "balldontlie_teams": import_balldontlie_teams,
     "balldontlie_players": import_balldontlie_players,
     "balldontlie_injuries": import_balldontlie_injuries,
+    
+    # BallDontLie V2 - FIXED (properly handles tennis and all sports)
+    "bdl_nba": import_bdl_nba,
+    "bdl_nfl": import_bdl_nfl,
+    "bdl_mlb": import_bdl_mlb,
+    "bdl_nhl": import_bdl_nhl,
+    "bdl_wnba": import_bdl_wnba,
+    "bdl_ncaaf": import_bdl_ncaaf,
+    "bdl_ncaab": import_bdl_ncaab,
+    "bdl_atp": import_bdl_atp,
+    "bdl_wta": import_bdl_wta,
     
     # Specialized data
     "injuries": import_espn_injuries,

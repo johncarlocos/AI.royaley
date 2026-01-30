@@ -546,12 +546,19 @@ class BallDontLieCollectorV2(BaseCollector):
                 position = player_data.get("position") or player_data.get("position_code") or ""
                 
                 # Height/weight handling
+                # Height is stored as VARCHAR
                 height = player_data.get("height") or player_data.get("height_in_inches") or ""
                 if isinstance(height, int):
                     height = str(height)
-                weight = player_data.get("weight") or player_data.get("weight_in_pounds") or ""
-                if isinstance(weight, int):
-                    weight = str(weight)
+                
+                # Weight is stored as INTEGER in database
+                weight_raw = player_data.get("weight") or player_data.get("weight_in_pounds")
+                weight = None
+                if weight_raw is not None:
+                    try:
+                        weight = int(weight_raw)
+                    except (ValueError, TypeError):
+                        weight = None
                 
                 jersey = player_data.get("jersey_number") or player_data.get("sweater_number") or ""
                 if isinstance(jersey, int):

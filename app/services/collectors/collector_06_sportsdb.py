@@ -378,8 +378,9 @@ class SportsDBCollector(BaseCollector):
     # VENUES COLLECTION
     # =========================================================================
     
-    # City coordinates cache for geocoding
+    # Comprehensive venue/city coordinates cache (expanded for all sports)
     CITY_COORDS = {
+        # === US Major Cities ===
         "New York": (40.7128, -74.0060), "Los Angeles": (34.0522, -118.2437),
         "Chicago": (41.8781, -87.6298), "Houston": (29.7604, -95.3698),
         "Phoenix": (33.4484, -112.0740), "Philadelphia": (39.9526, -75.1652),
@@ -396,45 +397,276 @@ class SportsDBCollector(BaseCollector):
         "Kansas City": (39.0997, -94.5786), "Cincinnati": (39.1031, -84.5120),
         "Green Bay": (44.5192, -88.0198), "Jacksonville": (30.3322, -81.6557),
         "Buffalo": (42.8864, -78.8784), "Oakland": (37.8044, -122.2712),
-        "Milwaukee": (43.0389, -87.9065), "Toronto": (43.6532, -79.3832),
-        "Montreal": (45.5017, -73.5673), "Vancouver": (49.2827, -123.1207),
-        "Calgary": (51.0447, -114.0719), "Edmonton": (53.5461, -113.4938),
-        "Ottawa": (45.4215, -75.6972), "Winnipeg": (49.8951, -97.1384),
-        "Melbourne": (-37.8136, 144.9631), "Sydney": (-33.8688, 151.2093),
-        "London": (51.5074, -0.1278), "Paris": (48.8566, 2.3522),
+        "Milwaukee": (43.0389, -87.9065), "Sacramento": (38.5816, -121.4944),
+        "Portland": (45.5152, -122.6784), "Memphis": (35.1495, -90.0490),
+        "Louisville": (38.2527, -85.7585), "St. Louis": (38.6270, -90.1994),
+        "Orlando": (28.5383, -81.3792), "Salt Lake City": (40.7608, -111.8910),
+        "Raleigh": (35.7796, -78.6382), "Oklahoma City": (35.4676, -97.5164),
+        
+        # === NFL Stadium Cities ===
         "Arlington": (32.7357, -97.1081), "Foxborough": (42.0654, -71.2481),
         "Glendale": (33.5387, -112.1860), "Inglewood": (33.9617, -118.3531),
         "East Rutherford": (40.8128, -74.0742), "Landover": (38.9076, -76.8645),
         "Orchard Park": (42.7738, -78.7870), "Paradise": (36.0908, -115.1836),
-        "Santa Clara": (37.4030, -121.9700), "Tuscaloosa": (33.2098, -87.5692),
-        "Auburn": (32.6099, -85.4808), "Clemson": (34.6834, -82.8374),
-        "Columbus": (39.9612, -82.9988), "Ann Arbor": (42.2808, -83.7430),
-        "Austin": (30.2672, -97.7431), "Norman": (35.2226, -97.4395),
-        "Baton Rouge": (30.4515, -91.1871), "Gainesville": (29.6516, -82.3248),
-        "Knoxville": (35.9606, -83.9207), "Madison": (43.0731, -89.4012),
+        "Santa Clara": (37.4030, -121.9700),
+        
+        # === College Football Cities ===
+        "Tuscaloosa": (33.2098, -87.5692), "Auburn": (32.6099, -85.4808),
+        "Clemson": (34.6834, -82.8374), "Columbus": (39.9612, -82.9988),
+        "Ann Arbor": (42.2808, -83.7430), "Austin": (30.2672, -97.7431),
+        "Norman": (35.2226, -97.4395), "Baton Rouge": (30.4515, -91.1871),
+        "Gainesville": (29.6516, -82.3248), "Knoxville": (35.9606, -83.9207),
+        "Madison": (43.0731, -89.4012), "Eugene": (44.0521, -123.0868),
+        "State College": (40.7934, -77.8600), "South Bend": (41.6764, -86.2520),
+        "College Station": (30.6280, -96.3344), "Athens": (33.9519, -83.3576),
+        "Tallahassee": (30.4383, -84.2807), "Lincoln": (40.8258, -96.6852),
+        "Boulder": (40.0150, -105.2705), "Ames": (42.0308, -93.6319),
+        "Corvallis": (44.5646, -123.2620), "Pullman": (46.7298, -117.1817),
+        "Stillwater": (36.1156, -97.0584), "Morgantown": (39.6295, -79.9559),
+        "Blacksburg": (37.2296, -80.4139), "Charlottesville": (38.0293, -78.4767),
+        "Durham": (35.9940, -78.8986), "Chapel Hill": (35.9132, -79.0558),
+        "Waco": (31.5493, -97.1467), "Provo": (40.2338, -111.6585),
+        "Lubbock": (33.5779, -101.8552), "Fort Worth": (32.7555, -97.3308),
+        "Pasadena": (34.1478, -118.1445), "Tempe": (33.4255, -111.9400),
+        
+        # === Canadian Cities (CFL) ===
+        "Toronto": (43.6532, -79.3832), "Montreal": (45.5017, -73.5673),
+        "Vancouver": (49.2827, -123.1207), "Calgary": (51.0447, -114.0719),
+        "Edmonton": (53.5461, -113.4938), "Ottawa": (45.4215, -75.6972),
+        "Winnipeg": (49.8951, -97.1384), "Hamilton": (43.2557, -79.8711),
+        "Regina": (50.4452, -104.6189), "Saskatchewan": (52.1332, -106.6700),
+        
+        # === Tennis ATP/WTA Venues ===
+        # Grand Slams
+        "Melbourne": (-37.8136, 144.9631),  # Australian Open
+        "Paris": (48.8566, 2.3522),  # French Open - Roland Garros
+        "London": (51.5074, -0.1278),  # Wimbledon
+        "Flushing": (40.7498, -73.8463),  # US Open - Flushing Meadows
+        "Wimbledon": (51.4340, -0.2143),
+        
+        # ATP/WTA Masters & Major Tournaments
+        "Indian Wells": (33.7238, -116.3106), "Key Biscayne": (25.6940, -80.1669),
+        "Monte Carlo": (43.7384, 7.4246), "Monaco": (43.7384, 7.4246),
+        "Madrid": (40.4168, -3.7038), "Rome": (41.9028, 12.4964),
+        "Toronto": (43.6532, -79.3832), "Montreal": (45.5017, -73.5673),
+        "Cincinnati": (39.1031, -84.5120), "Shanghai": (31.2304, 121.4737),
+        "Beijing": (39.9042, 116.4074), "Tokyo": (35.6762, 139.6503),
+        "Dubai": (25.2048, 55.2708), "Doha": (25.2854, 51.5310),
+        "Miami Gardens": (25.9579, -80.2389), "Brisbane": (-27.4698, 153.0251),
+        "Sydney": (-33.8688, 151.2093), "Adelaide": (-34.9285, 138.6007),
+        "Auckland": (-36.8509, 174.7645), "Buenos Aires": (-34.6037, -58.3816),
+        "Rio de Janeiro": (-22.9068, -43.1729), "Sao Paulo": (-23.5505, -46.6333),
+        "Acapulco": (16.8531, -99.8237), "Santiago": (-33.4489, -70.6693),
+        "Barcelona": (41.3874, 2.1686), "Munich": (48.1351, 11.5820),
+        "Stuttgart": (48.7758, 9.1829), "Hamburg": (53.5511, 9.9937),
+        "Halle": (52.0799, 8.0324), "Queen's Club": (51.4875, -0.2141),
+        "Eastbourne": (50.7684, 0.2904), "s-Hertogenbosch": (51.6978, 5.3037),
+        "Bastad": (56.4267, 12.8558), "Gstaad": (46.4750, 7.2873),
+        "Atlanta": (33.7490, -84.3880), "Washington": (38.9072, -77.0369),
+        "Los Cabos": (22.8905, -109.9167), "Winston-Salem": (36.0999, -80.2442),
+        "St. Petersburg": (59.9343, 30.3351), "Metz": (49.1193, 6.1757),
+        "Astana": (51.1605, 71.4704), "Zhuhai": (22.2710, 113.5767),
+        "Chengdu": (30.5728, 104.0668), "Sofia": (42.6977, 23.3219),
+        "Antwerp": (51.2194, 4.4025), "Moscow": (55.7558, 37.6173),
+        "Vienna": (48.2082, 16.3738), "Basel": (47.5596, 7.5886),
+        "Stockholm": (59.3293, 18.0686), "Turin": (45.0703, 7.6869),
+        "Malaga": (36.7213, -4.4214),
+        
+        # WTA Specific
+        "Charleston": (32.7765, -79.9311), "Birmingham": (52.4862, -1.8904),
+        "Nottingham": (52.9548, -1.1581), "San Jose": (37.3382, -121.8863),
+        "Guadalajara": (20.6597, -103.3496), "Osaka": (34.6937, 135.5023),
+        "Seoul": (37.5665, 126.9780), "Wuhan": (30.5928, 114.3055),
+        "Zhengzhou": (34.7466, 113.6254), "Shenzhen": (22.5431, 114.0579),
+        "Luxembourg": (49.6116, 6.1319), "Linz": (48.3069, 14.2858),
+        "Guadalajara": (20.6597, -103.3496), "Portoroz": (45.5095, 13.5906),
+        "Parma": (44.8015, 10.3279), "Cluj-Napoca": (46.7712, 23.6236),
+        "Strasbourg": (48.5734, 7.7521), "Rabat": (34.0209, -6.8416),
+        "Istanbul": (41.0082, 28.9784), "Prague": (50.0755, 14.4378),
+        "Palermo": (38.1157, 13.3615), "Bogota": (4.7110, -74.0721),
+        "Tashkent": (41.2995, 69.2401), "Nanchang": (28.6820, 115.8579),
+        "Hua Hin": (12.5684, 99.9577), "Hobart": (-42.8821, 147.3272),
+        
+        # === International Cities ===
+        "Berlin": (52.5200, 13.4050), "Frankfurt": (50.1109, 8.6821),
+        "Amsterdam": (52.3676, 4.9041), "Brussels": (50.8503, 4.3517),
+        "Zurich": (47.3769, 8.5417), "Geneva": (46.2044, 6.1432),
+        "Milan": (45.4642, 9.1900), "Florence": (43.7696, 11.2558),
+        "Naples": (40.8518, 14.2681), "Venice": (45.4408, 12.3155),
+        "Lisbon": (38.7223, -9.1393), "Dublin": (53.3498, -6.2603),
+        "Manchester": (53.4808, -2.2426), "Edinburgh": (55.9533, -3.1883),
+        "Warsaw": (52.2297, 21.0122), "Budapest": (47.4979, 19.0402),
+        "Athens": (37.9838, 23.7275), "Cairo": (30.0444, 31.2357),
+        "Cape Town": (-33.9249, 18.4241), "Johannesburg": (-26.2041, 28.0473),
+        "Mumbai": (19.0760, 72.8777), "Delhi": (28.7041, 77.1025),
+        "Singapore": (1.3521, 103.8198), "Hong Kong": (22.3193, 114.1694),
+        "Taipei": (25.0330, 121.5654), "Bangkok": (13.7563, 100.5018),
+        "Kuala Lumpur": (3.1390, 101.6869), "Jakarta": (-6.2088, 106.8456),
     }
     
-    def _get_city_coords(self, city: str, state: str = None) -> Tuple[Optional[float], Optional[float]]:
-        """Get coordinates for a city from cache."""
+    # Stadium name to coordinates (specific venues)
+    STADIUM_COORDS = {
+        # NFL Stadiums
+        "AT&T Stadium": (32.7473, -97.0945),
+        "Allegiant Stadium": (36.0909, -115.1833),
+        "Arrowhead Stadium": (39.0489, -94.4839),
+        "Bank of America Stadium": (35.2258, -80.8528),
+        "Caesars Superdome": (29.9511, -90.0812),
+        "Empower Field at Mile High": (39.7439, -105.0201),
+        "Ford Field": (42.3400, -83.0456),
+        "Gillette Stadium": (42.0909, -71.2643),
+        "Hard Rock Stadium": (25.9580, -80.2389),
+        "Highmark Stadium": (42.7738, -78.7870),
+        "Huntington Bank Field": (41.5061, -81.6995),
+        "Levi's Stadium": (37.4033, -121.9694),
+        "Lincoln Financial Field": (39.9008, -75.1675),
+        "Lucas Oil Stadium": (39.7601, -86.1639),
+        "Lumen Field": (47.5952, -122.3316),
+        "M&T Bank Stadium": (39.2780, -76.6227),
+        "Mercedes-Benz Stadium": (33.7554, -84.4010),
+        "MetLife Stadium": (40.8128, -74.0742),
+        "Nissan Stadium": (36.1665, -86.7713),
+        "NRG Stadium": (29.6847, -95.4107),
+        "Paycor Stadium": (39.0954, -84.5160),
+        "Raymond James Stadium": (27.9759, -82.5033),
+        "SoFi Stadium": (33.9535, -118.3392),
+        "Soldier Field": (41.8623, -87.6167),
+        "State Farm Stadium": (33.5276, -112.2626),
+        "TIAA Bank Field": (30.3239, -81.6373),
+        "U.S. Bank Stadium": (44.9736, -93.2575),
+        "FedExField": (38.9076, -76.8645),
+        "Northwest Stadium": (38.9076, -76.8645),
+        
+        # MLB Stadiums
+        "American Family Field": (43.0280, -87.9712),
+        "Angel Stadium": (33.8003, -117.8827),
+        "Busch Stadium": (38.6226, -90.1928),
+        "Chase Field": (33.4453, -112.0667),
+        "Citi Field": (40.7571, -73.8458),
+        "Citizens Bank Park": (39.9061, -75.1665),
+        "Comerica Park": (42.3390, -83.0485),
+        "Coors Field": (39.7559, -104.9942),
+        "Dodger Stadium": (34.0739, -118.2400),
+        "Fenway Park": (42.3467, -71.0972),
+        "Globe Life Field": (32.7473, -97.0819),
+        "Great American Ball Park": (39.0974, -84.5082),
+        "Guaranteed Rate Field": (41.8299, -87.6338),
+        "Kauffman Stadium": (39.0517, -94.4803),
+        "loanDepot park": (25.7781, -80.2196),
+        "Minute Maid Park": (29.7573, -95.3555),
+        "Nationals Park": (38.8730, -77.0074),
+        "Oakland Coliseum": (37.7516, -122.2005),
+        "Oracle Park": (37.7786, -122.3893),
+        "Oriole Park at Camden Yards": (39.2838, -76.6217),
+        "Petco Park": (32.7076, -117.1570),
+        "PNC Park": (40.4469, -80.0057),
+        "Progressive Field": (41.4962, -81.6852),
+        "Rogers Centre": (43.6414, -79.3894),
+        "T-Mobile Park": (47.5914, -122.3325),
+        "Target Field": (44.9817, -93.2776),
+        "Tropicana Field": (27.7682, -82.6534),
+        "Truist Park": (33.8908, -84.4678),
+        "Wrigley Field": (41.9484, -87.6553),
+        "Yankee Stadium": (40.8296, -73.9262),
+        
+        # Tennis Venues
+        "Melbourne Park": (-37.8215, 144.9783),
+        "Roland Garros": (48.8469, 2.2528),
+        "All England Club": (51.4340, -0.2143),
+        "USTA Billie Jean King National Tennis Center": (40.7498, -73.8463),
+        "Indian Wells Tennis Garden": (33.7238, -116.3106),
+        "Crandon Park Tennis Center": (25.7022, -80.1516),
+        "Foro Italico": (41.9283, 12.4575),
+        "Caja Mágica": (40.3722, -3.6878),
+        "Monte-Carlo Country Club": (43.7515, 7.4420),
+        "Stade Roland Garros": (48.8469, 2.2528),
+        "Rod Laver Arena": (-37.8215, 144.9783),
+    }
+
+    
+    def _get_city_coords(self, city: str, state: str = None, stadium_name: str = None) -> Tuple[Optional[float], Optional[float]]:
+        """Get coordinates for a city/stadium from cache or geocoding."""
+        # Try stadium name first (most accurate)
+        if stadium_name:
+            # Check exact stadium match
+            if stadium_name in self.STADIUM_COORDS:
+                return self.STADIUM_COORDS[stadium_name]
+            # Try partial stadium match
+            for cached_stadium, coords in self.STADIUM_COORDS.items():
+                if cached_stadium.lower() in stadium_name.lower() or stadium_name.lower() in cached_stadium.lower():
+                    return coords
+        
         if not city:
             return None, None
         
-        # Try exact match first
+        # Try exact city match
         if city in self.CITY_COORDS:
             return self.CITY_COORDS[city]
         
-        # Try partial match
+        # Try partial city match
         for cached_city, coords in self.CITY_COORDS.items():
             if cached_city.lower() in city.lower() or city.lower() in cached_city.lower():
                 return coords
         
+        # Try with state (e.g., "Columbus, Ohio" vs "Columbus, Georgia")
+        if state:
+            city_state = f"{city}, {state}"
+            for cached_city, coords in self.CITY_COORDS.items():
+                if cached_city.lower() == city.lower():
+                    return coords
+        
+        return None, None
+    
+    async def _geocode_location(self, city: str, state: str = None, country: str = "USA") -> Tuple[Optional[float], Optional[float]]:
+        """Geocode a location using Nominatim (free, no API key)."""
+        if not city:
+            return None, None
+        
+        try:
+            query = city
+            if state:
+                query = f"{city}, {state}"
+            if country:
+                query = f"{query}, {country}"
+            
+            url = "https://nominatim.openstreetmap.org/search"
+            params = {
+                "q": query,
+                "format": "json",
+                "limit": 1,
+            }
+            headers = {
+                "User-Agent": "Royaley Sports Analytics/1.0"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and len(data) > 0:
+                        lat = float(data[0].get("lat", 0))
+                        lon = float(data[0].get("lon", 0))
+                        if lat and lon:
+                            logger.info(f"[SportsDB] Geocoded {query}: ({lat}, {lon})")
+                            return lat, lon
+        except Exception as e:
+            logger.debug(f"[SportsDB] Geocoding failed for {city}: {e}")
+        
         return None, None
     
     async def collect_venues(self, sport_code: str = None) -> Dict[str, Any]:
-        """Collect venues via /lookup/team for each team, including lat/lon."""
+        """Collect venues via /lookup/team for each team, including lat/lon.
+        
+        Enhanced version with:
+        - Stadium coordinate lookup
+        - City coordinate fallback  
+        - Nominatim geocoding fallback
+        - SportsDB API lat/lon extraction
+        """
         sports = [sport_code] if sport_code else ML_SPORTS
         all_venues = []
         team_cities = []  # Track team-city mappings for updating teams
+        geocoded_count = 0
         
         for sport in sports:
             league_id = SPORTSDB_LEAGUE_IDS.get(sport)
@@ -445,6 +677,7 @@ class SportsDBCollector(BaseCollector):
             teams = self._get_list(data, "list", "teams")
             
             print(f"[SportsDB] {sport}: Found {len(teams)} teams, fetching stadium details...")
+            logger.info(f"[SportsDB] {sport}: Found {len(teams)} teams")
             
             seen = set()
             venue_count = 0
@@ -456,12 +689,14 @@ class SportsDBCollector(BaseCollector):
                 
                 details = await self._get_team_details(team_id)
                 if not details:
+                    await asyncio.sleep(0.1)
                     continue
                 
                 # Extract location info
                 loc = details.get("strLocation") or ""
                 city = loc.split(",")[0].strip() if loc else None
                 state = loc.split(",")[1].strip() if loc and "," in loc else None
+                country = details.get("strCountry") or "USA"
                 
                 # Track team-city mapping
                 team_name = details.get("strTeam")
@@ -488,14 +723,45 @@ class SportsDBCollector(BaseCollector):
                     except:
                         pass
                 
-                # Get lat/lon from city
-                lat, lon = self._get_city_coords(city, state)
+                # Try to get lat/lon from multiple sources
+                lat, lon = None, None
                 
-                all_venues.append({
+                # 1. Check SportsDB API fields first (strMapLat, strMapLong, etc.)
+                api_lat = details.get("strStadiumLat") or details.get("strMapLat") or details.get("strLat")
+                api_lon = details.get("strStadiumLon") or details.get("strMapLon") or details.get("strLon") or details.get("strMapLong") or details.get("strLong")
+                if api_lat and api_lon:
+                    try:
+                        lat = float(api_lat)
+                        lon = float(api_lon)
+                        logger.debug(f"[SportsDB] Got coords from API for {name}: ({lat}, {lon})")
+                    except:
+                        pass
+                
+                # 2. Try stadium name lookup
+                if not lat or not lon:
+                    lat, lon = self._get_city_coords(city, state, stadium_name=name)
+                
+                # 3. Try city lookup
+                if not lat or not lon:
+                    lat, lon = self._get_city_coords(city, state)
+                
+                # 4. Geocoding fallback (rate limited)
+                if not lat or not lon:
+                    lat, lon = await self._geocode_location(city, state, country)
+                    if lat and lon:
+                        geocoded_count += 1
+                        # Add to cache for future use
+                        if city and city not in self.CITY_COORDS:
+                            self.CITY_COORDS[city] = (lat, lon)
+                    await asyncio.sleep(1.0)  # Rate limit geocoding (1 req/sec)
+                else:
+                    await asyncio.sleep(0.15)  # Normal rate limit
+                
+                venue_data = {
                     "name": name,
                     "city": city,
                     "state": state,
-                    "country": details.get("strCountry", "USA"),
+                    "country": country,
                     "capacity": cap,
                     "is_dome": self._is_dome(name),
                     "latitude": lat,
@@ -503,14 +769,25 @@ class SportsDBCollector(BaseCollector):
                     "team_name": team_name,
                     "external_id": f"sportsdb_venue_{details.get('idVenue') or team_id}",
                     "sport_code": sport,
-                })
+                    "sportsdb_team_id": team_id,
+                }
+                
+                all_venues.append(venue_data)
                 venue_count += 1
-                await asyncio.sleep(0.15)
+                
+                # Log progress
+                coords_status = f"({lat:.4f}, {lon:.4f})" if lat and lon else "NO COORDS"
+                logger.debug(f"[SportsDB] {sport}: {name} in {city} - {coords_status}")
             
-            logger.info(f"[SportsDB] {sport}: {venue_count} venues")
-            print(f"[SportsDB] {sport}: {venue_count} venues")
+            logger.info(f"[SportsDB] {sport}: {venue_count} venues collected")
+            print(f"[SportsDB] {sport}: {venue_count} venues collected")
         
-        return {"venues": all_venues, "team_cities": team_cities, "count": len(all_venues)}
+        # Summary stats
+        with_coords = sum(1 for v in all_venues if v.get("latitude") and v.get("longitude"))
+        print(f"[SportsDB] Total: {len(all_venues)} venues, {with_coords} with coordinates, {geocoded_count} geocoded")
+        logger.info(f"[SportsDB] Total: {len(all_venues)} venues, {with_coords} with coordinates, {geocoded_count} geocoded")
+        
+        return {"venues": all_venues, "team_cities": team_cities, "count": len(all_venues), "with_coords": with_coords}
     
     def _is_dome(self, name: str) -> bool:
         check = (name or "").lower()
@@ -821,6 +1098,120 @@ class SportsDBCollector(BaseCollector):
         logger.info(f"[SportsDB] Updated {updated} team cities")
         print(f"[SportsDB] Updated {updated} team cities")
         return updated
+    
+    async def link_venues_to_teams(self, session: AsyncSession) -> int:
+        """Link venues to teams based on team name matching."""
+        try:
+            from app.models import Venue
+        except ImportError:
+            from app.models.models import Venue
+        
+        linked = 0
+        try:
+            # Get all venues with team data
+            venues_result = await session.execute(select(Venue))
+            venues = venues_result.scalars().all()
+            
+            # Create venue lookup by various keys
+            venue_lookup = {}
+            for v in venues:
+                venue_lookup[v.name.lower()] = v
+                if v.city:
+                    venue_lookup[v.city.lower()] = v
+            
+            # Get all teams without venue_id
+            teams_result = await session.execute(select(Team).where(Team.venue_id == None))
+            teams = teams_result.scalars().all()
+            
+            for team in teams:
+                # Try to match by team city
+                if team.city:
+                    city_key = team.city.lower()
+                    if city_key in venue_lookup:
+                        team.venue_id = venue_lookup[city_key].id
+                        linked += 1
+                        continue
+                
+                # Try to match by team name (e.g., "Dallas Cowboys" -> "AT&T Stadium" in Arlington/Dallas)
+                team_city = team.name.split()[0].lower() if team.name else None
+                if team_city and team_city in venue_lookup:
+                    team.venue_id = venue_lookup[team_city].id
+                    linked += 1
+            
+            await session.commit()
+            logger.info(f"[SportsDB] Linked {linked} teams to venues")
+            print(f"[SportsDB] Linked {linked} teams to venues")
+        except Exception as e:
+            logger.warning(f"[SportsDB] Link venues to teams error: {e}")
+        
+        return linked
+    
+    async def link_venues_to_games(self, session: AsyncSession) -> int:
+        """Link venues to games based on home team's venue."""
+        try:
+            from app.models import Venue
+        except ImportError:
+            from app.models.models import Venue
+        
+        linked = 0
+        try:
+            # Get all games without venue_id
+            games_result = await session.execute(
+                select(Game).where(Game.venue_id == None)
+            )
+            games = games_result.scalars().all()
+            
+            if not games:
+                logger.info("[SportsDB] No games without venue_id found")
+                return 0
+            
+            # Build team -> venue lookup
+            teams_result = await session.execute(
+                select(Team).where(Team.venue_id != None)
+            )
+            teams = teams_result.scalars().all()
+            
+            team_venue_map = {}
+            for team in teams:
+                team_venue_map[team.id] = team.venue_id
+                if team.name:
+                    team_venue_map[team.name.lower()] = team.venue_id
+            
+            # Also build venue lookup by city for fallback
+            venues_result = await session.execute(
+                select(Venue).where(and_(Venue.latitude != None, Venue.longitude != None))
+            )
+            venues = venues_result.scalars().all()
+            
+            venue_by_city = {}
+            for v in venues:
+                if v.city:
+                    venue_by_city[v.city.lower()] = v.id
+            
+            for game in games:
+                venue_id = None
+                
+                # Try home team's venue
+                if game.home_team_id and game.home_team_id in team_venue_map:
+                    venue_id = team_venue_map[game.home_team_id]
+                
+                # Try by home team name lookup
+                if not venue_id and hasattr(game, 'home_team') and game.home_team:
+                    team_name = game.home_team.name.lower() if hasattr(game.home_team, 'name') else None
+                    if team_name and team_name in team_venue_map:
+                        venue_id = team_venue_map[team_name]
+                
+                if venue_id:
+                    game.venue_id = venue_id
+                    linked += 1
+            
+            await session.commit()
+            logger.info(f"[SportsDB] Linked {linked} games to venues")
+            print(f"[SportsDB] Linked {linked} games to venues")
+        except Exception as e:
+            logger.warning(f"[SportsDB] Link venues to games error: {e}")
+        
+        return linked
     
     async def save_players_to_database(self, players: List[Dict], session: AsyncSession) -> int:
         """Save players - FIXED with better error handling."""

@@ -1243,7 +1243,8 @@ async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
     """Import venues from TheSportsDB and update team cities.
     
     Fills: venues table (with lat/lon for weather)
-    Also updates: teams table (city field)
+    Also updates: teams table (city field, venue_id)
+    Also links: games to venues (venue_id)
     """
     result = ImportResult(source="venues")
     try:
@@ -1285,6 +1286,22 @@ async def import_sportsdb_venues(sports: List[str] = None) -> ImportResult:
                     logger.info(f"[Venues] Updated {updated} team cities")
             except Exception as e:
                 logger.warning(f"[Venues] Team city update error: {e}")
+        
+        # Link venues to teams
+        try:
+            async with db_manager.session() as session:
+                linked_teams = await sportsdb_collector.link_venues_to_teams(session)
+                logger.info(f"[Venues] Linked {linked_teams} teams to venues")
+        except Exception as e:
+            logger.warning(f"[Venues] Team-venue linking error: {e}")
+        
+        # Link venues to games  
+        try:
+            async with db_manager.session() as session:
+                linked_games = await sportsdb_collector.link_venues_to_games(session)
+                logger.info(f"[Venues] Linked {linked_games} games to venues")
+        except Exception as e:
+            logger.warning(f"[Venues] Game-venue linking error: {e}")
         
         result.success = result.records >= 0
     except Exception as e:

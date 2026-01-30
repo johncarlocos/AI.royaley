@@ -63,7 +63,7 @@ SPORT_CONFIG = {
             "box_scores": "/nba/v1/box_scores",
             "standings": "/nba/v1/standings",
             "injuries": "/nba/v1/player_injuries",
-            "odds": "/nba/v2/odds",  # NBA uses v2 for odds!
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": True,

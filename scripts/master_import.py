@@ -1161,7 +1161,10 @@ async def import_weatherstack_history(sports: List[str] = None, days: int = 365)
     except Exception as e:
         result.errors.append(str(e)[:100])
         logger.error(f"[Weatherstack History] Fatal error: {e}")
-    return result(sports: List[str] = None) -> ImportResult:
+    return result
+
+
+async def import_sportsdb(sports: List[str] = None) -> ImportResult:
     """Import from TheSportsDB."""
     result = ImportResult(source="sportsdb")
     try:

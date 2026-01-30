@@ -825,7 +825,7 @@ class BallDontLieCollectorV2(BaseCollector):
                         status=status,
                         home_score=home_score,
                         away_score=away_score,
-                        season=season,
+                        # Note: season_id requires lookup - skip for now
                     )
                     session.add(game)
                     saved += 1
@@ -1221,7 +1221,7 @@ class BallDontLieCollectorV2(BaseCollector):
                             stat_type=stat_type,
                             value=value,
                             games_played=standing.get("games_played") or 0,
-                            season=season,
+                            # Note: season_id requires lookup - skip for now
                         )
                         session.add(stat)
                         saved += 1
@@ -1284,7 +1284,7 @@ class BallDontLieCollectorV2(BaseCollector):
         sport_code: str, 
         session: AsyncSession
     ) -> Dict[str, int]:
-        """Save odds to database."""
+        """Save odds to database - creates separate records per bet_type."""
         if not odds_data:
             return {"saved": 0, "skipped": 0}
         
@@ -1310,8 +1310,9 @@ class BallDontLieCollectorV2(BaseCollector):
                 
                 # Get or create sportsbook
                 vendor = odd.get("vendor", "unknown")
+                vendor_key = vendor.lower().replace(" ", "_").replace("-", "_")
                 result = await session.execute(
-                    select(Sportsbook).where(Sportsbook.name == vendor)
+                    select(Sportsbook).where(Sportsbook.key == vendor_key)
                 )
                 sportsbook = result.scalar_one_or_none()
                 
@@ -1319,51 +1320,85 @@ class BallDontLieCollectorV2(BaseCollector):
                     sportsbook = Sportsbook(
                         id=uuid4(),
                         name=vendor,
+                        key=vendor_key,
                         is_active=True,
                     )
                     session.add(sportsbook)
                     await session.flush()
                 
-                # Parse spread/total values
-                spread_home = None
-                spread_away = None
-                total_line = None
-                
-                if odd.get("spread_home_value"):
+                # Parse values with proper type conversion
+                def safe_float(val):
+                    if val is None:
+                        return None
                     try:
-                        spread_home = float(odd["spread_home_value"])
+                        return float(val)
                     except:
-                        pass
+                        return None
                 
-                if odd.get("spread_away_value"):
+                def safe_int(val):
+                    if val is None:
+                        return None
                     try:
-                        spread_away = float(odd["spread_away_value"])
+                        return int(float(val))
                     except:
-                        pass
+                        return None
                 
-                if odd.get("total_value"):
-                    try:
-                        total_line = float(odd["total_value"])
-                    except:
-                        pass
+                # 1. Create SPREAD odds record if spread data exists
+                spread_home = safe_float(odd.get("spread_home_value"))
+                spread_away = safe_float(odd.get("spread_away_value"))
+                spread_home_odds = safe_int(odd.get("spread_home_odds"))
+                spread_away_odds = safe_int(odd.get("spread_away_odds"))
                 
-                # Create odds record
-                odds_record = Odds(
-                    id=uuid4(),
-                    game_id=game.id,
-                    sportsbook_id=sportsbook.id,
-                    spread_home=spread_home,
-                    spread_away=spread_away,
-                    spread_home_odds=odd.get("spread_home_odds"),
-                    spread_away_odds=odd.get("spread_away_odds"),
-                    total_line=total_line,
-                    over_odds=odd.get("total_over_odds"),
-                    under_odds=odd.get("total_under_odds"),
-                    moneyline_home=odd.get("moneyline_home_odds"),
-                    moneyline_away=odd.get("moneyline_away_odds"),
-                )
-                session.add(odds_record)
-                saved += 1
+                if spread_home is not None or spread_away is not None:
+                    spread_record = Odds(
+                        id=uuid4(),
+                        game_id=game.id,
+                        sportsbook_id=sportsbook.id,
+                        sportsbook_key=vendor_key,
+                        bet_type="spread",
+                        home_line=spread_home,
+                        away_line=spread_away,
+                        home_odds=spread_home_odds,
+                        away_odds=spread_away_odds,
+                    )
+                    session.add(spread_record)
+                    saved += 1
+                
+                # 2. Create TOTAL odds record if total data exists
+                total_line = safe_float(odd.get("total_value"))
+                over_odds = safe_int(odd.get("total_over_odds"))
+                under_odds = safe_int(odd.get("total_under_odds"))
+                
+                if total_line is not None:
+                    total_record = Odds(
+                        id=uuid4(),
+                        game_id=game.id,
+                        sportsbook_id=sportsbook.id,
+                        sportsbook_key=vendor_key,
+                        bet_type="total",
+                        total=total_line,
+                        over_odds=over_odds,
+                        under_odds=under_odds,
+                    )
+                    session.add(total_record)
+                    saved += 1
+                
+                # 3. Create MONEYLINE odds record if moneyline data exists
+                ml_home = safe_int(odd.get("moneyline_home_odds"))
+                ml_away = safe_int(odd.get("moneyline_away_odds"))
+                
+                if ml_home is not None or ml_away is not None:
+                    ml_record = Odds(
+                        id=uuid4(),
+                        game_id=game.id,
+                        sportsbook_id=sportsbook.id,
+                        sportsbook_key=vendor_key,
+                        bet_type="moneyline",
+                        home_odds=ml_home,
+                        away_odds=ml_away,
+                    )
+                    session.add(ml_record)
+                    saved += 1
             
             except Exception as e:
                 logger.error(f"[BallDontLie] Error saving odds: {e}")

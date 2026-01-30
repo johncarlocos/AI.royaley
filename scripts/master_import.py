@@ -5023,7 +5023,9 @@ async def run_import(sources: List[str], sports: List[str] = None, pages: int = 
             elif source in ["balldontlie_history", "balldontlie_full",
                            "balldontlie_nba", "balldontlie_nfl", "balldontlie_mlb", 
                            "balldontlie_nhl", "balldontlie_wnba", "balldontlie_ncaaf",
-                           "balldontlie_ncaab", "balldontlie_atp", "balldontlie_wta"]:
+                           "balldontlie_ncaab", "balldontlie_atp", "balldontlie_wta",
+                           "bdl_nba", "bdl_nfl", "bdl_mlb", "bdl_nhl", "bdl_wnba",
+                           "bdl_ncaaf", "bdl_ncaab", "bdl_atp", "bdl_wta"]:
                 result = await func(years_back=seasons)
             elif source in ["balldontlie", "balldontlie_teams", "balldontlie_players", 
                            "balldontlie_injuries"]:

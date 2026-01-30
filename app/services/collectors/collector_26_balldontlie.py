@@ -516,36 +516,51 @@ class BallDontLieCollector(BaseCollector):
             return 0
         
         saved = 0
+        updated = 0
+        
         for team_data in teams:
             try:
                 external_id = f"bdl_{sport_code}_{team_data.get('id', '')}"
+                team_name = team_data.get("full_name") or team_data.get("name", "")
                 
-                # Check if exists
+                if not team_name or not team_name.strip():
+                    continue  # Skip teams with no name
+                
+                # Check if exists by external_id first
                 result = await session.execute(
-                    select(Team).where(
-                        and_(
-                            Team.sport_id == sport.id,
-                            Team.external_id == external_id
-                        )
-                    )
+                    select(Team).where(Team.external_id == external_id)
                 )
                 existing = result.scalar_one_or_none()
                 
+                # Also check by sport_id + name (to handle teams from other sources)
+                if not existing:
+                    result = await session.execute(
+                        select(Team).where(
+                            and_(
+                                Team.sport_id == sport.id,
+                                Team.name == team_name
+                            )
+                        )
+                    )
+                    existing = result.scalar_one_or_none()
+                
                 if existing:
-                    # Update
-                    existing.name = team_data.get("full_name") or team_data.get("name", "")
-                    existing.abbreviation = team_data.get("abbreviation", "")[:10]
-                    existing.city = team_data.get("city", "")
-                    existing.conference = team_data.get("conference", "")
-                    existing.division = team_data.get("division", "")
+                    # Update existing team with BallDontLie data
+                    if not existing.external_id or not existing.external_id.startswith("bdl_"):
+                        existing.external_id = external_id  # Add BDL external_id if not present
+                    existing.abbreviation = team_data.get("abbreviation", existing.abbreviation or "UNK")[:10]
+                    existing.city = team_data.get("city", "") or existing.city
+                    existing.conference = team_data.get("conference", "") or existing.conference
+                    existing.division = team_data.get("division", "") or existing.division
                     existing.updated_at = datetime.utcnow()
+                    updated += 1
                 else:
-                    # Create new
+                    # Create new team
                     team = Team(
                         id=uuid4(),
                         sport_id=sport.id,
                         external_id=external_id,
-                        name=team_data.get("full_name") or team_data.get("name", ""),
+                        name=team_name,
                         abbreviation=team_data.get("abbreviation", "UNK")[:10],
                         city=team_data.get("city", ""),
                         conference=team_data.get("conference", ""),
@@ -554,14 +569,27 @@ class BallDontLieCollector(BaseCollector):
                         is_active=True,
                     )
                     session.add(team)
-                    saved += 1
+                    # Flush immediately to catch constraint violations early
+                    try:
+                        await session.flush()
+                        saved += 1
+                    except Exception as flush_err:
+                        await session.rollback()
+                        logger.warning(f"[BallDontLie] Team {team_name} already exists, skipping: {flush_err}")
+                        continue
                 
             except Exception as e:
-                logger.error(f"[BallDontLie] Error saving team: {e}")
+                logger.error(f"[BallDontLie] Error saving team {team_data.get('name', 'unknown')}: {e}")
+                continue
         
-        await session.commit()
-        console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new teams[/green]")
-        return saved
+        try:
+            await session.commit()
+        except Exception as commit_err:
+            logger.error(f"[BallDontLie] Commit error: {commit_err}")
+            await session.rollback()
+            
+        console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new teams, updated {updated} existing[/green]")
+        return saved + updated
     
     # =========================================================================
     # PLAYER COLLECTION
@@ -628,24 +656,48 @@ class BallDontLieCollector(BaseCollector):
             return 0
         
         saved = 0
+        updated = 0
+        
         for player_data in players:
             try:
                 external_id = f"bdl_{sport_code}_{player_data.get('id', '')}"
+                player_name = f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip()
                 
-                # Check if exists
+                if not player_name:
+                    continue
+                
+                # Check if exists by external_id
                 result = await session.execute(
                     select(Player).where(Player.external_id == external_id)
                 )
                 existing = result.scalar_one_or_none()
                 
-                # Get team if available
+                # Get team - try BDL external_id first, then by name
                 team_id = None
                 if player_data.get("team"):
-                    team_ext_id = f"bdl_{sport_code}_{player_data['team'].get('id', '')}"
+                    team_api_data = player_data["team"]
+                    team_ext_id = f"bdl_{sport_code}_{team_api_data.get('id', '')}"
+                    
+                    # Try by external_id first
                     team_result = await session.execute(
                         select(Team).where(Team.external_id == team_ext_id)
                     )
                     team = team_result.scalar_one_or_none()
+                    
+                    # If not found, try by name
+                    if not team:
+                        team_name = team_api_data.get("full_name") or team_api_data.get("name")
+                        if team_name:
+                            team_result = await session.execute(
+                                select(Team).where(
+                                    and_(
+                                        Team.sport_id == sport.id,
+                                        Team.name == team_name
+                                    )
+                                )
+                            )
+                            team = team_result.scalar_one_or_none()
+                    
                     if team:
                         team_id = team.id
                 
@@ -668,20 +720,21 @@ class BallDontLieCollector(BaseCollector):
                 
                 if existing:
                     # Update
-                    existing.name = f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip()
-                    existing.position = player_data.get("position", "")
-                    existing.height = height
-                    existing.weight = player_data.get("weight_pounds") or player_data.get("weight")
-                    existing.jersey_number = player_data.get("jersey_number")
-                    existing.team_id = team_id
+                    existing.name = player_name
+                    existing.position = player_data.get("position", "") or existing.position
+                    existing.height = height or existing.height
+                    existing.weight = player_data.get("weight_pounds") or player_data.get("weight") or existing.weight
+                    existing.jersey_number = player_data.get("jersey_number") or existing.jersey_number
+                    existing.team_id = team_id or existing.team_id
                     existing.updated_at = datetime.utcnow()
+                    updated += 1
                 else:
                     # Create new
                     player = Player(
                         id=uuid4(),
                         external_id=external_id,
                         team_id=team_id,
-                        name=f"{player_data.get('first_name', '')} {player_data.get('last_name', '')}".strip(),
+                        name=player_name,
                         position=player_data.get("position", ""),
                         jersey_number=player_data.get("jersey_number"),
                         birth_date=birth_date,
@@ -693,11 +746,12 @@ class BallDontLieCollector(BaseCollector):
                     saved += 1
                 
             except Exception as e:
-                logger.error(f"[BallDontLie] Error saving player: {e}")
+                logger.error(f"[BallDontLie] Error saving player {player_data.get('first_name', '')} {player_data.get('last_name', '')}: {e}")
+                continue
         
         await session.commit()
-        console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new players[/green]")
-        return saved
+        console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new players, updated {updated} existing[/green]")
+        return saved + updated
     
     # =========================================================================
     # GAME COLLECTION

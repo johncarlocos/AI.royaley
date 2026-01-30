@@ -30,8 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
     Game, Team, Player, Sport, PlayerStats, TeamStats, 
-    Injury, Odds, Sportsbook, GameStatus
+    Odds, Sportsbook, GameStatus
 )
+from app.models.injury_models import Injury
 from app.services.collectors.base_collector import (
     BaseCollector, CollectorResult, register_collector
 )

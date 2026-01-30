@@ -452,11 +452,8 @@ class BallDontLieCollectorV2(BaseCollector):
                 
                 if existing:
                     existing.name = name
-                    existing.full_name = full_name
                     existing.abbreviation = abbr
                     existing.city = city
-                    existing.conference = conference
-                    existing.division = division
                     updated += 1
                 else:
                     team = Team(
@@ -464,11 +461,8 @@ class BallDontLieCollectorV2(BaseCollector):
                         external_id=external_id,
                         sport_id=sport.id,
                         name=name,
-                        full_name=full_name,
                         abbreviation=abbr,
                         city=city,
-                        conference=conference,
-                        division=division,
                         is_active=True,
                     )
                     session.add(team)
@@ -672,7 +666,6 @@ class BallDontLieCollectorV2(BaseCollector):
                     external_id=external_id,
                     sport_id=sport.id,
                     name=full_name,
-                    full_name=full_name,
                     abbreviation=last_name[:3].upper() if last_name else "TEN",
                     city=country,  # Store country as city for tennis
                     is_active=True,

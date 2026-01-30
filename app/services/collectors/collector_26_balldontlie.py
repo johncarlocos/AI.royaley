@@ -134,14 +134,14 @@ SPORT_CONFIG = {
             "teams": "/wnba/v1/teams",
             "players": "/wnba/v1/players",
             "games": "/wnba/v1/games",
-            "stats": "/wnba/v1/stats",
+            "stats": None,  # WNBA does NOT have /stats endpoint (404)
             "box_scores": "/wnba/v1/box_scores",
             "standings": "/wnba/v1/standings",
             "injuries": "/wnba/v1/player_injuries",
-            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            "odds": "/v2/odds",
         },
         "season_start": 2018,
-        "has_stats_endpoint": True,
+        "has_stats_endpoint": False,  # FIXED: WNBA has no stats endpoint
         "odds_uses_dates": True,
         "standings_requires_season": True,
     },
@@ -153,15 +153,15 @@ SPORT_CONFIG = {
             "teams": "/ncaaf/v1/teams",
             "players": "/ncaaf/v1/players",
             "games": "/ncaaf/v1/games",
-            "stats": "/ncaaf/v1/stats",
+            "stats": None,  # NCAAF does NOT have /stats endpoint (404)
             "box_scores": "/ncaaf/v1/box_scores",
-            "standings": "/ncaaf/v1/standings",
-            "injuries": "/ncaaf/v1/player_injuries",
-            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            "standings": None,  # NCAAF standings returns 400
+            "injuries": None,  # NCAAF does NOT have injuries endpoint (404)
+            "odds": "/v2/odds",
         },
         "season_start": 2015,
-        "has_stats_endpoint": True,
-        "standings_requires_season": True,
+        "has_stats_endpoint": False,  # FIXED: No stats endpoint
+        "standings_requires_season": False,
     },
     "NCAAB": {
         "code": "NCAAB",
@@ -171,16 +171,15 @@ SPORT_CONFIG = {
             "teams": "/ncaab/v1/teams",
             "players": "/ncaab/v1/players",
             "games": "/ncaab/v1/games",
-            "stats": "/ncaab/v1/stats",
+            "stats": None,  # NCAAB does NOT have /stats endpoint (404)
             "box_scores": "/ncaab/v1/box_scores",
-            "standings": "/ncaab/v1/standings",
-            "injuries": "/ncaab/v1/player_injuries",
-            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            "standings": None,  # NCAAB standings returns 400
+            "injuries": None,  # NCAAB does NOT have injuries endpoint (404)
+            "odds": "/v2/odds",
         },
         "season_start": 2015,
-        "has_stats_endpoint": True,
-        "odds_uses_dates": True,
-        "standings_requires_season": True,
+        "has_stats_endpoint": False,  # FIXED: No stats endpoint
+        "standings_requires_season": False,
     },
     "ATP": {
         "code": "ATP",

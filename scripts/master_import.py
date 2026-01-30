@@ -4558,7 +4558,7 @@ async def import_balldontlie_v2_sport(sport_code: str, years_back: int = 10) -> 
     """
     result = ImportResult(source=f"bdl_v2_{sport_code.lower()}")
     try:
-        from app.services.collectors.collector_26_balldontlie_v2 import BallDontLieCollectorV2
+        from app.services.collectors.collector_26_balldontlie import BallDontLieCollectorV2
         
         console.print(f"\n[bold cyan]BallDontLie V2 - {sport_code} Historical Import[/bold cyan]")
         console.print(f"[cyan]Years: {years_back}[/cyan]")

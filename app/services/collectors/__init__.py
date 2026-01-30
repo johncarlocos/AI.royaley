@@ -67,7 +67,8 @@ from app.services.collectors.collector_23_tennis_abstract import TennisAbstractC
 from app.services.collectors.collector_24_polymarket import PolymarketCollector
 from app.services.collectors.collector_25_kalshi import KalshiCollector
 # V2 collector (fixed for tennis and all data types)
-from app.services.collectors.collector_26_balldontlie_v2 import BallDontLieCollectorV2 as BallDontLieCollector
+# V2 collector (fixed for tennis and all data types)
+from app.services.collectors.collector_26_balldontlie import BallDontLieCollectorV2 as BallDontLieCollector
 from app.services.collectors.collector_27_weatherstack import WeatherstackCollector, weatherstack_collector
 
 # Create global collector instance

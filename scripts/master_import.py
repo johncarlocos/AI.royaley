@@ -12,6 +12,7 @@ Usage:
     python scripts/master_import.py --source pinnacle   # Specific source
     python scripts/master_import.py --source injuries   # Injuries from ESPN
     python scripts/master_import.py --source weather    # Weather for upcoming games
+    python scripts/master_import.py --source weatherstack # Weatherstack backup weather
     python scripts/master_import.py --source players    # Players/stats from nflfastR/cfbfastR
     python scripts/master_import.py --sport NFL         # Specific sport
     python scripts/master_import.py --daemon            # Run continuously
@@ -22,6 +23,7 @@ Tables filled by each source:
     odds_api      → odds, sportsbooks, games, teams
     pinnacle      → odds, odds_movements, closing_lines, sportsbooks
     weather       → weather_data
+    weatherstack  → weather_data (backup provider, historical back to 2015)
     sportsdb      → games, teams, venues
     nflfastr      → games, teams, players, player_stats, team_stats (NFL)
     cfbfastr      → games, teams, players, player_stats, team_stats (NCAAF)
@@ -1056,7 +1058,110 @@ async def import_weather_history(sports: List[str] = None, days: int = 365) -> I
     return result
 
 
-async def import_sportsdb(sports: List[str] = None) -> ImportResult:
+async def import_weatherstack(sports: List[str] = None, days: int = 7) -> ImportResult:
+    """Import weather for upcoming outdoor games using Weatherstack (backup provider).
+    
+    Fills: weather_data table
+    Outdoor Sports: NFL, NCAAF, CFL, MLB, ATP, WTA
+    
+    Uses Weatherstack API ($9.99/month Standard plan).
+    Backup provider to OpenWeatherMap with historical data back to 2015.
+    """
+    result = ImportResult(source="weatherstack")
+    try:
+        from app.services.collectors.collector_27_weatherstack import WeatherstackCollector
+        from app.core.database import db_manager
+        
+        # Outdoor sports that need weather data
+        OUTDOOR_SPORTS = ["NFL", "NCAAF", "CFL", "MLB", "ATP", "WTA"]
+        
+        if sports:
+            outdoor_sports = [s for s in sports if s.upper() in OUTDOOR_SPORTS]
+        else:
+            outdoor_sports = OUTDOOR_SPORTS
+        
+        if not outdoor_sports:
+            logger.info("[Weatherstack] No outdoor sports specified, skipping")
+            result.success = True
+            return result
+        
+        await db_manager.initialize()
+        
+        logger.info(f"[Weatherstack] Collecting weather for {len(outdoor_sports)} outdoor sports")
+        
+        async with WeatherstackCollector() as collector:
+            for sport in outdoor_sports:
+                try:
+                    weather_stats = await collector.collect_for_upcoming_games(
+                        sport_code=sport,
+                        days_ahead=days
+                    )
+                    if weather_stats:
+                        result.records += weather_stats.weather_saved
+                        logger.info(f"[Weatherstack] {sport}: {weather_stats.weather_saved} records saved")
+                except Exception as e:
+                    error_msg = f"{sport}: {str(e)[:50]}"
+                    result.errors.append(error_msg)
+                    logger.error(f"[Weatherstack] {error_msg}")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        logger.error(f"[Weatherstack] Fatal error: {e}")
+    return result
+
+
+async def import_weatherstack_history(sports: List[str] = None, days: int = 365) -> ImportResult:
+    """Import historical weather for past games using Weatherstack.
+    
+    Fills: weather_data table with historical weather
+    Outdoor Sports: NFL, NCAAF, CFL, MLB, ATP, WTA
+    
+    Uses Weatherstack API (Standard plan required) with data back to 2015.
+    Provides hourly historical data for precise game-time weather.
+    """
+    result = ImportResult(source="weatherstack_history")
+    try:
+        from app.services.collectors.collector_27_weatherstack import WeatherstackCollector
+        from app.core.database import db_manager
+        
+        OUTDOOR_SPORTS = ["NFL", "NCAAF", "CFL", "MLB", "ATP", "WTA"]
+        
+        if sports:
+            outdoor_sports = [s for s in sports if s.upper() in OUTDOOR_SPORTS]
+        else:
+            outdoor_sports = OUTDOOR_SPORTS
+        
+        if not outdoor_sports:
+            logger.info("[Weatherstack History] No outdoor sports specified, skipping")
+            result.success = True
+            return result
+        
+        await db_manager.initialize()
+        
+        logger.info(f"[Weatherstack History] Collecting historical weather for {len(outdoor_sports)} sports")
+        logger.info(f"[Weatherstack History] Looking back {days} days (~{days//365} years)")
+        
+        async with WeatherstackCollector() as collector:
+            for sport in outdoor_sports:
+                try:
+                    weather_stats = await collector.collect_historical_for_games(
+                        sport_code=sport,
+                        days_back=days
+                    )
+                    if weather_stats:
+                        result.records += weather_stats.weather_saved
+                        logger.info(f"[Weatherstack History] {sport}: {weather_stats.weather_saved} records saved")
+                except Exception as e:
+                    error_msg = f"{sport}: {str(e)[:50]}"
+                    result.errors.append(error_msg)
+                    logger.error(f"[Weatherstack History] {error_msg}")
+        
+        result.success = result.records >= 0
+    except Exception as e:
+        result.errors.append(str(e)[:100])
+        logger.error(f"[Weatherstack History] Fatal error: {e}")
+    return result(sports: List[str] = None) -> ImportResult:
     """Import from TheSportsDB."""
     result = ImportResult(source="sportsdb")
     try:
@@ -4501,6 +4606,7 @@ IMPORT_MAP = {
     "pinnacle": import_pinnacle,
     "pinnacle_full": import_pinnacle_full,
     "weather": import_weather,
+    "weatherstack": import_weatherstack,
     "sportsdb": import_sportsdb,
     "nflfastr": import_nflfastr,
     "cfbfastr": import_cfbfastr,
@@ -4542,6 +4648,7 @@ IMPORT_MAP = {
     "action_network_history": import_action_network_history,
     "nhl_api_history": import_nhl_api_history,
     "weather_history": import_weather_history,
+    "weatherstack_history": import_weatherstack_history,
     "sportsipy_history": import_sportsipy_history,
     "basketball_ref_history": import_basketball_ref_history,
     "cfbd_history": import_cfbd_history,

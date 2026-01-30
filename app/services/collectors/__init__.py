@@ -30,6 +30,7 @@ IMPLEMENTED COLLECTORS:
     collector_24_polymarket.py    - Polymarket (Prediction markets for crowd wisdom analysis) - FREE
     collector_25_kalshi.py        - Kalshi (CFTC-regulated prediction markets for sports events) - FREE
     collector_26_balldontlie.py   - BallDontLie (9 sports: NBA,NFL,MLB,NHL,WNBA,NCAAF,NCAAB,ATP,WTA) - $299/mo
+    collector_27_weatherstack.py  - Weatherstack (Backup weather provider, historical back to 2015) - $9.99/mo
 """
 
 from app.services.collectors.base_collector import (
@@ -66,6 +67,7 @@ from app.services.collectors.collector_23_tennis_abstract import TennisAbstractC
 from app.services.collectors.collector_24_polymarket import PolymarketCollector
 from app.services.collectors.collector_25_kalshi import KalshiCollector
 from app.services.collectors.collector_26_balldontlie import BallDontLieCollector, balldontlie_collector
+from app.services.collectors.collector_27_weatherstack import WeatherstackCollector, weatherstack_collector
 
 __all__ = [
     "BaseCollector",
@@ -123,4 +125,6 @@ __all__ = [
     "KalshiCollector",
     "BallDontLieCollector",
     "balldontlie_collector",
+    "WeatherstackCollector",
+    "weatherstack_collector",
 ]

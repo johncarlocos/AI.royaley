@@ -1110,6 +1110,145 @@ class BallDontLieCollectorV2(BaseCollector):
         return {"saved": saved, "skipped": skipped}
     
     # =========================================================================
+    # ODDS COLLECTION
+    # =========================================================================
+    
+    async def collect_odds(
+        self, 
+        sport_code: str, 
+        game_ids: List[int] = None,
+        dates: List[str] = None
+    ) -> List[Dict]:
+        """Collect betting odds for a sport."""
+        config = SPORT_CONFIG.get(sport_code)
+        if not config:
+            return []
+        
+        endpoint = config["endpoints"].get("odds")
+        if not endpoint:
+            console.print(f"[yellow]⚠️ No odds endpoint for {sport_code}[/yellow]")
+            return []
+        
+        params = {}
+        if game_ids:
+            params["game_ids[]"] = game_ids
+        if dates:
+            params["dates[]"] = dates
+        
+        console.print(f"[bold blue]💰 Collecting {sport_code} odds...[/bold blue]")
+        odds = await self._paginated_request(endpoint, sport_code, params, max_pages=50)
+        console.print(f"[green]✅ {sport_code}: {len(odds)} odds records collected[/green]")
+        return odds
+    
+    async def _get_or_create_sportsbook(
+        self, 
+        name: str, 
+        session: AsyncSession
+    ) -> Optional[Sportsbook]:
+        """Get or create sportsbook record."""
+        result = await session.execute(
+            select(Sportsbook).where(Sportsbook.name == name)
+        )
+        sportsbook = result.scalar_one_or_none()
+        
+        if not sportsbook:
+            sportsbook = Sportsbook(
+                id=uuid4(),
+                name=name,
+                api_key=name.lower().replace(" ", "_"),
+                is_active=True,
+            )
+            session.add(sportsbook)
+            await session.flush()
+        
+        return sportsbook
+    
+    async def save_odds(
+        self, 
+        odds_data: List[Dict], 
+        sport_code: str, 
+        session: AsyncSession
+    ) -> Dict[str, int]:
+        """Save odds to database."""
+        if not odds_data:
+            return {"saved": 0, "skipped": 0}
+        
+        saved = 0
+        skipped = 0
+        
+        for odds_record in odds_data:
+            try:
+                # Get game
+                game_api_id = odds_record.get("game", {}).get("id") or odds_record.get("game_id")
+                if not game_api_id:
+                    skipped += 1
+                    continue
+                
+                game_ext_id = f"bdl_{sport_code}_{game_api_id}"
+                result = await session.execute(
+                    select(Game).where(Game.external_id == game_ext_id)
+                )
+                game = result.scalar_one_or_none()
+                if not game:
+                    skipped += 1
+                    continue
+                
+                # Process each vendor/sportsbook
+                vendors = odds_record.get("odds", []) or [odds_record]
+                
+                for vendor_data in vendors:
+                    vendor_name = vendor_data.get("vendor") or vendor_data.get("sportsbook") or "unknown"
+                    
+                    # Get or create sportsbook
+                    sportsbook = await self._get_or_create_sportsbook(vendor_name, session)
+                    if not sportsbook:
+                        continue
+                    
+                    # Extract spread data
+                    spread_data = vendor_data.get("spread", {}) or {}
+                    spread_home = spread_data.get("home_line") or spread_data.get("home")
+                    spread_away = spread_data.get("away_line") or spread_data.get("away")
+                    spread_home_odds = spread_data.get("home_odds")
+                    spread_away_odds = spread_data.get("away_odds")
+                    
+                    # Extract total data
+                    total_data = vendor_data.get("total", {}) or {}
+                    total_line = total_data.get("line") or total_data.get("total")
+                    over_odds = total_data.get("over_odds") or total_data.get("over")
+                    under_odds = total_data.get("under_odds") or total_data.get("under")
+                    
+                    # Extract moneyline data
+                    ml_data = vendor_data.get("moneyline", {}) or {}
+                    ml_home = ml_data.get("home") or ml_data.get("home_odds")
+                    ml_away = ml_data.get("away") or ml_data.get("away_odds")
+                    
+                    # Create odds record
+                    odds = Odds(
+                        id=uuid4(),
+                        game_id=game.id,
+                        sportsbook_id=sportsbook.id,
+                        spread_home=float(spread_home) if spread_home is not None else None,
+                        spread_away=float(spread_away) if spread_away is not None else None,
+                        spread_home_odds=int(spread_home_odds) if spread_home_odds is not None else None,
+                        spread_away_odds=int(spread_away_odds) if spread_away_odds is not None else None,
+                        total_line=float(total_line) if total_line is not None else None,
+                        over_odds=int(over_odds) if over_odds is not None else None,
+                        under_odds=int(under_odds) if under_odds is not None else None,
+                        moneyline_home=int(ml_home) if ml_home is not None else None,
+                        moneyline_away=int(ml_away) if ml_away is not None else None,
+                    )
+                    session.add(odds)
+                    saved += 1
+            
+            except Exception as e:
+                logger.error(f"[BallDontLie] Error saving odds: {e}")
+                skipped += 1
+        
+        await session.commit()
+        console.print(f"[green]💾 {sport_code} Odds: {saved} saved, {skipped} skipped[/green]")
+        return {"saved": saved, "skipped": skipped}
+    
+    # =========================================================================
     # MAIN COLLECTION METHOD - PER SPORT
     # =========================================================================
     
@@ -1123,6 +1262,7 @@ class BallDontLieCollectorV2(BaseCollector):
         collect_stats: bool = True,
         collect_injuries: bool = True,
         collect_standings: bool = True,
+        collect_odds: bool = True,
     ) -> Dict[str, int]:
         """
         Collect all data for a single sport.
@@ -1151,6 +1291,7 @@ class BallDontLieCollectorV2(BaseCollector):
             "player_stats": {"saved": 0},
             "injuries": {"saved": 0},
             "team_stats": {"saved": 0},
+            "odds": {"saved": 0},
         }
         
         console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
@@ -1212,6 +1353,12 @@ class BallDontLieCollectorV2(BaseCollector):
                     standings = await self.collect_standings(sport_code)
                     if standings:
                         results["team_stats"] = await self.save_team_stats(standings, sport_code, session)
+                
+                # 7. Odds (current/recent only - API doesn't return historical odds)
+                if collect_odds:
+                    odds_data = await self.collect_odds(sport_code)
+                    if odds_data:
+                        results["odds"] = await self.save_odds(odds_data, sport_code, session)
         
         except Exception as e:
             logger.error(f"[BallDontLie] Error collecting {sport_code}: {e}")
@@ -1225,6 +1372,7 @@ class BallDontLieCollectorV2(BaseCollector):
         console.print(f"  Player Stats: {results['player_stats'].get('saved', 0)} saved")
         console.print(f"  Injuries: {results['injuries'].get('saved', 0)} saved")
         console.print(f"  Team Stats: {results['team_stats'].get('saved', 0)} saved")
+        console.print(f"  Odds: {results['odds'].get('saved', 0)} saved")
         
         return results
     

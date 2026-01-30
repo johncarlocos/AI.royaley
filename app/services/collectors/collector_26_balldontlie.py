@@ -63,10 +63,12 @@ SPORT_CONFIG = {
             "box_scores": "/nba/v1/box_scores",
             "standings": "/nba/v1/standings",
             "injuries": "/nba/v1/player_injuries",
-            "odds": "/nba/v1/odds",  # v1 not v2
+            "odds": "/nba/v2/odds",  # NBA uses v2 for odds!
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "odds_uses_dates": True,  # Uses dates[] parameter
+        "standings_requires_season": True,
     },
     "NFL": {
         "code": "NFL",
@@ -84,6 +86,9 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "odds_uses_dates": False,  # NFL uses season+week, NOT dates[]!
+        "odds_requires_week": True,
+        "standings_requires_season": True,
     },
     "MLB": {
         "code": "MLB",
@@ -101,6 +106,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "odds_uses_dates": True,
+        "standings_requires_season": True,
     },
     "NHL": {
         "code": "NHL",
@@ -118,6 +125,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": False,  # NHL uses box_scores instead
+        "odds_uses_dates": True,
+        "standings_requires_season": False,  # NHL standings works without season
     },
     "WNBA": {
         "code": "WNBA",
@@ -135,6 +144,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2018,
         "has_stats_endpoint": True,
+        "odds_uses_dates": True,
+        "standings_requires_season": True,
     },
     "NCAAF": {
         "code": "NCAAF",
@@ -152,6 +163,9 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "odds_uses_dates": False,  # NCAAF uses season+week like NFL
+        "odds_requires_week": True,
+        "standings_requires_season": True,
     },
     "NCAAB": {
         "code": "NCAAB",
@@ -169,6 +183,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "odds_uses_dates": True,
+        "standings_requires_season": True,
     },
     "ATP": {
         "code": "ATP",
@@ -183,6 +199,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
+        "odds_uses_dates": True,
+        "standings_requires_season": False,
     },
     "WTA": {
         "code": "WTA",
@@ -197,6 +215,8 @@ SPORT_CONFIG = {
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
+        "odds_uses_dates": True,
+        "standings_requires_season": False,
     },
 }
 
@@ -1235,7 +1255,7 @@ class BallDontLieCollectorV2(BaseCollector):
         return {"saved": saved, "skipped": skipped}
 
     # =========================================================================
-    # ODDS COLLECTION - FIXED (v1 not v2)
+    # ODDS COLLECTION - FIXED
     # =========================================================================
     
     async def collect_odds(
@@ -1243,9 +1263,16 @@ class BallDontLieCollectorV2(BaseCollector):
         sport_code: str, 
         dates: List[str] = None,
         game_ids: List[int] = None,
+        season: int = None,
+        week: int = None,
         max_pages: int = 10
     ) -> List[Dict]:
-        """Collect odds for a sport."""
+        """Collect odds for a sport.
+        
+        Different sports have different parameter requirements:
+        - NFL/NCAAF: requires (season AND week) OR game_ids[]
+        - Other sports: requires dates[] OR game_ids[]
+        """
         config = SPORT_CONFIG.get(sport_code)
         if not config:
             return []
@@ -1255,23 +1282,50 @@ class BallDontLieCollectorV2(BaseCollector):
             return []
         
         params = {}
-        # Odds endpoint requires dates[] or game_ids[]
-        if dates:
-            for d in dates[:10]:
-                params["dates[]"] = d
-        elif game_ids:
-            for gid in game_ids[:10]:
-                params["game_ids[]"] = gid
+        
+        # Check if this sport requires season+week (NFL, NCAAF)
+        requires_week = config.get("odds_requires_week", False)
+        uses_dates = config.get("odds_uses_dates", True)
+        
+        if requires_week:
+            # NFL/NCAAF: use season + week
+            if game_ids:
+                for gid in game_ids[:10]:
+                    params["game_ids[]"] = gid
+            else:
+                # Default to current season and recent weeks
+                current_year = datetime.now().year
+                s = season or current_year
+                # Try multiple weeks (current and recent)
+                weeks_to_try = [week] if week else list(range(1, 19))  # NFL has 18 weeks
+                
+                all_odds = []
+                for w in weeks_to_try[-4:]:  # Last 4 weeks
+                    params = {"season": s, "week": w}
+                    console.print(f"[bold blue]💰 Collecting {sport_code} odds (season={s}, week={w})...[/bold blue]")
+                    try:
+                        odds = await self._paginated_request(endpoint, sport_code, params, max_pages=2)
+                        all_odds.extend(odds)
+                        if odds:
+                            console.print(f"[green]✅ {sport_code} week {w}: {len(odds)} odds[/green]")
+                    except Exception as e:
+                        logger.warning(f"[BallDontLie] No odds for {sport_code} week {w}: {e}")
+                
+                console.print(f"[green]✅ {sport_code}: {len(all_odds)} total odds records collected[/green]")
+                return all_odds
         else:
-            # Default to recent dates
-            today = datetime.now()
-            for i in range(7):
-                d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-                params.setdefault("dates[]", [])
-                if isinstance(params["dates[]"], list):
-                    params["dates[]"].append(d)
-                else:
+            # Other sports: use dates[] or game_ids[]
+            if game_ids:
+                for gid in game_ids[:10]:
+                    params["game_ids[]"] = gid
+            elif dates:
+                for d in dates[:10]:
                     params["dates[]"] = d
+            else:
+                # Default to recent dates
+                today = datetime.now()
+                recent_date = (today - timedelta(days=3)).strftime("%Y-%m-%d")
+                params["dates[]"] = recent_date
         
         console.print(f"[bold blue]💰 Collecting {sport_code} odds...[/bold blue]")
         odds = await self._paginated_request(endpoint, sport_code, params, max_pages=max_pages)
@@ -1501,16 +1555,18 @@ class BallDontLieCollectorV2(BaseCollector):
                 # 6. Standings/Team Stats
                 if not is_tennis:
                     console.print(f"\n[bold]📊 Step 6: Collecting {sport_code} standings...[/bold]")
-                    standings = await self.collect_standings(sport_code)
+                    # Pass current season - some APIs require it (NBA)
+                    standings = await self.collect_standings(sport_code, season=current_year)
                     team_stat_results = await self.save_team_stats(standings, sport_code, session)
                     results["team_stats"] = team_stat_results
                 
                 # 7. Odds
                 console.print(f"\n[bold]📊 Step 7: Collecting {sport_code} odds...[/bold]")
-                # Get recent dates for odds
+                # Get recent dates for odds (for sports that use dates)
                 today = datetime.now()
                 dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-                odds = await self.collect_odds(sport_code, dates=dates)
+                # Pass season for NFL/NCAAF which require it
+                odds = await self.collect_odds(sport_code, dates=dates, season=current_year)
                 odds_results = await self.save_odds(odds, sport_code, session)
                 results["odds"] = odds_results
         

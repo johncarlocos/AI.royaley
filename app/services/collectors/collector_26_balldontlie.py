@@ -218,7 +218,14 @@ class BallDontLieCollectorV2(BaseCollector):
     """
     
     def __init__(self, api_key: str = None):
-        super().__init__()
+        super().__init__(
+            name="balldontlie",
+            base_url=BASE_URL,
+            rate_limit=100,
+            rate_window=60,
+            timeout=60.0,
+            max_retries=3,
+        )
         self.api_key = api_key or API_KEY
         self.client: Optional[httpx.AsyncClient] = None
         self.rate_limit_delay = 0.1  # 100ms between requests

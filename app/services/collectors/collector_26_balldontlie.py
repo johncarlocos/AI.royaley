@@ -50,6 +50,7 @@ Tables Filled:
 
 import asyncio
 import logging
+import os
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
@@ -79,8 +80,10 @@ console = Console()
 # BALLDONTLIE API CONFIGURATION
 # =============================================================================
 
-# API Key (from settings or direct)
-BALLDONTLIE_API_KEY = getattr(settings, 'BALLDONTLIE_API_KEY', None) or "a43e51d8-eba5-4ccd-b9dd-340d89d5e0c8"
+# API Key from settings (.env file) or environment variable
+BALLDONTLIE_API_KEY = settings.BALLDONTLIE_API_KEY or os.environ.get("BALLDONTLIE_API_KEY", "")
+if not BALLDONTLIE_API_KEY:
+    logger.warning("[BallDontLie] BALLDONTLIE_API_KEY not set in .env file or environment!")
 
 # Base URLs for each sport
 # API paths based on official documentation:
@@ -548,23 +551,35 @@ class BallDontLieCollector(BaseCollector):
                     # Update existing team with BallDontLie data
                     if not existing.external_id or not existing.external_id.startswith("bdl_"):
                         existing.external_id = external_id  # Add BDL external_id if not present
-                    existing.abbreviation = team_data.get("abbreviation", existing.abbreviation or "UNK")[:10]
-                    existing.city = team_data.get("city", "") or existing.city
-                    existing.conference = team_data.get("conference", "") or existing.conference
-                    existing.division = team_data.get("division", "") or existing.division
+                    
+                    # Safely convert to string (API sometimes returns integers for conference)
+                    abbr_val = team_data.get("abbreviation")
+                    city_val = team_data.get("city")
+                    conf_val = team_data.get("conference")
+                    div_val = team_data.get("division")
+                    
+                    existing.abbreviation = (str(abbr_val)[:10] if abbr_val is not None else existing.abbreviation) or "UNK"
+                    existing.city = str(city_val) if city_val is not None else (existing.city or "")
+                    existing.conference = str(conf_val) if conf_val is not None else (existing.conference or "")
+                    existing.division = str(div_val) if div_val is not None else (existing.division or "")
                     existing.updated_at = datetime.utcnow()
                     updated += 1
                 else:
-                    # Create new team
+                    # Create new team - safely convert all values to strings
+                    abbr_val = team_data.get("abbreviation", "UNK")
+                    city_val = team_data.get("city", "")
+                    conf_val = team_data.get("conference", "")
+                    div_val = team_data.get("division", "")
+                    
                     team = Team(
                         id=uuid4(),
                         sport_id=sport.id,
                         external_id=external_id,
                         name=team_name,
-                        abbreviation=team_data.get("abbreviation", "UNK")[:10],
-                        city=team_data.get("city", ""),
-                        conference=team_data.get("conference", ""),
-                        division=team_data.get("division", ""),
+                        abbreviation=str(abbr_val)[:10] if abbr_val else "UNK",
+                        city=str(city_val) if city_val else "",
+                        conference=str(conf_val) if conf_val else "",
+                        division=str(div_val) if div_val else "",
                         elo_rating=1500.0,
                         is_active=True,
                     )
@@ -580,6 +595,11 @@ class BallDontLieCollector(BaseCollector):
                 
             except Exception as e:
                 logger.error(f"[BallDontLie] Error saving team {team_data.get('name', 'unknown')}: {e}")
+                # Rollback to recover session from error state
+                try:
+                    await session.rollback()
+                except:
+                    pass
                 continue
         
         try:
@@ -719,27 +739,34 @@ class BallDontLieCollector(BaseCollector):
                         pass
                 
                 if existing:
-                    # Update
+                    # Update - safely convert values
                     existing.name = player_name
-                    existing.position = player_data.get("position", "") or existing.position
-                    existing.height = height or existing.height
-                    existing.weight = player_data.get("weight_pounds") or player_data.get("weight") or existing.weight
-                    existing.jersey_number = player_data.get("jersey_number") or existing.jersey_number
+                    pos_val = player_data.get("position")
+                    existing.position = str(pos_val) if pos_val is not None else (existing.position or "")
+                    existing.height = str(height) if height is not None else existing.height
+                    weight_val = player_data.get("weight_pounds") or player_data.get("weight")
+                    existing.weight = str(weight_val) if weight_val is not None else existing.weight
+                    jersey_val = player_data.get("jersey_number")
+                    existing.jersey_number = str(jersey_val) if jersey_val is not None else existing.jersey_number
                     existing.team_id = team_id or existing.team_id
                     existing.updated_at = datetime.utcnow()
                     updated += 1
                 else:
-                    # Create new
+                    # Create new - safely convert values
+                    pos_val = player_data.get("position", "")
+                    weight_val = player_data.get("weight_pounds") or player_data.get("weight")
+                    jersey_val = player_data.get("jersey_number")
+                    
                     player = Player(
                         id=uuid4(),
                         external_id=external_id,
                         team_id=team_id,
                         name=player_name,
-                        position=player_data.get("position", ""),
-                        jersey_number=player_data.get("jersey_number"),
+                        position=str(pos_val) if pos_val else "",
+                        jersey_number=str(jersey_val) if jersey_val is not None else None,
                         birth_date=birth_date,
-                        height=height,
-                        weight=player_data.get("weight_pounds") or player_data.get("weight"),
+                        height=str(height) if height else None,
+                        weight=str(weight_val) if weight_val else None,
                         is_active=True,
                     )
                     session.add(player)
@@ -747,9 +774,19 @@ class BallDontLieCollector(BaseCollector):
                 
             except Exception as e:
                 logger.error(f"[BallDontLie] Error saving player {player_data.get('first_name', '')} {player_data.get('last_name', '')}: {e}")
+                # Rollback to recover session from error state
+                try:
+                    await session.rollback()
+                except:
+                    pass
                 continue
         
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as commit_err:
+            logger.error(f"[BallDontLie] Player commit error: {commit_err}")
+            await session.rollback()
+            
         console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new players, updated {updated} existing[/green]")
         return saved + updated
     
@@ -890,13 +927,18 @@ class BallDontLieCollector(BaseCollector):
                     status = GameStatus.POSTPONED
                 
                 if existing:
-                    # Update
-                    existing.home_score = game_data.get("home_team_score")
-                    existing.away_score = game_data.get("visitor_team_score") or game_data.get("away_team_score")
+                    # Update - safely handle scores (might be None or int)
+                    home_score = game_data.get("home_team_score")
+                    away_score = game_data.get("visitor_team_score") or game_data.get("away_team_score")
+                    existing.home_score = int(home_score) if home_score is not None else existing.home_score
+                    existing.away_score = int(away_score) if away_score is not None else existing.away_score
                     existing.status = status
                     existing.updated_at = datetime.utcnow()
                 else:
-                    # Create new
+                    # Create new - safely handle scores
+                    home_score = game_data.get("home_team_score")
+                    away_score = game_data.get("visitor_team_score") or game_data.get("away_team_score")
+                    
                     game = Game(
                         id=uuid4(),
                         sport_id=sport.id,
@@ -905,16 +947,27 @@ class BallDontLieCollector(BaseCollector):
                         away_team_id=away_team_id,
                         scheduled_at=scheduled_at,
                         status=status,
-                        home_score=game_data.get("home_team_score"),
-                        away_score=game_data.get("visitor_team_score") or game_data.get("away_team_score"),
+                        home_score=int(home_score) if home_score is not None else None,
+                        away_score=int(away_score) if away_score is not None else None,
                     )
                     session.add(game)
                     saved += 1
                 
             except Exception as e:
                 logger.error(f"[BallDontLie] Error saving game: {e}")
+                # Rollback to recover session from error state
+                try:
+                    await session.rollback()
+                except:
+                    pass
+                continue
         
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as commit_err:
+            logger.error(f"[BallDontLie] Games commit error: {commit_err}")
+            await session.rollback()
+            
         console.print(f"[green][BallDontLie] {sport_code}: Saved {saved} new games[/green]")
         return saved
     

@@ -745,9 +745,17 @@ class BallDontLieCollector(BaseCollector):
                     existing.position = str(pos_val) if pos_val is not None else (existing.position or "")
                     existing.height = str(height) if height is not None else existing.height
                     weight_val = player_data.get("weight_pounds") or player_data.get("weight")
-                    existing.weight = str(weight_val) if weight_val is not None else existing.weight
+                    if weight_val is not None:
+                        try:
+                            existing.weight = int(weight_val)
+                        except (ValueError, TypeError):
+                            pass
                     jersey_val = player_data.get("jersey_number")
-                    existing.jersey_number = str(jersey_val) if jersey_val is not None else existing.jersey_number
+                    if jersey_val is not None:
+                        try:
+                            existing.jersey_number = int(jersey_val)
+                        except (ValueError, TypeError):
+                            pass
                     existing.team_id = team_id or existing.team_id
                     existing.updated_at = datetime.utcnow()
                     updated += 1
@@ -757,16 +765,31 @@ class BallDontLieCollector(BaseCollector):
                     weight_val = player_data.get("weight_pounds") or player_data.get("weight")
                     jersey_val = player_data.get("jersey_number")
                     
+                    # Safe integer conversion
+                    jersey_int = None
+                    if jersey_val is not None:
+                        try:
+                            jersey_int = int(jersey_val)
+                        except (ValueError, TypeError):
+                            jersey_int = None
+                    
+                    weight_int = None
+                    if weight_val is not None:
+                        try:
+                            weight_int = int(weight_val)
+                        except (ValueError, TypeError):
+                            weight_int = None
+                    
                     player = Player(
                         id=uuid4(),
                         external_id=external_id,
                         team_id=team_id,
                         name=player_name,
                         position=str(pos_val) if pos_val else "",
-                        jersey_number=str(jersey_val) if jersey_val is not None else None,
+                        jersey_number=jersey_int,
                         birth_date=birth_date,
                         height=str(height) if height else None,
-                        weight=str(weight_val) if weight_val else None,
+                        weight=weight_int,
                         is_active=True,
                     )
                     session.add(player)

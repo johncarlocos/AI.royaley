@@ -8,7 +8,7 @@ import asyncio
 import sys
 sys.path.insert(0, '/app')
 
-from app.core.database import get_session
+from app.core.database import get_db
 from app.services.collectors.collector_26_balldontlie import BallDontLieCollector
 
 async def main():
@@ -18,7 +18,7 @@ async def main():
     
     collector = BallDontLieCollector()
     
-    async for session in get_session():
+    async for session in get_db():
         try:
             # 1. Test Standings/Team Stats
             print("\n📊 Step 1: Collecting NBA standings...")

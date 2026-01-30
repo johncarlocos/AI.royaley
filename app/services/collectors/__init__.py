@@ -66,8 +66,12 @@ from app.services.collectors.collector_22_kaggle import KaggleCollector, kaggle_
 from app.services.collectors.collector_23_tennis_abstract import TennisAbstractCollector, tennis_abstract_collector
 from app.services.collectors.collector_24_polymarket import PolymarketCollector
 from app.services.collectors.collector_25_kalshi import KalshiCollector
-from app.services.collectors.collector_26_balldontlie import BallDontLieCollector, balldontlie_collector
+# V2 collector (fixed for tennis and all data types)
+from app.services.collectors.collector_26_balldontlie_v2 import BallDontLieCollectorV2 as BallDontLieCollector
 from app.services.collectors.collector_27_weatherstack import WeatherstackCollector, weatherstack_collector
+
+# Create global collector instance
+balldontlie_collector = BallDontLieCollector()
 
 __all__ = [
     "BaseCollector",

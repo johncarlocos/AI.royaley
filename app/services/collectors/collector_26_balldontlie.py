@@ -82,7 +82,7 @@ SPORT_CONFIG = {
             "box_scores": "/nfl/v1/box_scores",
             "standings": "/nfl/v1/standings",
             "injuries": "/nfl/v1/player_injuries",
-            "odds": "/nfl/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
@@ -102,7 +102,7 @@ SPORT_CONFIG = {
             "box_scores": "/mlb/v1/box_scores",
             "standings": "/mlb/v1/standings",
             "injuries": "/mlb/v1/player_injuries",
-            "odds": "/mlb/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
@@ -121,7 +121,7 @@ SPORT_CONFIG = {
             "box_scores": "/nhl/v1/box_scores",  # Use this for player stats
             "standings": "/nhl/v1/standings",
             "injuries": "/nhl/v1/player_injuries",
-            "odds": "/nhl/v1/odds",  # v1 not v2!
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": False,  # NHL uses box_scores instead
@@ -140,7 +140,7 @@ SPORT_CONFIG = {
             "box_scores": "/wnba/v1/box_scores",
             "standings": "/wnba/v1/standings",
             "injuries": "/wnba/v1/player_injuries",
-            "odds": "/wnba/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2018,
         "has_stats_endpoint": True,
@@ -159,7 +159,7 @@ SPORT_CONFIG = {
             "box_scores": "/ncaaf/v1/box_scores",
             "standings": "/ncaaf/v1/standings",
             "injuries": "/ncaaf/v1/player_injuries",
-            "odds": "/ncaaf/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
@@ -179,7 +179,7 @@ SPORT_CONFIG = {
             "box_scores": "/ncaab/v1/box_scores",
             "standings": "/ncaab/v1/standings",
             "injuries": "/ncaab/v1/player_injuries",
-            "odds": "/ncaab/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
@@ -195,7 +195,7 @@ SPORT_CONFIG = {
             "matches": "/atp/v1/matches",
             "tournaments": "/atp/v1/tournaments",
             "rankings": "/atp/v1/rankings",
-            "odds": "/atp/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
@@ -211,7 +211,7 @@ SPORT_CONFIG = {
             "matches": "/wta/v1/matches",
             "tournaments": "/wta/v1/tournaments",
             "rankings": "/wta/v1/rankings",
-            "odds": "/wta/v1/odds",
+            "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
@@ -806,7 +806,9 @@ class BallDontLieCollectorV2(BaseCollector):
                 if date_str:
                     try:
                         if "T" in str(date_str):
-                            scheduled_at = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                            # Convert to naive datetime (remove timezone) for database
+                            scheduled_at = dt.replace(tzinfo=None)
                         else:
                             scheduled_at = datetime.strptime(str(date_str)[:10], "%Y-%m-%d")
                     except:

@@ -26,7 +26,7 @@ from uuid import uuid4
 
 import httpx
 from rich.console import Console
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
@@ -641,41 +641,57 @@ class BallDontLieCollectorV2(BaseCollector):
             await session.flush()
         
         saved = 0
+        skipped = 0
         
         for player_data in players:
-            player_id = player_data.get("id")
-            if not player_id:
-                continue
-            
-            external_id = f"bdl_{sport_code}_player_{player_id}"
-            
-            # Check if pseudo-team exists
-            result = await session.execute(
-                select(Team).where(Team.external_id == external_id)
-            )
-            existing = result.scalar_one_or_none()
-            
-            if not existing:
+            try:
+                player_id = player_data.get("id")
+                if not player_id:
+                    continue
+                
+                external_id = f"bdl_{sport_code}_player_{player_id}"
                 first_name = player_data.get("first_name", "")
                 last_name = player_data.get("last_name", "")
                 full_name = f"{first_name} {last_name}".strip()
-                country = player_data.get("country") or player_data.get("citizenship") or ""
                 
-                team = Team(
-                    id=uuid4(),
-                    external_id=external_id,
-                    sport_id=sport.id,
-                    name=full_name,
-                    abbreviation=last_name[:3].upper() if last_name else "TEN",
-                    city=country,  # Store country as city for tennis
-                    is_active=True,
+                if not full_name:
+                    skipped += 1
+                    continue
+                
+                # Check if pseudo-team exists by external_id OR by name (unique constraint)
+                result = await session.execute(
+                    select(Team).where(
+                        and_(
+                            Team.sport_id == sport.id,
+                            or_(Team.external_id == external_id, Team.name == full_name)
+                        )
+                    )
                 )
-                session.add(team)
-                saved += 1
+                existing = result.scalar_one_or_none()
+                
+                if not existing:
+                    country = player_data.get("country") or player_data.get("citizenship") or ""
+                    
+                    team = Team(
+                        id=uuid4(),
+                        external_id=external_id,
+                        sport_id=sport.id,
+                        name=full_name,
+                        abbreviation=last_name[:3].upper() if last_name else "TEN",
+                        city=country,  # Store country as city for tennis
+                        is_active=True,
+                    )
+                    session.add(team)
+                    saved += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                logger.warning(f"[BallDontLie] Error creating pseudo-team: {e}")
+                skipped += 1
         
         await session.commit()
-        console.print(f"[green]💾 {sport_code} Pseudo-Teams: {saved} created[/green]")
-        return {"saved": saved}
+        console.print(f"[green]💾 {sport_code} Pseudo-Teams: {saved} created, {skipped} skipped[/green]")
+        return {"saved": saved, "skipped": skipped}
 
     # =========================================================================
     # GAMES COLLECTION

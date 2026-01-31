@@ -135,13 +135,15 @@ SPORT_CONFIG = {
             "players": "/wnba/v1/players",
             "games": "/wnba/v1/games",
             "stats": None,  # WNBA does NOT have /stats endpoint (404)
+            "player_stats": "/wnba/v1/player_stats",  # FIXED: Use /player_stats endpoint
             "box_scores": "/wnba/v1/box_scores",
             "standings": "/wnba/v1/standings",
             "injuries": "/wnba/v1/player_injuries",
             "odds": "/v2/odds",
         },
-        "season_start": 2018,
-        "has_stats_endpoint": False,  # FIXED: WNBA has no stats endpoint
+        "season_start": 2008,
+        "has_stats_endpoint": False,
+        "has_player_stats_endpoint": True,  # NEW: /player_stats works
         "odds_uses_dates": True,
         "standings_requires_season": True,
     },
@@ -154,13 +156,15 @@ SPORT_CONFIG = {
             "players": "/ncaaf/v1/players",
             "games": "/ncaaf/v1/games",
             "stats": None,  # NCAAF does NOT have /stats endpoint (404)
+            "player_stats": "/ncaaf/v1/player_stats",  # FIXED: Use /player_stats endpoint
             "box_scores": "/ncaaf/v1/box_scores",
             "standings": None,  # NCAAF standings returns 400
             "injuries": None,  # NCAAF does NOT have injuries endpoint (404)
             "odds": "/v2/odds",
         },
-        "season_start": 2015,
-        "has_stats_endpoint": False,  # FIXED: No stats endpoint
+        "season_start": 2004,
+        "has_stats_endpoint": False,
+        "has_player_stats_endpoint": True,  # NEW: /player_stats works
         "standings_requires_season": False,
     },
     "NCAAB": {
@@ -172,13 +176,15 @@ SPORT_CONFIG = {
             "players": "/ncaab/v1/players",
             "games": "/ncaab/v1/games",
             "stats": None,  # NCAAB does NOT have /stats endpoint (404)
+            "player_stats": "/ncaab/v1/player_stats",  # FIXED: Use /player_stats endpoint
             "box_scores": "/ncaab/v1/box_scores",
             "standings": None,  # NCAAB standings returns 400
             "injuries": None,  # NCAAB does NOT have injuries endpoint (404)
             "odds": "/v2/odds",
         },
-        "season_start": 2015,
-        "has_stats_endpoint": False,  # FIXED: No stats endpoint
+        "season_start": 2002,
+        "has_stats_endpoint": False,
+        "has_player_stats_endpoint": True,  # NEW: /player_stats works
         "standings_requires_season": False,
     },
     "ATP": {
@@ -227,10 +233,15 @@ STAT_FIELDS = {
     "MLB": ["hits", "at_bats", "runs", "rbi", "hr", "bb", "k", "avg", "era"],
     "NHL": ["goals", "assists", "points", "plus_minus", "penalty_minutes", "shots_on_goal", 
             "hits", "blocked_shots", "takeaways", "giveaways", "time_on_ice"],
-    "WNBA": ["pts", "reb", "ast", "stl", "blk", "turnover", "min"],
-    "NCAAF": ["passing_yards", "rushing_yards", "receiving_yards", "passing_touchdowns",
-              "rushing_touchdowns", "receiving_touchdowns"],
-    "NCAAB": ["pts", "reb", "ast", "stl", "blk", "min"],
+    "WNBA": ["pts", "reb", "ast", "stl", "blk", "turnover", "min", "fgm", "fga",
+             "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "pf", "plus_minus"],
+    "NCAAF": ["passing_completions", "passing_attempts", "passing_yards", "passing_touchdowns",
+              "passing_interceptions", "passing_qbr", "passing_rating",
+              "rushing_attempts", "rushing_yards", "rushing_touchdowns", "rushing_long",
+              "receptions", "receiving_yards", "receiving_touchdowns", "receiving_targets", "receiving_long",
+              "total_tackles", "solo_tackles", "tackles_for_loss", "sacks", "interceptions", "passes_defended"],
+    "NCAAB": ["pts", "reb", "ast", "stl", "blk", "turnover", "min", "fgm", "fga",
+              "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "pf"],
     "ATP": [],
     "WTA": [],
 }
@@ -932,6 +943,35 @@ class BallDontLieCollectorV2(BaseCollector):
         console.print(f"[green]✅ {sport_code}: {len(stats)} stat records collected[/green]")
         return stats
 
+    async def collect_player_stats_endpoint(
+        self, 
+        sport_code: str, 
+        season: int = None,
+        max_pages: int = 500
+    ) -> List[Dict]:
+        """Collect player stats using /player_stats endpoint (NCAAB, NCAAF, WNBA).
+        
+        This is different from /stats - it uses 'season' param (not 'seasons[]')
+        and is available for sports that don't have the /stats endpoint.
+        """
+        config = SPORT_CONFIG.get(sport_code)
+        if not config:
+            return []
+        
+        endpoint = config["endpoints"].get("player_stats")
+        if not endpoint:
+            console.print(f"[yellow]⚠️ {sport_code} does not have /player_stats endpoint[/yellow]")
+            return []
+        
+        params = {}
+        if season:
+            params["season"] = season
+        
+        console.print(f"[bold blue]📊 Collecting {sport_code} player_stats ({season or 'all'})...[/bold blue]")
+        stats = await self._paginated_request(endpoint, sport_code, params, max_pages)
+        console.print(f"[green]✅ {sport_code}: {len(stats)} player_stats records collected[/green]")
+        return stats
+
     async def collect_box_scores(
         self, 
         sport_code: str, 
@@ -1551,15 +1591,22 @@ class BallDontLieCollectorV2(BaseCollector):
                 
                 # 4. Player Stats
                 console.print(f"\n[bold]📊 Step 4: Collecting {sport_code} player stats...[/bold]")
+                has_player_stats = config.get("has_player_stats_endpoint", False)
+                
                 if has_stats and not is_tennis:
-                    # Use /stats endpoint
+                    # Use /stats endpoint (NBA, NFL, MLB)
                     for year in range(start_year, current_year + 1):
                         stats = await self.collect_player_stats(sport_code, season=year)
                         stat_results = await self.save_player_stats(stats, sport_code, session)
                         results["player_stats"]["saved"] += stat_results.get("saved", 0)
-                elif not is_tennis:
-                    # Use box_scores (for NHL and fallback)
-                    # Get recent game dates for box scores
+                elif has_player_stats and not is_tennis:
+                    # Use /player_stats endpoint (NCAAB, NCAAF, WNBA)
+                    for year in range(start_year, current_year + 1):
+                        stats = await self.collect_player_stats_endpoint(sport_code, season=year)
+                        stat_results = await self.save_player_stats(stats, sport_code, session)
+                        results["player_stats"]["saved"] += stat_results.get("saved", 0)
+                elif not is_tennis and not has_stats and not has_player_stats:
+                    # Use box_scores as last fallback (for NHL)
                     today = datetime.now()
                     dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(30)]
                     box_scores = await self.collect_box_scores(sport_code, dates=dates)

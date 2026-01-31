@@ -1,13 +1,13 @@
 """
 ROYALEY - Database Models
 Complete SQLAlchemy 2.0 models for the enterprise sports prediction platform.
-45 tables supporting all system functionality including injuries.
+54 tables: 45 original + 9 master data unification tables.
 """
 
 from app.models.models import (
     # Base
     Base,
-    
+
     # Enums
     UserRole,
     GameStatus,
@@ -17,14 +17,14 @@ from app.models.models import (
     HealthStatus,
     MLFramework,
     TaskStatus,
-    
+
     # Users & Authentication
     User,
     Session,
     APIKey,
     UserPreference,
     AuditLog,
-    
+
     # Sports Data
     Sport,
     Team,
@@ -35,32 +35,32 @@ from app.models.models import (
     GameFeature,
     TeamStats,
     PlayerStats,
-    
+
     # Odds & Markets
     Sportsbook,
     Odds,
     OddsMovement,
     ClosingLine,
     ConsensusLine,
-    
+
     # Predictions
     Prediction,
     PredictionResult,
     PlayerProp,
     ShapExplanation,
-    
+
     # ML Models
     MLModel,
     TrainingRun,
     ModelPerformance,
     FeatureImportance,
     CalibrationModel,
-    
+
     # Betting
     Bankroll,
     Bet,
     BankrollTransaction,
-    
+
     # System
     SystemSetting,
     ScheduledTask,
@@ -68,12 +68,12 @@ from app.models.models import (
     DataQualityCheck,
     SystemHealthSnapshot,
     BacktestRun,
-    
+
     # Additional Tracking
     ELOHistory,
     CLVRecord,
     LineMovementAlert,
-    
+
     # Additional Tables (41-43)
     Notification,
     RateLimitLog,
@@ -86,10 +86,23 @@ from app.models.injury_models import (
     GameInjury,
 )
 
+# Import master data models (46-54)
+from app.models.master_data_models import (
+    SourceRegistry,
+    MappingAuditLog,
+    MasterTeam,
+    MasterPlayer,
+    MasterGame,
+    TeamMapping,
+    PlayerMapping,
+    GameMapping,
+    VenueMapping,
+)
+
 __all__ = [
     # Base
     "Base",
-    
+
     # Enums
     "UserRole",
     "GameStatus",
@@ -99,14 +112,14 @@ __all__ = [
     "HealthStatus",
     "MLFramework",
     "TaskStatus",
-    
+
     # Users & Authentication
     "User",
     "Session",
     "APIKey",
     "UserPreference",
     "AuditLog",
-    
+
     # Sports Data
     "Sport",
     "Team",
@@ -117,32 +130,32 @@ __all__ = [
     "GameFeature",
     "TeamStats",
     "PlayerStats",
-    
+
     # Odds & Markets
     "Sportsbook",
     "Odds",
     "OddsMovement",
     "ClosingLine",
     "ConsensusLine",
-    
+
     # Predictions
     "Prediction",
     "PredictionResult",
     "PlayerProp",
     "ShapExplanation",
-    
+
     # ML Models
     "MLModel",
     "TrainingRun",
     "ModelPerformance",
     "FeatureImportance",
     "CalibrationModel",
-    
+
     # Betting
     "Bankroll",
     "Bet",
     "BankrollTransaction",
-    
+
     # System
     "SystemSetting",
     "ScheduledTask",
@@ -150,18 +163,29 @@ __all__ = [
     "DataQualityCheck",
     "SystemHealthSnapshot",
     "BacktestRun",
-    
+
     # Additional Tracking
     "ELOHistory",
     "CLVRecord",
     "LineMovementAlert",
-    
+
     # Additional Tables
     "Notification",
     "RateLimitLog",
     "WeatherData",
-    
+
     # Injury Tables (44-45)
     "Injury",
     "GameInjury",
+
+    # Master Data Architecture (46-54)
+    "SourceRegistry",
+    "MappingAuditLog",
+    "MasterTeam",
+    "MasterPlayer",
+    "MasterGame",
+    "TeamMapping",
+    "PlayerMapping",
+    "GameMapping",
+    "VenueMapping",
 ]

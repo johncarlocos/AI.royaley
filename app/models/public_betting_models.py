@@ -41,6 +41,7 @@ class PublicBetting(Base):
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("games.id", ondelete="CASCADE"), nullable=True)
+    master_game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     sport_code: Mapped[str] = mapped_column(String(10), nullable=False)  # NFL, NBA, etc.
     
     # Game identification (for matching)

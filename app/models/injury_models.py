@@ -55,6 +55,10 @@ class Injury(Base):
     source: Mapped[str] = mapped_column(String(50), default="espn")
     external_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     
+    # Master data links
+    master_player_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    master_team_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    
     # Relationships
     player: Mapped[Optional["Player"]] = relationship("Player", back_populates="injuries")
     team: Mapped["Team"] = relationship("Team", back_populates="injuries")

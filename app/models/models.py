@@ -230,6 +230,7 @@ class Team(Base):
     elo_rating: Mapped[float] = mapped_column(Float, default=1500.0)
     logo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    master_team_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     
@@ -261,6 +262,7 @@ class Player(Base):
     height: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    master_player_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     
@@ -342,6 +344,9 @@ class Game(Base):
     # Weather data (JSONB)
     weather: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     
+    # Master data link
+    master_game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     
@@ -395,6 +400,8 @@ class PlayerStats(Base):
     season_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("seasons.id"), nullable=True)
     stat_type: Mapped[str] = mapped_column(String(50), nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
+    master_game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    master_player_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     player: Mapped["Player"] = relationship(back_populates="stats")
@@ -436,6 +443,7 @@ class Odds(Base):
     over_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     under_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_opening: Mapped[bool] = mapped_column(Boolean, default=False)
+    master_game_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     
     game: Mapped["Game"] = relationship(back_populates="odds")

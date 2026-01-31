@@ -548,6 +548,36 @@ class BallDontLieCollectorV2(BaseCollector):
                         if team:
                             team_id = team.id
                 
+                # Tennis fallback: link player to their pseudo-team
+                if team_id is None and sport_code in ("ATP", "WTA"):
+                    # Try by pseudo-team external_id pattern
+                    pseudo_ext_id = f"bdl_{sport_code}_player_{player_id}"
+                    result = await session.execute(
+                        select(Team).where(Team.external_id == pseudo_ext_id)
+                    )
+                    team = result.scalar_one_or_none()
+                    if team:
+                        team_id = team.id
+                    else:
+                        # Fallback: match by name
+                        first_name = player_data.get("first_name", "")
+                        last_name = player_data.get("last_name", "")
+                        player_full_name = f"{first_name} {last_name}".strip()
+                        if player_full_name:
+                            result = await session.execute(
+                                select(Team).where(
+                                    and_(
+                                        Team.sport_id == (
+                                            select(Sport.id).where(Sport.code == sport_code).scalar_subquery()
+                                        ),
+                                        Team.name == player_full_name
+                                    )
+                                )
+                            )
+                            team = result.scalar_one_or_none()
+                            if team:
+                                team_id = team.id
+                
                 # Player fields
                 first_name = player_data.get("first_name", "")
                 last_name = player_data.get("last_name", "")
@@ -620,7 +650,13 @@ class BallDontLieCollectorV2(BaseCollector):
         sport_code: str, 
         session: AsyncSession
     ) -> Dict[str, int]:
-        """Create pseudo-teams for tennis players - one at a time to handle duplicates."""
+        """Create pseudo-teams for tennis players using raw SQL to avoid session conflicts.
+        
+        Uses INSERT ... WHERE NOT EXISTS to skip duplicates without breaking the session.
+        All inserts are batched and committed once at the end.
+        """
+        from sqlalchemy import text
+        
         if sport_code not in ["ATP", "WTA"]:
             return {"saved": 0}
         
@@ -638,7 +674,7 @@ class BallDontLieCollectorV2(BaseCollector):
                 is_active=True
             )
             session.add(sport)
-            await session.commit()
+            await session.flush()  # flush only, don't commit yet
         
         saved = 0
         skipped = 0
@@ -647,6 +683,7 @@ class BallDontLieCollectorV2(BaseCollector):
             try:
                 player_id = player_data.get("id")
                 if not player_id:
+                    skipped += 1
                     continue
                 
                 external_id = f"bdl_{sport_code}_player_{player_id}"
@@ -658,38 +695,35 @@ class BallDontLieCollectorV2(BaseCollector):
                     skipped += 1
                     continue
                 
-                # Check if pseudo-team exists by external_id OR by name (unique constraint)
-                result = await session.execute(
-                    select(Team).where(
-                        and_(
-                            Team.sport_id == sport.id,
-                            or_(Team.external_id == external_id, Team.name == full_name)
-                        )
-                    )
-                )
-                existing = result.scalar_one_or_none()
+                country = player_data.get("country") or player_data.get("citizenship") or ""
+                abbr = last_name[:3].upper() if last_name else "TEN"
                 
-                if not existing:
-                    country = player_data.get("country") or player_data.get("citizenship") or ""
-                    
-                    team = Team(
-                        id=uuid4(),
-                        external_id=external_id,
-                        sport_id=sport.id,
-                        name=full_name,
-                        abbreviation=last_name[:3].upper() if last_name else "TEN",
-                        city=country,  # Store country as city for tennis
-                        is_active=True,
-                    )
-                    session.add(team)
-                    await session.commit()  # Commit each one individually
+                # Use raw SQL with NOT EXISTS to skip duplicates without session conflicts
+                result = await session.execute(
+                    text(
+                        """INSERT INTO teams (id, sport_id, external_id, name, abbreviation, city, is_active, created_at, updated_at)
+                        SELECT gen_random_uuid(), s.id, 
+                               CAST(:ext_id AS VARCHAR), CAST(:name AS VARCHAR), 
+                               CAST(:abbr AS VARCHAR), CAST(:country AS VARCHAR), 
+                               true, now(), now()
+                        FROM sports s WHERE s.code = CAST(:sport AS VARCHAR)
+                        AND NOT EXISTS (
+                            SELECT 1 FROM teams t WHERE t.sport_id = s.id 
+                            AND (t.external_id = CAST(:ext_id AS VARCHAR) OR t.name = CAST(:name AS VARCHAR))
+                        )"""
+                    ),
+                    {"ext_id": external_id, "name": full_name, "abbr": abbr, "country": country, "sport": sport_code}
+                )
+                if result.rowcount > 0:
                     saved += 1
                 else:
                     skipped += 1
             except Exception as e:
-                await session.rollback()  # Rollback on error
-                logger.warning(f"[BallDontLie] Error creating pseudo-team: {e}")
+                logger.warning(f"[BallDontLie] Error creating pseudo-team for {full_name}: {e}")
                 skipped += 1
+        
+        # Single commit at the end
+        await session.commit()
         
         console.print(f"[green]💾 {sport_code} Pseudo-Teams: {saved} created, {skipped} skipped[/green]")
         return {"saved": saved, "skipped": skipped}

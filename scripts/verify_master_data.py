@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 async def verify():
     await db_manager.initialize()
 
-    async with db_manager.async_session() as session:
+    async with db_manager.session() as session:
 
         print("\n" + "=" * 70)
         print("   ROYALEY — MASTER DATA ARCHITECTURE VERIFICATION REPORT")
         print("=" * 70)
 
-        # ── 1. TABLE COUNTS ──
+        # —— 1. TABLE COUNTS ——
         print("\n📊 TABLE COUNTS:")
         tables = [
             "master_teams", "master_players", "master_games",
@@ -45,7 +45,7 @@ async def verify():
             except Exception:
                 print(f"  {t:<30} {'⚠️ TABLE NOT FOUND':>10}")
 
-        # ── 2. MAPPING COVERAGE ──
+        # —— 2. MAPPING COVERAGE ——
         print("\n📈 MAPPING COVERAGE:")
 
         # Teams mapped
@@ -104,7 +104,7 @@ async def verify():
         except Exception as e:
             print(f"  ⚠️  Public betting: {e}")
 
-        # ── 3. DEDUPLICATION ──
+        # —— 3. DEDUPLICATION ——
         print("\n🔗 DEDUPLICATION:")
         try:
             r = await session.execute(text("SELECT COUNT(*) FROM games"))
@@ -133,7 +133,7 @@ async def verify():
         except Exception:
             pass
 
-        # ── 4. MASTER ODDS HEALTH ──
+        # —— 4. MASTER ODDS HEALTH ——
         print("\n📉 MASTER ODDS BY SPORT:")
         try:
             r = await session.execute(text("""
@@ -155,7 +155,7 @@ async def verify():
         except Exception as e:
             print(f"  ⚠️  Master odds query failed: {e}")
 
-        # ── 5. SPORTSBOOK PRIORITIES ──
+        # —— 5. SPORTSBOOK PRIORITIES ——
         print("\n📚 SPORTSBOOK PRIORITIES:")
         try:
             r = await session.execute(text("""
@@ -172,7 +172,7 @@ async def verify():
         except Exception:
             pass
 
-        # ── 6. ML TRAINING READINESS ──
+        # —— 6. ML TRAINING READINESS ——
         print("\n🤖 ML TRAINING READINESS:")
         try:
             r = await session.execute(text("SELECT COUNT(*) FROM ml_training_dataset"))
@@ -203,7 +203,7 @@ async def verify():
             print(f"  ⚠️  ML training dataset not yet built: {e}")
             print(f"      Run: python -m scripts.build_ml_training_data")
 
-        # ── 7. ML TRAINING BY SPORT ──
+        # —— 7. ML TRAINING BY SPORT ——
         print("\n🏆 ML-TRAINABLE BY SPORT:")
         try:
             r = await session.execute(text("""
@@ -223,7 +223,7 @@ async def verify():
         except Exception:
             pass
 
-        # ── 8. FEATURE COMPLETENESS ──
+        # —— 8. FEATURE COMPLETENESS ——
         print("\n📋 FEATURE COMPLETENESS (ML Training Dataset):")
         try:
             r = await session.execute(text("""
@@ -260,8 +260,6 @@ async def verify():
         print("\n" + "=" * 70)
         print("   VERIFICATION COMPLETE")
         print("=" * 70 + "\n")
-
-    await db_manager.close()
 
 
 def _pct(part, total):

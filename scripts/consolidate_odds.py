@@ -77,9 +77,9 @@ async def consolidate_odds():
     """Main function: consolidate all raw odds into master_odds."""
     await db_manager.initialize()
 
-    async with db_manager.async_session() as session:
+    async with db_manager.session() as session:
 
-        # ── Step 1: Count raw odds with master_game_id ──
+        # —— Step 1: Count raw odds with master_game_id ——
         count_result = await session.execute(text(
             "SELECT COUNT(*) FROM odds WHERE master_game_id IS NOT NULL"
         ))
@@ -90,7 +90,7 @@ async def consolidate_odds():
             logger.warning("⚠️  No odds have master_game_id yet. Run auto_map_existing_data.py first.")
             return
 
-        # ── Step 2: Get all distinct sports from master_games ──
+        # —— Step 2: Get all distinct sports from master_games ——
         sport_result = await session.execute(text(
             "SELECT DISTINCT sport_code FROM master_games ORDER BY sport_code"
         ))
@@ -107,7 +107,7 @@ async def consolidate_odds():
 
         await session.commit()
 
-        # ── Final report ──
+        # —— Final report ——
         logger.info("")
         logger.info("=" * 60)
         logger.info("✅ ODDS CONSOLIDATION COMPLETE")
@@ -118,8 +118,6 @@ async def consolidate_odds():
             ratio = total_raw / total_master
             logger.info(f"   Dedup ratio:           {ratio:>12.1f}x")
         logger.info("=" * 60)
-
-    await db_manager.close()
 
 
 async def _consolidate_sport(session, sport_code: str) -> tuple:

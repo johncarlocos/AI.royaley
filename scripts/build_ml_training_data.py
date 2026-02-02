@@ -56,9 +56,9 @@ async def build_training_data(sport_filter=None, season_filter=None, completed_o
     """Build or rebuild the ml_training_dataset table."""
     await db_manager.initialize()
 
-    async with db_manager.async_session() as session:
+    async with db_manager.session() as session:
 
-        # ── Get eligible master games ──
+        # —— Get eligible master games ——
         conditions = []
         params = {}
 
@@ -82,10 +82,9 @@ async def build_training_data(sport_filter=None, season_filter=None, completed_o
 
         if total == 0:
             logger.warning("⚠️  No master games match filters. Nothing to build.")
-            await db_manager.close()
             return
 
-        # ── Process in batches ──
+        # —— Process in batches ——
         batch_size = 1000
         offset = 0
         total_built = 0
@@ -138,27 +137,27 @@ async def build_training_data(sport_filter=None, season_filter=None, completed_o
                     total_points = home_score + away_score
                     score_margin = home_score - away_score
 
-                # ── ODDS from master_odds (aggregated) ──
+                # —— ODDS from master_odds (aggregated) ——
                 odds_features = await _get_odds_features(session, mgid)
-                if odds_features["num_books_with_odds"]:
+                if odds_features["nb"]:
                     total_with_odds += 1
 
-                # ── PUBLIC BETTING ──
+                # —— PUBLIC BETTING ——
                 betting = await _get_betting_features(session, mgid)
-                if betting["public_spread_home_pct"] is not None:
+                if betting["psh"] is not None:
                     total_with_betting += 1
 
-                # ── WEATHER ──
+                # —— WEATHER ——
                 weather = await _get_weather_features(session, mgid)
-                if weather["temperature_f"] is not None:
+                if weather["tf"] is not None:
                     total_with_weather += 1
 
-                # ── INJURIES ──
+                # —— INJURIES ——
                 injuries = await _get_injury_features(session, home_mt_id, away_mt_id, scheduled_at)
-                if injuries["home_injuries_out"] is not None:
+                if injuries["hio"] is not None:
                     total_with_injuries += 1
 
-                # ── UPSERT into ml_training_dataset ──
+                # —— UPSERT into ml_training_dataset ——
                 await session.execute(text("""
                     INSERT INTO ml_training_dataset (
                         id, master_game_id, sport_code, season, scheduled_at,
@@ -253,7 +252,7 @@ async def build_training_data(sport_filter=None, season_filter=None, completed_o
             offset += batch_size
             logger.info(f"   ... built {total_built:,}/{total:,} rows")
 
-        # ── Final report ──
+        # —— Final report ——
         logger.info("")
         logger.info("=" * 60)
         logger.info("✅ ML TRAINING DATASET BUILD COMPLETE")
@@ -267,7 +266,6 @@ async def build_training_data(sport_filter=None, season_filter=None, completed_o
         logger.info(f"   🏆 ML-TRAINABLE ROWS:  {ml_ready:>10,}")
         logger.info("=" * 60)
 
-    await db_manager.close()
     return total_built
 
 
@@ -478,7 +476,7 @@ async def export_to_csv(output_path: str, sport_filter=None, season_filter=None)
     """Export ml_training_dataset to CSV for H2O / AutoGluon."""
     await db_manager.initialize()
 
-    async with db_manager.async_session() as session:
+    async with db_manager.session() as session:
         conditions = []
         params = {}
         if sport_filter:
@@ -535,8 +533,6 @@ async def export_to_csv(output_path: str, sport_filter=None, season_filter=None)
                 writer.writerow(list(row))
 
         logger.info(f"✅ Exported {len(rows):,} rows to {output_path}")
-
-    await db_manager.close()
 
 
 # =============================================================================

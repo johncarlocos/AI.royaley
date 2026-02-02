@@ -1,6 +1,6 @@
 """
-BallDontLie API Collector - V2 FIXED
-=====================================
+BallDontLie API Collector - V2 UPDATED
+=======================================
 Comprehensive multi-sport data collector from BallDontLie API.
 $299/month plan - Full access to all sports and endpoints.
 
@@ -9,12 +9,13 @@ Supports 9 sports:
 - WNBA, NCAAF, NCAAB (Team Sports)
 - ATP, WTA (Tennis - Individual Sport)
 
-FIXES:
-- Correct API endpoint paths per sport
-- NHL uses box_scores (no /stats endpoint)
-- Odds use v1 endpoint (not v2)
-- Proper injury handling with nested teams array
-- Tennis pseudo-teams for game linking
+UPDATES (from manual Docker import sessions):
+- Team stats endpoints per sport (NBA/NCAAB/WNBA/NFL/MLB)
+- ATP match_stats endpoint (/atp/v1/match_stats)
+- ATP/WTA rankings collection
+- Tennis historical odds from The Odds API (5yr backfill, 2022+)
+- WNBA injury date parsing (expected_return)
+- Correct endpoint paths verified against live API
 """
 
 import asyncio
@@ -26,7 +27,7 @@ from uuid import uuid4
 
 import httpx
 from rich.console import Console
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import select, and_, func, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
@@ -47,6 +48,7 @@ console = Console()
 
 API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BASE_URL = "https://api.balldontlie.io"
+THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", os.getenv("ODDS_API_KEY", ""))
 
 # Sport configurations with CORRECT API paths
 # Based on official BallDontLie API documentation
@@ -64,9 +66,12 @@ SPORT_CONFIG = {
             "standings": "/nba/v1/standings",
             "injuries": "/nba/v1/player_injuries",
             "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            # DISCOVERED: Season averages per team (25 fields)
+            "team_season_averages": "/nba/v1/team_season_averages/general",
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "has_team_stats_endpoint": True,
         "odds_uses_dates": True,  # Uses dates[] parameter
         "standings_requires_season": True,
     },
@@ -83,9 +88,12 @@ SPORT_CONFIG = {
             "standings": "/nfl/v1/standings",
             "injuries": "/nfl/v1/player_injuries",
             "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            # DISCOVERED: Per-game team stats (30 fields, paginated)
+            "team_stats": "/nfl/v1/team_stats",
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "has_team_stats_endpoint": True,
         "standings_requires_season": True,
     },
     "MLB": {
@@ -101,9 +109,12 @@ SPORT_CONFIG = {
             "standings": "/mlb/v1/standings",
             "injuries": "/mlb/v1/player_injuries",
             "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            # DISCOVERED: Season stats per team (36 fields batting+pitching+fielding)
+            "team_season_stats": "/mlb/v1/teams/season_stats",
         },
         "season_start": 2015,
         "has_stats_endpoint": True,
+        "has_team_stats_endpoint": True,
         "odds_uses_dates": True,
         "standings_requires_season": True,
     },
@@ -140,10 +151,13 @@ SPORT_CONFIG = {
             "standings": "/wnba/v1/standings",
             "injuries": "/wnba/v1/player_injuries",
             "odds": "/v2/odds",
+            # DISCOVERED: Season averages per team (18 fields)
+            "team_season_stats": "/wnba/v1/team_season_stats",
         },
         "season_start": 2008,
         "has_stats_endpoint": False,
         "has_player_stats_endpoint": True,  # NEW: /player_stats works
+        "has_team_stats_endpoint": True,
         "odds_uses_dates": True,
         "standings_requires_season": True,
     },
@@ -181,10 +195,13 @@ SPORT_CONFIG = {
             "standings": None,  # NCAAB standings returns 400
             "injuries": None,  # NCAAB does NOT have injuries endpoint (404)
             "odds": "/v2/odds",
+            # DISCOVERED: Per-game team stats (17 fields, paginated)
+            "team_stats": "/ncaab/v1/team_stats",
         },
         "season_start": 2002,
         "has_stats_endpoint": False,
         "has_player_stats_endpoint": True,  # NEW: /player_stats works
+        "has_team_stats_endpoint": True,
         "standings_requires_season": False,
     },
     "ATP": {
@@ -197,9 +214,12 @@ SPORT_CONFIG = {
             "tournaments": "/atp/v1/tournaments",
             "rankings": "/atp/v1/rankings",
             "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            # DISCOVERED: Match-level stats (14 fields, filter set_number==0)
+            "match_stats": "/atp/v1/match_stats",
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
+        "has_match_stats": True,
         "odds_uses_dates": True,
         "standings_requires_season": False,
     },
@@ -213,9 +233,11 @@ SPORT_CONFIG = {
             "tournaments": "/wta/v1/tournaments",
             "rankings": "/wta/v1/rankings",
             "odds": "/v2/odds",  # FIXED: unified endpoint per BDL docs
+            # WTA does NOT have match_stats endpoint (404)
         },
         "season_start": 2017,
         "has_stats_endpoint": False,
+        "has_match_stats": False,
         "odds_uses_dates": True,
         "standings_requires_season": False,
     },
@@ -246,6 +268,90 @@ STAT_FIELDS = {
     "WTA": [],
 }
 
+# Team stats field mappings per sport (DISCOVERED via manual testing)
+TEAM_STATS_FIELDS = {
+    "NBA": [
+        "pts", "reb", "ast", "stl", "blk", "tov", "fgm", "fga", "fg_pct",
+        "fg3m", "fg3a", "fg3_pct", "ftm", "fta", "ft_pct", "oreb", "dreb",
+        "pf", "pfd", "min", "w", "l", "gp", "w_pct", "blka",
+    ],
+    "NCAAB": [
+        "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct",
+        "ftm", "fta", "ft_pct", "oreb", "dreb", "reb",
+        "ast", "stl", "blk", "turnovers", "fouls",
+    ],
+    "WNBA": [
+        "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct",
+        "ftm", "fta", "ft_pct", "oreb", "dreb", "reb",
+        "ast", "stl", "blk", "turnover", "pts", "games_played",
+    ],
+    "NFL": [
+        "first_downs", "first_downs_passing", "first_downs_rushing", "first_downs_penalty",
+        "third_down_conversions", "third_down_attempts", "fourth_down_conversions", "fourth_down_attempts",
+        "total_offensive_plays", "total_yards", "yards_per_play", "total_drives",
+        "net_passing_yards", "passing_completions", "passing_attempts", "yards_per_pass",
+        "sacks", "sack_yards_lost", "rushing_yards", "rushing_attempts", "yards_per_rush_attempt",
+        "red_zone_scores", "red_zone_attempts", "penalties", "penalty_yards",
+        "turnovers", "fumbles_lost", "interceptions_thrown", "defensive_touchdowns", "possession_time",
+    ],
+    "MLB": [
+        "gp", "batting_ab", "batting_r", "batting_h", "batting_2b", "batting_3b",
+        "batting_hr", "batting_rbi", "batting_tb", "batting_bb", "batting_so",
+        "batting_sb", "batting_avg", "batting_obp", "batting_slg", "batting_ops",
+        "pitching_w", "pitching_l", "pitching_era", "pitching_sv", "pitching_cg",
+        "pitching_sho", "pitching_qs", "pitching_ip", "pitching_h", "pitching_er",
+        "pitching_hr", "pitching_bb", "pitching_k", "pitching_oba", "pitching_whip",
+        "fielding_e", "fielding_fp", "fielding_tc", "fielding_po", "fielding_a",
+    ],
+}
+
+# ATP match_stats fields (set_number == 0 = match totals)
+TENNIS_MATCH_STAT_FIELDS = [
+    "serve_rating", "aces", "double_faults", "first_serve_pct",
+    "first_serve_points_won_pct", "second_serve_points_won_pct",
+    "break_points_saved_pct", "return_rating", "first_return_won_pct",
+    "second_return_won_pct", "break_points_converted_pct",
+    "total_service_points_won_pct", "total_return_points_won_pct",
+    "total_points_won_pct",
+]
+
+# Tennis tournament date ranges for The Odds API historical backfill
+ATP_TOURNAMENT_DATES = [
+    ("tennis_atp_aus_open_singles", "01-10", "01-30"),
+    ("tennis_atp_qatar_open", "01-15", "01-28"),
+    ("tennis_atp_dubai", "02-20", "03-05"),
+    ("tennis_atp_indian_wells", "03-05", "03-20"),
+    ("tennis_atp_miami_open", "03-19", "04-02"),
+    ("tennis_atp_monte_carlo_masters", "04-06", "04-16"),
+    ("tennis_atp_madrid_open", "04-25", "05-08"),
+    ("tennis_atp_italian_open", "05-08", "05-22"),
+    ("tennis_atp_french_open", "05-22", "06-12"),
+    ("tennis_atp_wimbledon", "06-27", "07-16"),
+    ("tennis_atp_canadian_open", "08-01", "08-14"),
+    ("tennis_atp_cincinnati_open", "08-11", "08-22"),
+    ("tennis_atp_us_open", "08-22", "09-10"),
+    ("tennis_atp_china_open", "09-28", "10-10"),
+    ("tennis_atp_shanghai_masters", "10-02", "10-16"),
+    ("tennis_atp_paris_masters", "10-25", "11-05"),
+]
+
+WTA_TOURNAMENT_DATES = [
+    ("tennis_wta_aus_open_singles", "01-10", "01-30"),
+    ("tennis_wta_qatar_open", "02-06", "02-18"),
+    ("tennis_wta_dubai", "02-16", "02-26"),
+    ("tennis_wta_indian_wells", "03-05", "03-20"),
+    ("tennis_wta_miami_open", "03-19", "04-02"),
+    ("tennis_wta_madrid_open", "04-25", "05-08"),
+    ("tennis_wta_italian_open", "05-08", "05-22"),
+    ("tennis_wta_french_open", "05-22", "06-12"),
+    ("tennis_wta_wimbledon", "06-27", "07-16"),
+    ("tennis_wta_canadian_open", "08-01", "08-14"),
+    ("tennis_wta_cincinnati_open", "08-11", "08-22"),
+    ("tennis_wta_us_open", "08-22", "09-10"),
+    ("tennis_wta_china_open", "09-25", "10-08"),
+    ("tennis_wta_wuhan_open", "10-04", "10-15"),
+]
+
 
 # =============================================================================
 # BALLDONTLIE COLLECTOR V2
@@ -273,7 +379,9 @@ class BallDontLieCollectorV2(BaseCollector):
             max_retries=3,
         )
         self.api_key = api_key or API_KEY
+        self.odds_api_key = THE_ODDS_API_KEY
         self.client: Optional[httpx.AsyncClient] = None
+        self.odds_client: Optional[httpx.AsyncClient] = None
         self.rate_limit_delay = 0.1  # 100ms between requests
         
         if self.api_key:
@@ -282,6 +390,11 @@ class BallDontLieCollectorV2(BaseCollector):
         else:
             logger.warning("[BallDontLie] No API key configured!")
             console.print("[red][BallDontLie] No API key configured![/red]")
+        
+        if self.odds_api_key:
+            logger.info(f"[BallDontLie] The Odds API key configured: {self.odds_api_key[:8]}...")
+        else:
+            logger.info("[BallDontLie] No Odds API key - tennis odds will be skipped")
     
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -297,10 +410,22 @@ class BallDontLieCollectorV2(BaseCollector):
         return self.client
     
     async def close(self):
-        """Close HTTP client."""
+        """Close HTTP clients."""
         if self.client:
             await self.client.aclose()
             self.client = None
+        if self.odds_client:
+            await self.odds_client.aclose()
+            self.odds_client = None
+    
+    async def _get_odds_client(self) -> httpx.AsyncClient:
+        """Get or create HTTP client for The Odds API."""
+        if not self.odds_client:
+            self.odds_client = httpx.AsyncClient(
+                base_url="https://api.the-odds-api.com",
+                timeout=30.0,
+            )
+        return self.odds_client
     
     async def validate(self, data: Any) -> bool:
         """Validate collected data."""
@@ -1093,9 +1218,506 @@ class BallDontLieCollectorV2(BaseCollector):
         return {"saved": saved, "skipped": skipped}
 
     # =========================================================================
+    # TEAM STATS COLLECTION - NEW (discovered endpoints)
+    # =========================================================================
+
+    async def collect_team_stats_endpoint(
+        self,
+        sport_code: str,
+        season: int = None,
+        max_pages: int = 100,
+    ) -> List[Dict]:
+        """Collect team stats from sport-specific endpoints.
+        
+        Discovered endpoints:
+        - NBA: /nba/v1/team_season_averages/general (season averages, 25 fields)
+        - NCAAB: /ncaab/v1/team_stats (per-game, paginated, 17 fields)
+        - WNBA: /wnba/v1/team_season_stats (season averages, 18 fields)
+        - NFL: /nfl/v1/team_stats (per-game, paginated, 30 fields)
+        - MLB: /mlb/v1/teams/season_stats (season stats, 36 fields)
+        """
+        config = SPORT_CONFIG.get(sport_code)
+        if not config or not config.get("has_team_stats_endpoint"):
+            return []
+        
+        # Pick the correct endpoint key per sport
+        endpoint = None
+        for key in ["team_season_averages", "team_stats", "team_season_stats"]:
+            endpoint = config["endpoints"].get(key)
+            if endpoint:
+                break
+        
+        if not endpoint:
+            return []
+        
+        params = {}
+        if season:
+            params["season"] = season
+        
+        console.print(f"[bold blue]📊 Collecting {sport_code} team stats ({season or 'current'})...[/bold blue]")
+        
+        # NFL and NCAAB return per-game stats (paginated)
+        # NBA, WNBA, MLB return season averages (not paginated same way)
+        if sport_code in ("NFL", "NCAAB"):
+            stats = await self._paginated_request(endpoint, sport_code, params, max_pages)
+        else:
+            response = await self._api_request(endpoint, params, sport_code)
+            stats = response.get("data", []) if response else []
+        
+        console.print(f"[green]✅ {sport_code}: {len(stats)} team stat records collected[/green]")
+        return stats
+    
+    async def save_team_stats_from_endpoint(
+        self,
+        stats_data: List[Dict],
+        sport_code: str,
+        session: AsyncSession,
+    ) -> Dict[str, int]:
+        """Save team stats from sport-specific endpoints."""
+        if not stats_data:
+            return {"saved": 0, "skipped": 0}
+        
+        fields = TEAM_STATS_FIELDS.get(sport_code, [])
+        if not fields:
+            return {"saved": 0, "skipped": 0}
+        
+        saved = 0
+        skipped = 0
+        
+        for record in stats_data:
+            try:
+                team_data = record.get("team") or {}
+                team_api_id = team_data.get("id")
+                
+                if not team_api_id:
+                    skipped += 1
+                    continue
+                
+                team_ext_id = f"bdl_{sport_code}_{team_api_id}"
+                result = await session.execute(
+                    select(Team).where(Team.external_id == team_ext_id)
+                )
+                team = result.scalar_one_or_none()
+                
+                if not team:
+                    skipped += 1
+                    continue
+                
+                gp = record.get("gp") or record.get("games_played") or 0
+                try:
+                    gp = int(gp)
+                except:
+                    gp = 0
+                
+                for stat_type in fields:
+                    value = record.get(stat_type)
+                    if value is not None:
+                        try:
+                            if isinstance(value, str) and ":" in value:
+                                parts = value.split(":")
+                                value = float(parts[0]) + float(parts[1]) / 60
+                            else:
+                                value = float(value)
+                        except:
+                            continue
+                        
+                        stat = TeamStats(
+                            id=uuid4(),
+                            team_id=team.id,
+                            stat_type=stat_type,
+                            value=value,
+                            games_played=gp,
+                        )
+                        session.add(stat)
+                        saved += 1
+            
+            except Exception as e:
+                logger.error(f"[BallDontLie] Error saving team stat: {e}")
+                skipped += 1
+        
+        await session.commit()
+        console.print(f"[green]💾 {sport_code} Team Stats (endpoint): {saved} saved, {skipped} skipped[/green]")
+        return {"saved": saved, "skipped": skipped}
+
+    # =========================================================================
+    # TENNIS MATCH STATS - NEW (ATP only, WTA returns 404)
+    # =========================================================================
+
+    async def collect_tennis_match_stats(
+        self,
+        sport_code: str,
+        season: int = None,
+        max_pages: int = 500,
+    ) -> List[Dict]:
+        """Collect ATP match_stats. Only ATP has this endpoint; WTA returns 404."""
+        config = SPORT_CONFIG.get(sport_code)
+        if not config or not config.get("has_match_stats"):
+            return []
+        
+        endpoint = config["endpoints"].get("match_stats")
+        if not endpoint:
+            return []
+        
+        params = {}
+        if season:
+            params["season"] = season
+        
+        console.print(f"[bold blue]🎾 Collecting {sport_code} match stats ({season or 'current'})...[/bold blue]")
+        all_stats = await self._paginated_request(endpoint, sport_code, params, max_pages)
+        
+        # Filter to match totals only (set_number == 0)
+        match_totals = [s for s in all_stats if s.get("set_number") == 0]
+        console.print(f"[green]✅ {sport_code}: {len(match_totals)} match stat totals (from {len(all_stats)} raw)[/green]")
+        return match_totals
+    
+    async def save_tennis_match_stats(
+        self,
+        stats_data: List[Dict],
+        sport_code: str,
+        session: AsyncSession,
+    ) -> Dict[str, int]:
+        """Save tennis match stats as PlayerStats records."""
+        if not stats_data:
+            return {"saved": 0, "skipped": 0}
+        
+        saved = 0
+        skipped = 0
+        
+        for record in stats_data:
+            try:
+                player_data = record.get("player") or {}
+                player_api_id = player_data.get("id") or record.get("player_id")
+                
+                if not player_api_id:
+                    skipped += 1
+                    continue
+                
+                player_ext_id = f"bdl_{sport_code}_{player_api_id}"
+                result = await session.execute(
+                    select(Player).where(Player.external_id == player_ext_id)
+                )
+                player = result.scalar_one_or_none()
+                
+                if not player:
+                    skipped += 1
+                    continue
+                
+                game_id = None
+                match_api_id = record.get("match_id") or record.get("game_id")
+                if match_api_id:
+                    game_ext_id = f"bdl_{sport_code}_{match_api_id}"
+                    result = await session.execute(
+                        select(Game).where(Game.external_id == game_ext_id)
+                    )
+                    game = result.scalar_one_or_none()
+                    if game:
+                        game_id = game.id
+                
+                for stat_type in TENNIS_MATCH_STAT_FIELDS:
+                    value = record.get(stat_type)
+                    if value is not None:
+                        try:
+                            value = float(value)
+                        except:
+                            continue
+                        
+                        stat = PlayerStats(
+                            id=uuid4(),
+                            player_id=player.id,
+                            game_id=game_id,
+                            stat_type=stat_type,
+                            value=value,
+                        )
+                        session.add(stat)
+                        saved += 1
+            
+            except Exception as e:
+                logger.error(f"[BallDontLie] Error saving tennis match stat: {e}")
+                skipped += 1
+        
+        await session.commit()
+        console.print(f"[green]💾 {sport_code} Match Stats: {saved} saved, {skipped} skipped[/green]")
+        return {"saved": saved, "skipped": skipped}
+
+    # =========================================================================
+    # TENNIS RANKINGS - NEW (ATP and WTA)
+    # =========================================================================
+
+    async def collect_tennis_rankings(
+        self,
+        sport_code: str,
+        season: int = None,
+    ) -> List[Dict]:
+        """Collect ATP/WTA rankings."""
+        config = SPORT_CONFIG.get(sport_code)
+        if not config:
+            return []
+        
+        endpoint = config["endpoints"].get("rankings")
+        if not endpoint:
+            return []
+        
+        params = {}
+        if season:
+            params["season"] = season
+        
+        console.print(f"[bold blue]🏆 Collecting {sport_code} rankings ({season or 'current'})...[/bold blue]")
+        rankings = await self._paginated_request(endpoint, sport_code, params, max_pages=20)
+        console.print(f"[green]✅ {sport_code}: {len(rankings)} rankings collected[/green]")
+        return rankings
+    
+    async def save_tennis_rankings(
+        self,
+        rankings: List[Dict],
+        sport_code: str,
+        season: int,
+        session: AsyncSession,
+    ) -> Dict[str, int]:
+        """Save rankings as PlayerStats with stat_types ranking_{year} and ranking_points_{year}."""
+        if not rankings:
+            return {"saved": 0, "skipped": 0}
+        
+        saved = 0
+        skipped = 0
+        
+        for record in rankings:
+            try:
+                player_data = record.get("player") or {}
+                player_api_id = player_data.get("id") or record.get("player_id")
+                
+                if not player_api_id:
+                    skipped += 1
+                    continue
+                
+                player_ext_id = f"bdl_{sport_code}_{player_api_id}"
+                result = await session.execute(
+                    select(Player).where(Player.external_id == player_ext_id)
+                )
+                player = result.scalar_one_or_none()
+                
+                if not player:
+                    skipped += 1
+                    continue
+                
+                rank = record.get("rank") or record.get("ranking")
+                points = record.get("points") or record.get("ranking_points")
+                
+                if rank is not None:
+                    stat = PlayerStats(
+                        id=uuid4(),
+                        player_id=player.id,
+                        stat_type=f"ranking_{season}",
+                        value=float(rank),
+                    )
+                    session.add(stat)
+                    saved += 1
+                
+                if points is not None:
+                    stat = PlayerStats(
+                        id=uuid4(),
+                        player_id=player.id,
+                        stat_type=f"ranking_points_{season}",
+                        value=float(points),
+                    )
+                    session.add(stat)
+                    saved += 1
+            
+            except Exception as e:
+                logger.error(f"[BallDontLie] Error saving ranking: {e}")
+                skipped += 1
+        
+        await session.commit()
+        console.print(f"[green]💾 {sport_code} Rankings ({season}): {saved} saved, {skipped} skipped[/green]")
+        return {"saved": saved, "skipped": skipped}
+
+    # =========================================================================
+    # TENNIS HISTORICAL ODDS - NEW (The Odds API, 5yr backfill)
+    # =========================================================================
+
+    async def _find_tennis_game(
+        self,
+        session: AsyncSession,
+        sport_code: str,
+        home_name: str,
+        away_name: str,
+        event_date: datetime,
+    ) -> Optional[str]:
+        """Match an Odds API event to a BDL game by player names + date."""
+        result = await session.execute(
+            text('''
+                SELECT g.id FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                JOIN teams ht ON g.home_team_id = ht.id
+                JOIN teams at ON g.away_team_id = at.id
+                WHERE s.code = :sport
+                AND (
+                    (ht.name ILIKE :home AND at.name ILIKE :away) OR
+                    (ht.name ILIKE :away AND at.name ILIKE :home)
+                )
+                AND g.scheduled_at BETWEEN :d1 AND :d2
+                AND ht.name NOT LIKE '%%(Games)%%'
+                LIMIT 1
+            '''),
+            {
+                'sport': sport_code,
+                'home': f'%{home_name}%',
+                'away': f'%{away_name}%',
+                'd1': event_date - timedelta(days=2),
+                'd2': event_date + timedelta(days=2),
+            }
+        )
+        row = result.fetchone()
+        return row[0] if row else None
+
+    async def collect_tennis_historical_odds(
+        self,
+        sport_code: str,
+        years_back: int = 5,
+    ) -> Dict[str, int]:
+        """Collect historical tennis odds from The Odds API.
+        
+        Uses /v4/historical/sports/{tournament}/odds endpoint.
+        Data available from 2022 onwards. Matches events to BDL games by player name + date.
+        """
+        from app.core.database import db_manager
+        
+        if not self.odds_api_key:
+            console.print(f"[yellow]⚠️ No Odds API key - skipping tennis odds[/yellow]")
+            return {"saved": 0, "no_game": 0}
+        
+        tournaments = ATP_TOURNAMENT_DATES if sport_code == "ATP" else WTA_TOURNAMENT_DATES
+        current_year = datetime.now().year
+        start_year = max(2022, current_year - years_back)
+        
+        grand_saved = 0
+        grand_no_game = 0
+        
+        console.print(f"\n[bold magenta]🎾 Collecting {sport_code} historical odds ({start_year}-{current_year})[/bold magenta]")
+        
+        odds_client = await self._get_odds_client()
+        
+        for year in range(start_year, current_year + 1):
+            for tourney_key, mm_start, mm_end in tournaments:
+                try:
+                    start = datetime.strptime(f"{year}-{mm_start}", "%Y-%m-%d")
+                    end = datetime.strptime(f"{year}-{mm_end}", "%Y-%m-%d")
+                except:
+                    continue
+                
+                if start > datetime.now():
+                    continue
+                
+                console.print(f"[cyan]  {tourney_key} {year}...[/cyan]")
+                seen_events = set()
+                current = start
+                
+                while current <= end:
+                    date_str = current.strftime("%Y-%m-%dT12:00:00Z")
+                    try:
+                        r = await odds_client.get(
+                            f"/v4/historical/sports/{tourney_key}/odds",
+                            params={
+                                "apiKey": self.odds_api_key,
+                                "regions": "us",
+                                "markets": "h2h",
+                                "oddsFormat": "american",
+                                "date": date_str,
+                            }
+                        )
+                        
+                        if r.status_code != 200:
+                            current += timedelta(days=1)
+                            continue
+                        
+                        data = r.json().get("data", [])
+                        new_events = [e for e in data if e["id"] not in seen_events]
+                        
+                        if new_events:
+                            async with db_manager.session() as session:
+                                for event in new_events:
+                                    seen_events.add(event["id"])
+                                    home = event.get("home_team", "")
+                                    away = event.get("away_team", "")
+                                    commence = datetime.fromisoformat(
+                                        event["commence_time"].replace("Z", "+00:00")
+                                    ).replace(tzinfo=None)
+                                    
+                                    game_id = await self._find_tennis_game(
+                                        session, sport_code, home, away, commence
+                                    )
+                                    if not game_id:
+                                        grand_no_game += 1
+                                        continue
+                                    
+                                    for bm in event.get("bookmakers", []):
+                                        bm_key = bm.get("key", "")
+                                        for market in bm.get("markets", []):
+                                            if market["key"] != "h2h":
+                                                continue
+                                            outcomes = {
+                                                o["name"]: o["price"]
+                                                for o in market.get("outcomes", [])
+                                            }
+                                            home_odds = outcomes.get(home)
+                                            away_odds = outcomes.get(away)
+                                            if home_odds and away_odds:
+                                                odds_record = Odds(
+                                                    id=uuid4(),
+                                                    game_id=game_id,
+                                                    sportsbook_key=bm_key,
+                                                    bet_type="h2h",
+                                                    home_odds=int(home_odds),
+                                                    away_odds=int(away_odds),
+                                                    recorded_at=commence,
+                                                )
+                                                session.add(odds_record)
+                                                grand_saved += 1
+                                
+                                await session.commit()
+                    
+                    except Exception as e:
+                        logger.debug(f"[Tennis Odds] Error on {date_str}: {e}")
+                    
+                    current += timedelta(days=1)
+                    await asyncio.sleep(0.05)
+                
+                console.print(f"    Saved: {grand_saved} | No match: {grand_no_game}")
+        
+        console.print(f"[green]💾 {sport_code} Historical Odds: {grand_saved} saved, {grand_no_game} unmatched[/green]")
+        return {"saved": grand_saved, "no_game": grand_no_game}
+
+    # =========================================================================
     # INJURIES COLLECTION - FIXED
     # =========================================================================
     
+    @staticmethod
+    def _parse_return_date(date_str: str) -> Optional[datetime]:
+        """Parse expected return date from injury data.
+        
+        Handles formats like "May 1", "Oct 12", "2026-01-15", etc.
+        For month-day strings, infers year: months before June → next year, else current year.
+        """
+        if not date_str:
+            return None
+        
+        # Try ISO format first
+        try:
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except:
+            pass
+        
+        # Try "Month Day" format (e.g., "May 1", "Oct 12")
+        for fmt in ("%B %d", "%b %d"):
+            try:
+                dt = datetime.strptime(date_str.strip(), fmt)
+                now = datetime.now()
+                year = now.year + 1 if dt.month < 6 else now.year
+                return dt.replace(year=year)
+            except:
+                continue
+        
+        return None
+
     async def collect_injuries(self, sport_code: str) -> List[Dict]:
         """Collect injuries for a sport."""
         config = SPORT_CONFIG.get(sport_code)
@@ -1117,7 +1739,7 @@ class BallDontLieCollectorV2(BaseCollector):
         sport_code: str, 
         session: AsyncSession
     ) -> Dict[str, int]:
-        """Save injuries to database - FIXED to handle nested teams array."""
+        """Save injuries to database - FIXED to handle nested teams array + WNBA date parsing."""
         if not injuries:
             return {"saved": 0, "updated": 0, "skipped": 0}
         
@@ -1205,7 +1827,16 @@ class BallDontLieCollectorV2(BaseCollector):
                 status = injury_data.get("status") or injury_data.get("status_abbreviation") or "Unknown"
                 injury_type = injury_data.get("injury_type") or injury_data.get("description") or injury_data.get("comment") or ""
                 comment = injury_data.get("comment") or ""
-                return_date = injury_data.get("return_date")
+                expected_return_str = injury_data.get("expected_return") or injury_data.get("return_date") or ""
+                
+                # Build status_detail from comment + expected_return (truncate for varchar(200))
+                status_detail = comment
+                if expected_return_str:
+                    status_detail = f"{comment} | Expected: {expected_return_str}".strip(" |")
+                status_detail = str(status_detail)[:200] if status_detail else None
+                
+                # Parse expected_return date (handles "May 1", "Oct 12" WNBA format)
+                expected_return = self._parse_return_date(expected_return_str) if expected_return_str else None
                 
                 if existing:
                     # Update existing injury
@@ -1223,9 +1854,13 @@ class BallDontLieCollectorV2(BaseCollector):
                         position=player_info.get("position") or player_info.get("position_code"),
                         injury_type=str(injury_type)[:200] if injury_type else None,
                         status=status,
+                        status_detail=status_detail,
                         source="balldontlie",
                         external_id=external_id,
                     )
+                    # Set expected_return if the model supports it
+                    if hasattr(injury, 'expected_return') and expected_return:
+                        injury.expected_return = expected_return.date() if hasattr(expected_return, 'date') else expected_return
                     session.add(injury)
                     saved += 1
             
@@ -1546,6 +2181,7 @@ class BallDontLieCollectorV2(BaseCollector):
         
         is_tennis = config.get("is_tennis", False)
         has_stats = config.get("has_stats_endpoint", True)
+        has_team_stats = config.get("has_team_stats_endpoint", False)
         current_year = datetime.now().year
         season_start = config.get("season_start", 2015)
         start_year = max(season_start, current_year - years)
@@ -1559,6 +2195,9 @@ class BallDontLieCollectorV2(BaseCollector):
             "injuries": {"saved": 0, "updated": 0},
             "team_stats": {"saved": 0},
             "odds": {"saved": 0},
+            "tennis_match_stats": {"saved": 0},
+            "tennis_rankings": {"saved": 0},
+            "tennis_odds": {"saved": 0},
         }
         
         try:
@@ -1593,7 +2232,22 @@ class BallDontLieCollectorV2(BaseCollector):
                 console.print(f"\n[bold]📊 Step 4: Collecting {sport_code} player stats...[/bold]")
                 has_player_stats = config.get("has_player_stats_endpoint", False)
                 
-                if has_stats and not is_tennis:
+                if is_tennis:
+                    # ATP: match_stats + rankings; WTA: rankings only
+                    if config.get("has_match_stats"):
+                        console.print(f"\n[bold]🎾 Step 4a: Collecting {sport_code} match stats...[/bold]")
+                        for year in range(start_year, current_year + 1):
+                            match_stats = await self.collect_tennis_match_stats(sport_code, season=year)
+                            ms_results = await self.save_tennis_match_stats(match_stats, sport_code, session)
+                            results["tennis_match_stats"]["saved"] += ms_results.get("saved", 0)
+                    
+                    console.print(f"\n[bold]🏆 Step 4b: Collecting {sport_code} rankings...[/bold]")
+                    for year in range(start_year, current_year + 1):
+                        rankings = await self.collect_tennis_rankings(sport_code, season=year)
+                        rk_results = await self.save_tennis_rankings(rankings, sport_code, year, session)
+                        results["tennis_rankings"]["saved"] += rk_results.get("saved", 0)
+                
+                elif has_stats and not is_tennis:
                     # Use /stats endpoint (NBA, NFL, MLB)
                     for year in range(start_year, current_year + 1):
                         stats = await self.collect_player_stats(sport_code, season=year)
@@ -1622,21 +2276,34 @@ class BallDontLieCollectorV2(BaseCollector):
                 
                 # 6. Standings/Team Stats
                 if not is_tennis:
-                    console.print(f"\n[bold]📊 Step 6: Collecting {sport_code} standings...[/bold]")
-                    # Pass current season - some APIs require it (NBA)
-                    standings = await self.collect_standings(sport_code, season=current_year)
-                    team_stat_results = await self.save_team_stats(standings, sport_code, session)
-                    results["team_stats"] = team_stat_results
+                    console.print(f"\n[bold]📊 Step 6: Collecting {sport_code} team stats...[/bold]")
+                    if has_team_stats:
+                        # Use discovered team stats endpoints (NBA/NCAAB/WNBA/NFL/MLB)
+                        for year in range(start_year, current_year + 1):
+                            ts_data = await self.collect_team_stats_endpoint(sport_code, season=year)
+                            ts_results = await self.save_team_stats_from_endpoint(ts_data, sport_code, session)
+                            results["team_stats"]["saved"] += ts_results.get("saved", 0)
+                    else:
+                        # Fallback to standings (NHL, etc.)
+                        standings = await self.collect_standings(sport_code, season=current_year)
+                        team_stat_results = await self.save_team_stats(standings, sport_code, session)
+                        results["team_stats"] = team_stat_results
                 
                 # 7. Odds
                 console.print(f"\n[bold]📊 Step 7: Collecting {sport_code} odds...[/bold]")
-                # Get recent dates for odds (for sports that use dates)
-                today = datetime.now()
-                dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-                # Pass season for NFL/NCAAF which require it
-                odds = await self.collect_odds(sport_code, dates=dates, season=current_year)
-                odds_results = await self.save_odds(odds, sport_code, session)
-                results["odds"] = odds_results
+                if is_tennis:
+                    # Tennis odds from The Odds API historical endpoint (5yr backfill)
+                    tennis_odds_results = await self.collect_tennis_historical_odds(
+                        sport_code, years_back=min(years, 5)
+                    )
+                    results["tennis_odds"] = tennis_odds_results
+                else:
+                    # Team sport odds from BDL /v2/odds
+                    today = datetime.now()
+                    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+                    odds = await self.collect_odds(sport_code, dates=dates, season=current_year)
+                    odds_results = await self.save_odds(odds, sport_code, session)
+                    results["odds"] = odds_results
         
         except Exception as e:
             logger.error(f"[BallDontLie V2] Error collecting {sport_code}: {e}")
@@ -1653,7 +2320,10 @@ class BallDontLieCollectorV2(BaseCollector):
             results["player_stats"].get("saved", 0) +
             results["injuries"].get("saved", 0) +
             results["team_stats"].get("saved", 0) +
-            results["odds"].get("saved", 0)
+            results["odds"].get("saved", 0) +
+            results["tennis_match_stats"].get("saved", 0) +
+            results["tennis_rankings"].get("saved", 0) +
+            results["tennis_odds"].get("saved", 0)
         )
         
         console.print(f"\n[bold green]✅ {sport_code} Collection Complete[/bold green]")
@@ -1661,6 +2331,10 @@ class BallDontLieCollectorV2(BaseCollector):
         console.print(f"  Players: {results['players'].get('saved', 0)} saved, {results['players'].get('updated', 0)} updated")
         console.print(f"  Games: {results['games'].get('saved', 0)} saved, {results['games'].get('updated', 0)} updated")
         console.print(f"  Player Stats: {results['player_stats'].get('saved', 0)} saved")
+        if is_tennis:
+            console.print(f"  Match Stats: {results['tennis_match_stats'].get('saved', 0)} saved")
+            console.print(f"  Rankings: {results['tennis_rankings'].get('saved', 0)} saved")
+            console.print(f"  Tennis Odds: {results['tennis_odds'].get('saved', 0)} saved")
         console.print(f"  Injuries: {results['injuries'].get('saved', 0)} saved, {results['injuries'].get('updated', 0)} updated")
         console.print(f"  Team Stats: {results['team_stats'].get('saved', 0)} saved")
         console.print(f"  Odds: {results['odds'].get('saved', 0)} saved")
@@ -1687,6 +2361,9 @@ class BallDontLieCollectorV2(BaseCollector):
                     sport_results.get("injuries", {}).get("saved", 0),
                     sport_results.get("team_stats", {}).get("saved", 0),
                     sport_results.get("odds", {}).get("saved", 0),
+                    sport_results.get("tennis_match_stats", {}).get("saved", 0),
+                    sport_results.get("tennis_rankings", {}).get("saved", 0),
+                    sport_results.get("tennis_odds", {}).get("saved", 0),
                 ])
                 
                 result.records += total

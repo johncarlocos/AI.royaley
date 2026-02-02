@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 # revision identifiers
-revision = '005'
-down_revision = '004'
+revision = '005_create_master_stats_tables'
+down_revision = '004_master_odds_and_ml_training'
 branch_labels = None
 depends_on = None
 

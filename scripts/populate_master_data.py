@@ -8,6 +8,7 @@ This is idempotent — safe to run multiple times (uses ON CONFLICT DO NOTHING).
 """
 
 import asyncio
+import json
 import logging
 import sys
 import os
@@ -246,7 +247,7 @@ async def populate():
             """), {
                 "key": key, "name": name, "stype": stype, "priority": priority,
                 "teams": teams, "players": players, "games": games,
-                "odds": odds, "stats": stats, "sports": sports,
+                "odds": odds, "stats": stats, "sports": json.dumps(sports),
             })
         print(f"  ✅ Registered {len(SOURCES)} data sources")
 

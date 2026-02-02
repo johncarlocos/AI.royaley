@@ -268,16 +268,14 @@ async def fix_college():
                     if status.lower() in ('final', 'completed'):
                         status = 'final'
 
-                    # Derive season from year
+                    # Derive season year (integer)
                     sched_dt = best[4]
                     if sport_code == "NCAAF":
                         # NCAAF season spans Aug-Jan, use the fall year
-                        season_year = sched_dt.year if sched_dt.month >= 6 else sched_dt.year - 1
-                        season_str = f"{season_year}"
+                        season_int = sched_dt.year if sched_dt.month >= 6 else sched_dt.year - 1
                     else:
                         # NCAAB season spans Nov-Apr, use the spring year
-                        season_year = sched_dt.year if sched_dt.month <= 6 else sched_dt.year + 1
-                        season_str = f"{season_year - 1}-{str(season_year)[2:]}"
+                        season_int = sched_dt.year if sched_dt.month <= 6 else sched_dt.year + 1
 
                     await session.execute(text("""
                         INSERT INTO master_games (id, sport_code, season, scheduled_at,
@@ -290,7 +288,7 @@ async def fix_college():
                         ON CONFLICT DO NOTHING
                     """), {
                         "id": master_game_id, "sport": sport_code,
-                        "season": season_str, "sched": best[4],
+                        "season": season_int, "sched": best[4],
                         "hmt": home_mt, "amt": away_mt,
                         "hs": best[6], "as_": best[7], "status": status,
                         "vid": str(best[9]) if best[9] else None,

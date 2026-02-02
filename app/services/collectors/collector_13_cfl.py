@@ -1,190 +1,131 @@
 """
-ROYALEY - CFL Official API Data Collector
-Phase 1: Data Collection Services
-
-Collects comprehensive CFL (Canadian Football League) data from the official CFL API.
-Features: Games, rosters, player stats, team stats, standings, play-by-play.
+ROYALEY - CFL Data Collector (TheSportsDB V2 + The Odds API)
+=============================================================
 
 Data Sources:
-- CFL Official API: https://api.cfl.ca/
+- TheSportsDB V2 Premium API (Key: 688655, League ID: 4405)
+  → Teams, Games (2008-2025), Players, Team Stats (Standings)
+- The Odds API (Sport key: americanfootball_cfl)
+  → Moneyline, Spread, Totals odds (2022-2026)
 
-API Key Required - Request from tech@cfl.ca
+CFL Season Format: Calendar year (e.g., "2024")
+CFL Structure: 9 teams, 2 divisions (East/West), 21-game regular season
 
-Key Data Types:
-- Teams: All 9 CFL teams with divisions
-- Games: Full game schedules with results (2004-present)
-- Rosters: Player rosters by season
-- Player Stats: Passing, rushing, receiving, defense, special teams
-- Team Stats: Wins, losses, standings data
-- Play-by-play: Game events (optional)
+Data Types Collected (7):
+1. Teams      → TheSportsDB /list/teams/4405 + /lookup/team/{id}
+2. Games      → TheSportsDB /schedule/league/4405/{season}
+3. Players    → TheSportsDB /list/players/{teamId}
+4. Player Stats → TheSportsDB (limited - no per-game CFL stats available)
+5. Team Stats   → TheSportsDB /lookup/table/4405/{season} (standings)
+6. Injuries     → Not available from TheSportsDB (placeholder for future source)
+7. Odds         → The Odds API /v4/sports/americanfootball_cfl/odds-history
 
-Tables Filled:
-- sports (CFL entry)
-- teams (9 CFL teams)
-- games (10+ years of games)
-- players (all CFL players)
-- player_stats (seasonal stats)
-- team_stats (seasonal stats)
-- venues (CFL stadiums)
+Tables Filled: sports, teams, games, players, player_stats, team_stats, odds
 """
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID
 
 import httpx
-
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.models import Sport, Team, Game, GameStatus, Player, PlayerStats, TeamStats, Venue
+from app.models import (
+    Sport, Team, Player, Game, GameStatus,
+    TeamStats, PlayerStats, Odds, Sportsbook, Venue,
+)
+from app.models.injury_models import Injury
 from app.services.collectors.base_collector import (
-    BaseCollector,
-    CollectorResult,
-    collector_manager,
+    BaseCollector, CollectorResult, collector_manager,
 )
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CFL API CONFIGURATION
+# CONFIGURATION
 # =============================================================================
 
-CFL_API_BASE = "https://api.cfl.ca/v1"
+# TheSportsDB V2 Premium
+SPORTSDB_BASE_URL = "https://www.thesportsdb.com/api/v2/json"
+SPORTSDB_API_KEY = "688655"
+CFL_LEAGUE_ID = 4405
 
-# CFL API Endpoints
-CFL_ENDPOINTS = {
-    "games": f"{CFL_API_BASE}/games",
-    "standings": f"{CFL_API_BASE}/standings",
-    "players": f"{CFL_API_BASE}/players",
-    "teams": f"{CFL_API_BASE}/teams",
-    "leaders": f"{CFL_API_BASE}/leaders",
-}
+# The Odds API
+ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
+CFL_ODDS_SPORT_KEY = "americanfootball_cfl"
 
-# =============================================================================
-# CFL TEAMS (9 Teams - 2 Divisions)
-# =============================================================================
+# CFL season range available on TheSportsDB
+CFL_FIRST_SEASON = 2008
+CFL_CURRENT_SEASON = 2025
 
+# CFL Teams - hardcoded reference for name matching & fallback
 CFL_TEAMS = {
-    # West Division
-    "BC": {
-        "id": "BC",
-        "name": "BC Lions",
-        "city": "Vancouver",
-        "division": "West",
-        "venue": "BC Place",
-        "venue_city": "Vancouver",
-        "abbreviation": "BC",
-    },
-    "CGY": {
-        "id": "CGY",
-        "name": "Calgary Stampeders",
-        "city": "Calgary",
-        "division": "West",
-        "venue": "McMahon Stadium",
-        "venue_city": "Calgary",
-        "abbreviation": "CGY",
-    },
-    "EDM": {
-        "id": "EDM",
-        "name": "Edmonton Elks",
-        "city": "Edmonton",
-        "division": "West",
-        "venue": "Commonwealth Stadium",
-        "venue_city": "Edmonton",
-        "abbreviation": "EDM",
-    },
-    "SSK": {
-        "id": "SSK",
-        "name": "Saskatchewan Roughriders",
-        "city": "Regina",
-        "division": "West",
-        "venue": "Mosaic Stadium",
-        "venue_city": "Regina",
-        "abbreviation": "SSK",
-    },
-    "WPG": {
-        "id": "WPG",
-        "name": "Winnipeg Blue Bombers",
-        "city": "Winnipeg",
-        "division": "West",
-        "venue": "IG Field",
-        "venue_city": "Winnipeg",
-        "abbreviation": "WPG",
-    },
-    
-    # East Division
-    "HAM": {
-        "id": "HAM",
-        "name": "Hamilton Tiger-Cats",
-        "city": "Hamilton",
-        "division": "East",
-        "venue": "Tim Hortons Field",
-        "venue_city": "Hamilton",
-        "abbreviation": "HAM",
-    },
-    "MTL": {
-        "id": "MTL",
-        "name": "Montreal Alouettes",
-        "city": "Montreal",
-        "division": "East",
-        "venue": "Percival Molson Memorial Stadium",
-        "venue_city": "Montreal",
-        "abbreviation": "MTL",
-    },
-    "OTT": {
-        "id": "OTT",
-        "name": "Ottawa Redblacks",
-        "city": "Ottawa",
-        "division": "East",
-        "venue": "TD Place Stadium",
-        "venue_city": "Ottawa",
-        "abbreviation": "OTT",
-    },
-    "TOR": {
-        "id": "TOR",
-        "name": "Toronto Argonauts",
-        "city": "Toronto",
-        "division": "East",
-        "venue": "BMO Field",
-        "venue_city": "Toronto",
-        "abbreviation": "TOR",
-    },
+    "BC": {"name": "BC Lions", "city": "Vancouver", "division": "West", "venue": "BC Place", "abbr": "BC"},
+    "CGY": {"name": "Calgary Stampeders", "city": "Calgary", "division": "West", "venue": "McMahon Stadium", "abbr": "CGY"},
+    "EDM": {"name": "Edmonton Elks", "city": "Edmonton", "division": "West", "venue": "Commonwealth Stadium", "abbr": "EDM"},
+    "SSK": {"name": "Saskatchewan Roughriders", "city": "Regina", "division": "West", "venue": "Mosaic Stadium", "abbr": "SSK"},
+    "WPG": {"name": "Winnipeg Blue Bombers", "city": "Winnipeg", "division": "West", "venue": "IG Field", "abbr": "WPG"},
+    "HAM": {"name": "Hamilton Tiger-Cats", "city": "Hamilton", "division": "East", "venue": "Tim Hortons Field", "abbr": "HAM"},
+    "MTL": {"name": "Montreal Alouettes", "city": "Montreal", "division": "East", "venue": "Percival Molson Memorial Stadium", "abbr": "MTL"},
+    "OTT": {"name": "Ottawa Redblacks", "city": "Ottawa", "division": "East", "venue": "TD Place Stadium", "abbr": "OTT"},
+    "TOR": {"name": "Toronto Argonauts", "city": "Toronto", "division": "East", "venue": "BMO Field", "abbr": "TOR"},
 }
 
-# Abbreviation mapping for API responses
-TEAM_ABBR_MAP = {
-    "BC": "BC",
-    "CGY": "CGY", 
-    "CAL": "CGY",
-    "EDM": "EDM",
-    "SSK": "SSK",
-    "SAK": "SSK",
-    "WPG": "WPG",
-    "WIN": "WPG",
-    "HAM": "HAM",
-    "MTL": "MTL",
-    "MON": "MTL",
-    "OTT": "OTT",
-    "TOR": "TOR",
+# Name normalization for matching across data sources
+# Maps various name forms → canonical CFL team abbreviation
+CFL_NAME_MAP = {
+    # Standard names
+    "bc lions": "BC",
+    "calgary stampeders": "CGY",
+    "edmonton elks": "EDM",
+    "edmonton eskimos": "EDM",  # Historical name
+    "saskatchewan roughriders": "SSK",
+    "winnipeg blue bombers": "WPG",
+    "hamilton tiger-cats": "HAM",
+    "hamilton tigercats": "HAM",
+    "montreal alouettes": "MTL",
+    "ottawa redblacks": "OTT",
+    "ottawa renegades": "OTT",  # Historical name
+    "toronto argonauts": "TOR",
+    # Short names (The Odds API sometimes uses these)
+    "bc": "BC",
+    "calgary": "CGY",
+    "edmonton": "EDM",
+    "saskatchewan": "SSK",
+    "winnipeg": "WPG",
+    "hamilton": "HAM",
+    "montreal": "MTL",
+    "ottawa": "OTT",
+    "toronto": "TOR",
 }
 
-# CFL Player stat categories
-CFL_STAT_CATEGORIES = [
-    "passing",
-    "rushing", 
-    "receiving",
-    "defence",
-    "field_goals",
-    "punts",
-    "punt_returns",
-    "kick_returns",
-    "converts",
-]
+# Game status mapping from TheSportsDB
+STATUS_MAP = {
+    "Match Finished": "final",
+    "Finished": "final",
+    "FT": "final",
+    "AOT": "final",
+    "After OT": "final",
+    "Not Started": "scheduled",
+    "NS": "scheduled",
+    "": "scheduled",
+    "1H": "in_progress",
+    "2H": "in_progress",
+    "HT": "in_progress",
+    "Q1": "in_progress",
+    "Q2": "in_progress",
+    "Q3": "in_progress",
+    "Q4": "in_progress",
+    "OT": "in_progress",
+    "Postponed": "postponed",
+    "Cancelled": "cancelled",
+    "Abandoned": "cancelled",
+}
 
 
 # =============================================================================
@@ -193,1168 +134,1412 @@ CFL_STAT_CATEGORIES = [
 
 class CFLCollector(BaseCollector):
     """
-    Collector for CFL data using the official CFL API.
+    CFL Data Collector using TheSportsDB V2 Premium + The Odds API.
     
-    Features:
-    - Game schedules and results (2004-present)
-    - Team information and standings
-    - Player rosters and statistics
-    - Team statistics
-    - Play-by-play data (optional)
-    
-    Requires API key from tech@cfl.ca
+    Collects 7 data types for CFL:
+    1. Teams (9 active + historical)
+    2. Games (2008-2025, ~3,000 games)
+    3. Players (current rosters, ~500+ players)
+    4. Player Stats (limited - TheSportsDB has no per-game CFL stats)
+    5. Team Stats (standings: W/L/T/PF/PA per season)
+    6. Injuries (not available from TheSportsDB - placeholder)
+    7. Odds (The Odds API, 2022-2026, moneyline/spread/totals)
     """
-    
+
     def __init__(self):
         super().__init__(
             name="cfl",
-            base_url=CFL_API_BASE,
-            rate_limit=60,
+            base_url=SPORTSDB_BASE_URL,
+            rate_limit=120,
             rate_window=60,
+            timeout=30.0,
+            max_retries=3,
         )
-        self._client: Optional[httpx.AsyncClient] = None
-        self._api_key = getattr(settings, 'CFL_API_KEY', None) or ""
-    
-    async def get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client with API key."""
-        if self._client is None or self._client.is_closed:
-            headers = {
-                "User-Agent": "ROYALEY Sports Analytics/1.0",
-                "Accept": "application/json",
-            }
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                follow_redirects=True,
-                headers=headers,
-            )
-        return self._client
-    
-    def _get_auth_params(self) -> Dict[str, str]:
-        """Get authentication parameters for API requests."""
-        if self._api_key:
-            return {"key": self._api_key}
-        return {}
-    
-    async def close(self):
-        """Close HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        self.sportsdb_key = SPORTSDB_API_KEY
+        self.odds_api_key = ODDS_API_KEY
+        logger.info(f"[CFL] TheSportsDB V2 | Key: {self.sportsdb_key} | League: {CFL_LEAGUE_ID}")
+        print(f"[CFL] TheSportsDB V2 | Key: {self.sportsdb_key} | League: {CFL_LEAGUE_ID}")
 
     # =========================================================================
-    # MAIN COLLECT METHOD
+    # HTTP HELPERS
     # =========================================================================
-    
-    async def collect(
-        self,
-        years: List[int] = None,
-        collect_type: str = "all"
-    ) -> CollectorResult:
-        """
-        Collect CFL data from official API.
-        
-        Args:
-            years: List of seasons to collect (e.g., [2023, 2024])
-            collect_type: Type of data to collect:
-                - "all": Teams, games, rosters, player stats, team stats
-                - "teams": Only teams
-                - "games": Only games/schedules
-                - "rosters": Only rosters
-                - "player_stats": Only player statistics
-                - "team_stats": Only team statistics
-        
-        Returns:
-            CollectorResult with collected data
-        """
-        if years is None:
-            current_year = datetime.now().year
-            years = [current_year]
-        
-        logger.info(f"[CFL] Collecting CFL data for seasons: {years}")
-        
-        # Check API key
-        if not self._api_key:
-            logger.warning("[CFL] No API key configured. Set CFL_API_KEY in settings.")
-            logger.warning("[CFL] Using fallback team data only.")
-        
-        data = {
-            "teams": [],
-            "games": [],
-            "rosters": [],
-            "player_stats": [],
-            "team_stats": [],
-            "venues": [],
-        }
-        total_records = 0
-        
+
+    def _sportsdb_headers(self) -> Dict[str, str]:
+        """Headers for TheSportsDB V2 Premium API."""
+        return {"Accept": "application/json", "X-API-KEY": self.sportsdb_key}
+
+    async def _sportsdb_get(self, endpoint: str) -> Optional[Any]:
+        """Make a TheSportsDB V2 API request with logging."""
+        url = f"{SPORTSDB_BASE_URL}{endpoint}"
+        logger.info(f"[CFL] 🌐 {url}")
+        print(f"[CFL] 🌐 {url}")
+
         try:
-            # Collect teams (works without API for basic data)
-            if collect_type in ["all", "teams"]:
-                teams = await self._collect_teams()
-                data["teams"] = teams
-                total_records += len(teams)
-                logger.info(f"[CFL] Collected {len(teams)} teams")
-            
-            # Collect venues
-            if collect_type in ["all", "venues"]:
-                venues = await self._collect_venues()
-                data["venues"] = venues
-                total_records += len(venues)
-                logger.info(f"[CFL] Collected {len(venues)} venues")
-            
-            # Collect games (requires API key)
-            if collect_type in ["all", "games"]:
-                games = await self._collect_games(years)
-                data["games"] = games
-                total_records += len(games)
-                logger.info(f"[CFL] Collected {len(games)} games")
-            
-            # Collect standings/team stats (requires API key)
-            if collect_type in ["all", "team_stats"]:
-                team_stats = await self._collect_team_stats(years)
-                data["team_stats"] = team_stats
-                total_records += len(team_stats)
-                logger.info(f"[CFL] Collected {len(team_stats)} team stats")
-            
-            # Collect players/rosters (requires API key)
-            if collect_type in ["all", "rosters"]:
-                rosters = await self._collect_rosters(years)
-                data["rosters"] = rosters
-                total_records += len(rosters)
-                logger.info(f"[CFL] Collected {len(rosters)} roster entries")
-            
-            # Collect player stats (requires API key)
-            if collect_type in ["all", "player_stats"]:
-                player_stats = await self._collect_player_stats(years)
-                data["player_stats"] = player_stats
-                total_records += len(player_stats)
-                logger.info(f"[CFL] Collected {len(player_stats)} player stats")
-            
-            logger.info(f"[CFL] Total records collected: {total_records}")
-            
-            return CollectorResult(
-                success=True,
-                data=data,
-                records_count=total_records,
-            )
-            
-        except Exception as e:
-            logger.error(f"[CFL] Collection error: {e}")
-            import traceback
-            traceback.print_exc()
-            return CollectorResult(
-                success=False,
-                data=data,
-                records_count=total_records,
-                error=str(e)
-            )
-        finally:
-            await self.close()
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url, headers=self._sportsdb_headers())
 
-    # =========================================================================
-    # TEAMS COLLECTION
-    # =========================================================================
-    
-    async def _collect_teams(self) -> List[Dict[str, Any]]:
-        """Collect all CFL teams."""
-        teams = []
-        
-        # Use predefined team data (always available)
-        for team_id, team_info in CFL_TEAMS.items():
-            teams.append({
-                "external_id": f"cfl_{team_id}",
-                "cfl_id": team_id,
-                "name": team_info["name"],
-                "abbreviation": team_info["abbreviation"],
-                "city": team_info["city"],
-                "division": team_info["division"],
-                "conference": team_info["division"],  # CFL uses divisions
-                "venue_name": team_info["venue"],
-                "venue_city": team_info["venue_city"],
-                "league": "CFL",
-                "is_active": True,
-            })
-        
-        # Try to get additional data from API if key available
-        if self._api_key:
-            try:
-                client = await self.get_client()
-                params = self._get_auth_params()
-                
-                response = await client.get(CFL_ENDPOINTS["teams"], params=params, timeout=30.0)
-                
-                if response.status_code == 200:
-                    api_data = response.json()
-                    api_teams = api_data.get("data", [])
-                    
-                    # Merge API data with predefined data
-                    for api_team in api_teams:
-                        abbr = api_team.get("abbreviation", "")
-                        normalized_abbr = TEAM_ABBR_MAP.get(abbr, abbr)
-                        
-                        # Find matching team
-                        for team in teams:
-                            if team["abbreviation"] == normalized_abbr:
-                                # Update with API data
-                                if api_team.get("team_id"):
-                                    team["cfl_api_id"] = api_team["team_id"]
-                                if api_team.get("full_name"):
-                                    team["full_name"] = api_team["full_name"]
-                                if api_team.get("venue"):
-                                    venue = api_team["venue"]
-                                    if isinstance(venue, dict):
-                                        team["venue_name"] = venue.get("name", team["venue_name"])
-                                break
-                    
-                    logger.info(f"[CFL] Enhanced team data from API")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        if "Message" in data and len(data) == 1:
+                            logger.warning(f"[CFL] ⚠️ API Message: {data.get('Message')}")
+                            print(f"[CFL] ⚠️ API Message: {data.get('Message')}")
+                            return None
+                        info = {k: len(v) if isinstance(v, list) else type(v).__name__ for k, v in data.items()}
+                        logger.info(f"[CFL] ✅ 200 | {info}")
+                        print(f"[CFL] ✅ 200 | {info}")
+                    return data
                 else:
-                    logger.warning(f"[CFL] Teams API returned {response.status_code}")
-                    
-            except Exception as e:
-                logger.warning(f"[CFL] Could not fetch teams from API: {e}")
-        
-        logger.info(f"[CFL] Loaded {len(teams)} CFL teams")
-        return teams
-
-    # =========================================================================
-    # VENUES COLLECTION
-    # =========================================================================
-    
-    async def _collect_venues(self) -> List[Dict[str, Any]]:
-        """Collect CFL venue information."""
-        venues = []
-        seen_venues = set()
-        
-        for team_id, team_info in CFL_TEAMS.items():
-            venue_name = team_info["venue"]
-            if venue_name in seen_venues:
-                continue
-            seen_venues.add(venue_name)
-            
-            venues.append({
-                "name": venue_name,
-                "city": team_info["venue_city"],
-                "state": "",  # Canadian provinces
-                "country": "Canada",
-                "is_dome": venue_name == "BC Place",  # BC Place is a dome
-                "surface": "turf",
-                "team_abbr": team_info["abbreviation"],
-            })
-        
-        return venues
-
-    # =========================================================================
-    # GAMES COLLECTION
-    # =========================================================================
-    
-    async def _collect_games(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect games for specified seasons."""
-        all_games = []
-        
-        if not self._api_key:
-            logger.warning("[CFL] No API key - cannot collect games")
-            return all_games
-        
-        try:
-            client = await self.get_client()
-            params = self._get_auth_params()
-            
-            for year in years:
-                year_games = []
-                
-                try:
-                    # CFL API: /games/{season}
-                    url = f"{CFL_ENDPOINTS['games']}/{year}"
-                    response = await client.get(url, params=params, timeout=30.0)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        games_data = data.get("data", [])
-                        
-                        for game in games_data:
-                            game_id = game.get("game_id", "")
-                            if not game_id:
-                                continue
-                            
-                            # Parse teams
-                            team1 = game.get("team_1", {})
-                            team2 = game.get("team_2", {})
-                            
-                            # Determine home/away
-                            # CFL API: is_home field or venue-based detection
-                            if team1.get("is_home") or game.get("venue", {}).get("name", "") in str(CFL_TEAMS.get(team1.get("abbreviation", ""), {}).get("venue", "")):
-                                home_team = team1
-                                away_team = team2
-                            else:
-                                home_team = team2
-                                away_team = team1
-                            
-                            # Normalize team abbreviations
-                            home_abbr = TEAM_ABBR_MAP.get(home_team.get("abbreviation", ""), home_team.get("abbreviation", ""))
-                            away_abbr = TEAM_ABBR_MAP.get(away_team.get("abbreviation", ""), away_team.get("abbreviation", ""))
-                            
-                            # Parse date
-                            date_str = game.get("date_start", "")
-                            try:
-                                if date_str:
-                                    # Handle various date formats
-                                    if "T" in date_str:
-                                        scheduled_at = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                                        if scheduled_at.tzinfo:
-                                            scheduled_at = scheduled_at.replace(tzinfo=None)
-                                    else:
-                                        scheduled_at = datetime.strptime(date_str[:10], "%Y-%m-%d")
-                                else:
-                                    scheduled_at = datetime(year, 6, 1)  # Default to June
-                            except:
-                                scheduled_at = datetime(year, 6, 1)
-                            
-                            # Determine game status
-                            event_status = game.get("event_status", {})
-                            status_id = event_status.get("event_status_id", 1)
-                            
-                            if status_id == 4 or event_status.get("is_active") == False:
-                                game_status = "final"
-                            elif status_id == 2 or event_status.get("is_active") == True:
-                                game_status = "in_progress"
-                            elif status_id == 5:
-                                game_status = "postponed"
-                            elif status_id == 6:
-                                game_status = "cancelled"
-                            else:
-                                game_status = "scheduled"
-                            
-                            # Get scores
-                            home_score = home_team.get("score")
-                            away_score = away_team.get("score")
-                            
-                            # Get venue
-                            venue = game.get("venue", {})
-                            venue_name = venue.get("name", "") if isinstance(venue, dict) else ""
-                            
-                            game_record = {
-                                "external_id": f"cfl_{game_id}",
-                                "cfl_id": game_id,
-                                "league": "CFL",
-                                "season": year,
-                                "week": game.get("week", 0),
-                                "game_type": game.get("game_type", {}).get("name", "Regular Season") if isinstance(game.get("game_type"), dict) else "Regular Season",
-                                "scheduled_at": scheduled_at,
-                                "status": game_status,
-                                "home_team_abbr": home_abbr,
-                                "home_team_name": home_team.get("team_name", ""),
-                                "away_team_abbr": away_abbr,
-                                "away_team_name": away_team.get("team_name", ""),
-                                "home_score": int(home_score) if home_score is not None else None,
-                                "away_score": int(away_score) if away_score is not None else None,
-                                "venue_name": venue_name,
-                                "attendance": game.get("attendance", 0),
-                                "weather": game.get("weather", {}),
-                            }
-                            
-                            year_games.append(game_record)
-                        
-                        all_games.extend(year_games)
-                        logger.info(f"[CFL] {year}: {len(year_games)} games")
-                        
-                    elif response.status_code == 401:
-                        logger.error("[CFL] API key invalid or expired")
-                        break
-                    else:
-                        logger.warning(f"[CFL] Games API returned {response.status_code} for {year}")
-                    
-                    await asyncio.sleep(0.2)  # Rate limiting
-                    
-                except Exception as e:
-                    logger.warning(f"[CFL] Error collecting games for {year}: {e}")
-                    continue
-            
+                    logger.warning(f"[CFL] ❌ {resp.status_code}: {resp.text[:200]}")
+                    print(f"[CFL] ❌ {resp.status_code}")
+                    return None
         except Exception as e:
-            logger.error(f"[CFL] Error collecting games: {e}")
-        
-        logger.info(f"[CFL] Total {len(all_games)} games collected")
-        return all_games
+            logger.error(f"[CFL] ❌ Request error: {e}")
+            print(f"[CFL] ❌ {e}")
+            return None
 
-    # =========================================================================
-    # TEAM STATS / STANDINGS COLLECTION
-    # =========================================================================
-    
-    async def _collect_team_stats(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect team standings/stats for specified seasons."""
-        all_stats = []
-        
-        if not self._api_key:
-            logger.warning("[CFL] No API key - cannot collect standings")
-            return all_stats
-        
-        try:
-            client = await self.get_client()
-            params = self._get_auth_params()
-            
-            for year in years:
-                try:
-                    # CFL API: /standings/{season}
-                    url = f"{CFL_ENDPOINTS['standings']}/{year}"
-                    response = await client.get(url, params=params, timeout=30.0)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        standings_data = data.get("data", [])
-                        
-                        # Standings may be organized by division
-                        for division in standings_data:
-                            division_name = division.get("division", {}).get("name", "Unknown") if isinstance(division.get("division"), dict) else "Unknown"
-                            teams_standing = division.get("teams", division.get("standings", []))
-                            
-                            for team_standing in teams_standing:
-                                team_abbr = team_standing.get("abbreviation", "")
-                                normalized_abbr = TEAM_ABBR_MAP.get(team_abbr, team_abbr)
-                                
-                                stat_record = {
-                                    "league": "CFL",
-                                    "season": year,
-                                    "team_abbr": normalized_abbr,
-                                    "team_name": team_standing.get("team_name", team_standing.get("name", "")),
-                                    "division": division_name,
-                                    "wins": team_standing.get("wins", 0),
-                                    "losses": team_standing.get("losses", 0),
-                                    "ties": team_standing.get("ties", 0),
-                                    "points_for": team_standing.get("points_for", 0),
-                                    "points_against": team_standing.get("points_against", 0),
-                                    "home_wins": team_standing.get("home_wins", 0),
-                                    "home_losses": team_standing.get("home_losses", 0),
-                                    "away_wins": team_standing.get("away_wins", 0),
-                                    "away_losses": team_standing.get("away_losses", 0),
-                                    "streak": team_standing.get("streak", ""),
-                                    "division_rank": team_standing.get("division_rank", 0),
-                                }
-                                all_stats.append(stat_record)
-                        
-                        logger.info(f"[CFL] {year}: {len([s for s in all_stats if s['season'] == year])} team stats")
-                        
-                    elif response.status_code == 401:
-                        logger.error("[CFL] API key invalid")
-                        break
-                    else:
-                        logger.warning(f"[CFL] Standings API returned {response.status_code} for {year}")
-                    
-                    await asyncio.sleep(0.2)
-                    
-                except Exception as e:
-                    logger.warning(f"[CFL] Error collecting standings for {year}: {e}")
-                    continue
-            
-        except Exception as e:
-            logger.error(f"[CFL] Error collecting team stats: {e}")
-        
-        logger.info(f"[CFL] Total {len(all_stats)} team stats")
-        return all_stats
+    async def _odds_api_get(self, endpoint: str, params: Dict = None) -> Optional[Any]:
+        """Make a The Odds API request."""
+        url = f"{ODDS_API_BASE_URL}{endpoint}"
+        if params is None:
+            params = {}
+        params["apiKey"] = self.odds_api_key
 
-    # =========================================================================
-    # ROSTERS COLLECTION
-    # =========================================================================
-    
-    async def _collect_rosters(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect player rosters for all teams."""
-        all_rosters = []
-        seen_players = set()
-        
-        if not self._api_key:
-            logger.warning("[CFL] No API key - cannot collect rosters")
-            return all_rosters
-        
-        try:
-            client = await self.get_client()
-            params = self._get_auth_params()
-            
-            for year in years:
-                year_count = 0
-                
-                # CFL API may have team-specific roster endpoints
-                # Try /players with season filter
-                try:
-                    params_with_season = {**params, "season": year}
-                    response = await client.get(CFL_ENDPOINTS["players"], params=params_with_season, timeout=60.0)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        players_data = data.get("data", [])
-                        
-                        for player in players_data:
-                            player_id = player.get("cfl_central_id", player.get("player_id", ""))
-                            if not player_id:
-                                continue
-                            
-                            unique_key = f"{player_id}_{year}"
-                            if unique_key in seen_players:
-                                continue
-                            seen_players.add(unique_key)
-                            
-                            team = player.get("team", {})
-                            team_abbr = team.get("abbreviation", "") if isinstance(team, dict) else ""
-                            normalized_abbr = TEAM_ABBR_MAP.get(team_abbr, team_abbr)
-                            
-                            # Parse birth date
-                            birth_date = player.get("birth_date", "")
-                            
-                            roster_entry = {
-                                "external_id": f"cfl_{player_id}",
-                                "cfl_id": player_id,
-                                "league": "CFL",
-                                "season": year,
-                                "team_abbr": normalized_abbr,
-                                "team_name": team.get("name", team.get("team_name", "")) if isinstance(team, dict) else "",
-                                "player_name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
-                                "first_name": player.get("first_name", ""),
-                                "last_name": player.get("last_name", ""),
-                                "position": player.get("position", {}).get("abbreviation", "") if isinstance(player.get("position"), dict) else player.get("position", ""),
-                                "jersey_number": player.get("uniform_number", player.get("jersey", "")),
-                                "height": player.get("height", ""),
-                                "weight": player.get("weight", ""),
-                                "birth_date": birth_date,
-                                "birth_place": player.get("birth_city", ""),
-                                "college": player.get("school", {}).get("name", "") if isinstance(player.get("school"), dict) else player.get("college", ""),
-                                "nationality": player.get("nationality", ""),
-                                "is_canadian": player.get("is_national", False),
-                                "rookie_year": player.get("rookie_year", ""),
-                            }
-                            
-                            all_rosters.append(roster_entry)
-                            year_count += 1
-                        
-                        logger.info(f"[CFL] {year}: {year_count} roster entries")
-                        
-                    elif response.status_code == 401:
-                        logger.error("[CFL] API key invalid")
-                        break
-                    else:
-                        logger.warning(f"[CFL] Players API returned {response.status_code} for {year}")
-                    
-                    await asyncio.sleep(0.3)
-                    
-                except Exception as e:
-                    logger.warning(f"[CFL] Error collecting rosters for {year}: {e}")
-                    continue
-            
-        except Exception as e:
-            logger.error(f"[CFL] Error collecting rosters: {e}")
-        
-        logger.info(f"[CFL] Total {len(all_rosters)} roster entries")
-        return all_rosters
+        logger.info(f"[CFL] 🎰 {url}")
+        print(f"[CFL] 🎰 Odds API: {endpoint}")
 
-    # =========================================================================
-    # PLAYER STATS COLLECTION
-    # =========================================================================
-    
-    async def _collect_player_stats(self, years: List[int]) -> List[Dict[str, Any]]:
-        """Collect player statistics."""
-        all_stats = []
-        
-        if not self._api_key:
-            logger.warning("[CFL] No API key - cannot collect player stats")
-            return all_stats
-        
         try:
-            client = await self.get_client()
-            params = self._get_auth_params()
-            
-            for year in years:
-                year_stats = []
-                
-                # Try to get league leaders which include stats
-                for category in CFL_STAT_CATEGORIES:
-                    try:
-                        url = f"{CFL_ENDPOINTS['leaders']}/{year}/category/{category}"
-                        response = await client.get(url, params=params, timeout=30.0)
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            leaders_data = data.get("data", [])
-                            
-                            for leader in leaders_data:
-                                player = leader.get("player", {})
-                                player_id = player.get("cfl_central_id", player.get("player_id", ""))
-                                
-                                if not player_id:
-                                    continue
-                                
-                                stat_record = {
-                                    "external_id": f"cfl_{player_id}_{year}_{category}",
-                                    "player_id": f"cfl_{player_id}",
-                                    "league": "CFL",
-                                    "season": year,
-                                    "stat_category": category,
-                                    "player_name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
-                                    "team_abbr": TEAM_ABBR_MAP.get(player.get("team", {}).get("abbreviation", ""), ""),
-                                    "games_played": leader.get("games_played", 0),
-                                    "stat_value": leader.get("value", leader.get("yards", leader.get("touchdowns", 0))),
-                                    "rank": leader.get("rank", 0),
-                                }
-                                
-                                # Add category-specific stats
-                                if category == "passing":
-                                    stat_record.update({
-                                        "pass_attempts": leader.get("pass_attempts", 0),
-                                        "pass_completions": leader.get("pass_completions", 0),
-                                        "pass_yards": leader.get("pass_yards", 0),
-                                        "pass_touchdowns": leader.get("pass_touchdowns", 0),
-                                        "interceptions": leader.get("pass_interceptions", 0),
-                                        "passer_rating": leader.get("passer_rating", 0),
-                                    })
-                                elif category == "rushing":
-                                    stat_record.update({
-                                        "rush_attempts": leader.get("rush_attempts", 0),
-                                        "rush_yards": leader.get("rush_yards", 0),
-                                        "rush_touchdowns": leader.get("rush_touchdowns", 0),
-                                        "rush_avg": leader.get("rush_average", 0),
-                                    })
-                                elif category == "receiving":
-                                    stat_record.update({
-                                        "receptions": leader.get("receptions", 0),
-                                        "receiving_yards": leader.get("receiving_yards", 0),
-                                        "receiving_touchdowns": leader.get("receiving_touchdowns", 0),
-                                        "targets": leader.get("targets", 0),
-                                    })
-                                elif category == "defence":
-                                    stat_record.update({
-                                        "tackles": leader.get("tackles", 0),
-                                        "sacks": leader.get("sacks", 0),
-                                        "interceptions_def": leader.get("interceptions", 0),
-                                        "forced_fumbles": leader.get("forced_fumbles", 0),
-                                    })
-                                
-                                year_stats.append(stat_record)
-                        
-                        await asyncio.sleep(0.15)
-                        
-                    except Exception as e:
-                        logger.debug(f"[CFL] Error fetching {category} stats for {year}: {e}")
-                        continue
-                
-                all_stats.extend(year_stats)
-                logger.info(f"[CFL] {year}: {len(year_stats)} player stats")
-            
-        except Exception as e:
-            logger.error(f"[CFL] Error collecting player stats: {e}")
-        
-        logger.info(f"[CFL] Total {len(all_stats)} player stats")
-        return all_stats
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url, params=params)
 
-    # =========================================================================
-    # DATABASE SAVE METHODS
-    # =========================================================================
-    
-    async def save_to_database(self, data: Dict[str, Any], session: AsyncSession) -> int:
-        """Save all collected data to database."""
-        total_saved = 0
-        
-        try:
-            # Ensure sport exists
-            sport = await self._ensure_sport(session)
-            if sport:
-                logger.info(f"[CFL] Sport 'CFL' ready (ID: {sport.id})")
-            
-            # Save venues
-            if data.get("venues"):
-                saved = await self._save_venues(session, data["venues"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} venues")
-            
-            # Save teams
-            if data.get("teams"):
-                saved = await self._save_teams(session, data["teams"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} teams")
-            
-            # Save games
-            if data.get("games"):
-                saved = await self._save_games(session, data["games"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} games")
-            
-            # Save rosters/players
-            if data.get("rosters"):
-                saved = await self._save_rosters(session, data["rosters"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} players")
-            
-            # Save team stats
-            if data.get("team_stats"):
-                saved = await self._save_team_stats(session, data["team_stats"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} team stats")
-            
-            # Save player stats
-            if data.get("player_stats"):
-                saved = await self._save_player_stats(session, data["player_stats"])
-                total_saved += saved
-                logger.info(f"[CFL] Saved {saved} player stats")
-            
-            await session.commit()
-            
+                if resp.status_code == 200:
+                    data = resp.json()
+                    remaining = resp.headers.get("x-requests-remaining", "?")
+                    print(f"[CFL] ✅ Odds API 200 | {len(data) if isinstance(data, list) else 1} items | Remaining: {remaining}")
+                    return data
+                elif resp.status_code == 422:
+                    logger.info(f"[CFL] Odds API: No data available for this request")
+                    return []
+                else:
+                    logger.warning(f"[CFL] ❌ Odds API {resp.status_code}: {resp.text[:200]}")
+                    return None
         except Exception as e:
-            logger.error(f"[CFL] Error saving to database: {e}")
-            import traceback
-            traceback.print_exc()
-            await session.rollback()
-            raise
-        
-        return total_saved
-    
+            logger.error(f"[CFL] ❌ Odds API error: {e}")
+            return None
+
+    def _extract_list(self, data: Any, *keys) -> List[Dict]:
+        """Extract list from TheSportsDB V2 response (handles various key names)."""
+        if not data:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            all_keys = list(keys) + [
+                "schedule", "events", "list", "lookup", "teams",
+                "table", "players", "player", "seasons", "roster",
+            ]
+            for k in all_keys:
+                if k in data:
+                    val = data[k]
+                    if isinstance(val, list):
+                        return val
+                    elif val is None:
+                        return []
+        return []
+
+    def _safe_int(self, val) -> Optional[int]:
+        """Safely convert to int."""
+        if val is None or val == "":
+            return None
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
+
+    def _normalize_team_name(self, name: str) -> Optional[str]:
+        """Normalize a CFL team name to abbreviation."""
+        if not name:
+            return None
+        return CFL_NAME_MAP.get(name.lower().strip())
+
     async def _ensure_sport(self, session: AsyncSession) -> Optional[Sport]:
         """Ensure CFL sport exists in database."""
-        try:
-            result = await session.execute(
-                select(Sport).where(Sport.code == "CFL")
+        result = await session.execute(select(Sport).where(Sport.code == "CFL"))
+        sport = result.scalar_one_or_none()
+
+        if not sport:
+            sport = Sport(
+                code="CFL",
+                name="Canadian Football League",
+                is_active=True,
+                config={"collector": "sportsdb_v2", "source": "TheSportsDB + The Odds API"},
             )
-            sport = result.scalar_one_or_none()
-            
-            if not sport:
-                sport = Sport(
-                    code="CFL",
-                    name="Canadian Football League",
-                    is_active=True,
-                    config={"collector": "CFL", "source": "CFL Official API"}
-                )
-                session.add(sport)
-                await session.flush()
-                logger.info("[CFL] Created sport: CFL")
-            
-            return sport
-            
-        except Exception as e:
-            logger.error(f"[CFL] Error ensuring sport: {e}")
-            return None
-    
-    async def _save_venues(self, session: AsyncSession, venues: List[Dict[str, Any]]) -> int:
-        """Save venue data to database."""
-        saved = 0
+            session.add(sport)
+            await session.flush()
+            logger.info("[CFL] Created sport: CFL")
+            print("[CFL] ✅ Created sport: CFL")
+
+        return sport
+
+    # =========================================================================
+    # 1. TEAMS - TheSportsDB /list/teams/4405 + /lookup/team/{id}
+    # =========================================================================
+
+    async def collect_teams(self) -> List[Dict]:
+        """
+        Collect all CFL teams from TheSportsDB.
         
-        for venue_data in venues:
-            try:
-                venue_name = venue_data.get("name", "")
-                if not venue_name:
-                    continue
-                
-                # Check if venue exists
-                result = await session.execute(
-                    select(Venue).where(Venue.name == venue_name)
-                )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    # Update
-                    existing.city = venue_data.get("city", existing.city)
-                    existing.country = venue_data.get("country", existing.country)
-                    existing.is_dome = venue_data.get("is_dome", existing.is_dome)
-                    existing.surface = venue_data.get("surface", existing.surface)
-                else:
-                    # Create new
-                    venue = Venue(
-                        name=venue_name,
-                        city=venue_data.get("city", ""),
-                        state=venue_data.get("state", ""),
-                        country=venue_data.get("country", "Canada"),
-                        is_dome=venue_data.get("is_dome", False),
-                        surface=venue_data.get("surface", "turf"),
-                    )
-                    session.add(venue)
-                    saved += 1
-                
-            except Exception as e:
-                logger.debug(f"[CFL] Error saving venue: {e}")
-                continue
-        
-        await session.flush()
-        return saved
-    
-    async def _save_teams(self, session: AsyncSession, teams: List[Dict[str, Any]]) -> int:
-        """Save teams to database with proper duplicate handling."""
+        Returns list of team dicts with: name, city, division, logo, stadium info.
+        Also fetches full details (city, stadium) via /lookup/team for each team.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 1: COLLECTING TEAMS")
+        print(f"{'='*60}")
+
+        data = await self._sportsdb_get(f"/list/teams/{CFL_LEAGUE_ID}")
+        raw_teams = self._extract_list(data, "list", "teams")
+
+        if not raw_teams:
+            print("[CFL] ⚠️ No teams from API, using hardcoded fallback")
+            return self._fallback_teams()
+
+        teams = []
+        for t in raw_teams:
+            team_id = t.get("idTeam")
+            team_name = t.get("strTeam", "")
+            abbr_lookup = self._normalize_team_name(team_name)
+
+            team_data = {
+                "sportsdb_id": team_id,
+                "external_id": f"sportsdb_{team_id}",
+                "name": team_name,
+                "abbreviation": (t.get("strTeamShort") or abbr_lookup or "")[:10],
+                "country": t.get("strCountry", "Canada"),
+                "logo_url": t.get("strBadge"),
+                "sport_code": "CFL",
+            }
+
+            # Fetch full details (city, stadium, division)
+            if team_id:
+                details = await self._sportsdb_get(f"/lookup/team/{team_id}")
+                detail_list = self._extract_list(details, "lookup", "teams")
+                if detail_list:
+                    d = detail_list[0]
+                    loc = d.get("strLocation") or ""
+                    city = loc.split(",")[0].strip() if loc else None
+
+                    # Try to find matching hardcoded team for division
+                    division = None
+                    if abbr_lookup and abbr_lookup in CFL_TEAMS:
+                        division = CFL_TEAMS[abbr_lookup]["division"]
+
+                    team_data.update({
+                        "city": city,
+                        "stadium": d.get("strStadium"),
+                        "conference": division or d.get("strDivision"),
+                        "division": division or d.get("strDivision"),
+                        "description": (d.get("strDescriptionEN") or "")[:500] if d.get("strDescriptionEN") else None,
+                    })
+
+                await asyncio.sleep(0.15)  # Rate limit
+
+            teams.append(team_data)
+            print(f"[CFL]   ✅ {team_name} ({team_data.get('city', '?')}) - {team_data.get('division', '?')}")
+
+        print(f"[CFL] Teams collected: {len(teams)}")
+        return teams
+
+    def _fallback_teams(self) -> List[Dict]:
+        """Hardcoded CFL team data as fallback."""
+        teams = []
+        for abbr, info in CFL_TEAMS.items():
+            teams.append({
+                "external_id": f"cfl_{abbr}",
+                "name": info["name"],
+                "abbreviation": abbr,
+                "city": info["city"],
+                "division": info["division"],
+                "conference": info["division"],
+                "sport_code": "CFL",
+            })
+        return teams
+
+    async def save_teams(self, teams: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL teams to database. Updates existing, creates new."""
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0, "updated": 0}
+
         saved = 0
         updated = 0
-        
-        # Get sport
-        result = await session.execute(
-            select(Sport).where(Sport.code == "CFL")
-        )
-        sport = result.scalar_one_or_none()
-        if not sport:
-            return 0
-        
-        for team_data in teams:
+
+        for t in teams:
             try:
-                external_id = team_data.get("external_id", "")
-                team_name = team_data.get("name", "")
-                
-                # Check by external_id first
+                name = t.get("name", "").strip()
+                if not name:
+                    continue
+
+                # Check by name first (handles existing teams with cfl_ external_ids)
                 result = await session.execute(
-                    select(Team).where(Team.external_id == external_id)
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == name))
                 )
-                existing = result.scalar_one_or_none()
-                
-                # Also check by (sport_id, name)
-                if not existing and team_name:
+                team = result.scalar_one_or_none()
+
+                # Also check by sportsdb external_id
+                if not team and t.get("external_id"):
                     result = await session.execute(
-                        select(Team).where(
-                            and_(
-                                Team.sport_id == sport.id,
-                                Team.name == team_name
-                            )
-                        )
+                        select(Team).where(Team.external_id == t["external_id"])
                     )
-                    existing = result.scalar_one_or_none()
-                
-                if existing:
-                    # Update
-                    existing.external_id = external_id
-                    existing.abbreviation = team_data.get("abbreviation", existing.abbreviation)
-                    existing.city = team_data.get("city", existing.city)
-                    existing.conference = team_data.get("conference", existing.conference)
-                    existing.division = team_data.get("division", existing.division)
+                    team = result.scalar_one_or_none()
+
+                if team:
+                    # Update existing
+                    team.abbreviation = t.get("abbreviation") or team.abbreviation
+                    team.logo_url = t.get("logo_url") or team.logo_url
+                    if t.get("city") and not team.city:
+                        team.city = t["city"]
+                    if t.get("conference"):
+                        team.conference = t["conference"]
+                    if t.get("division"):
+                        team.division = t["division"]
                     updated += 1
                 else:
                     # Create new
                     team = Team(
+                        external_id=t.get("external_id", f"cfl_{t.get('abbreviation', 'UNK')}"),
+                        name=name,
+                        abbreviation=(t.get("abbreviation") or "UNK")[:10],
                         sport_id=sport.id,
-                        external_id=external_id,
-                        name=team_name,
-                        abbreviation=team_data.get("abbreviation", ""),
-                        city=team_data.get("city", ""),
-                        conference=team_data.get("conference", ""),
-                        division=team_data.get("division", ""),
-                        is_active=team_data.get("is_active", True),
+                        logo_url=t.get("logo_url"),
+                        city=t.get("city"),
+                        conference=t.get("conference"),
+                        division=t.get("division"),
                     )
                     session.add(team)
                     saved += 1
-                
+
             except Exception as e:
-                logger.debug(f"[CFL] Error saving team: {e}")
-                continue
+                logger.debug(f"[CFL] Team save error: {e}")
+
+        await session.commit()
+        print(f"[CFL] Teams: {saved} new, {updated} updated")
+        return {"saved": saved, "updated": updated}
+
+    # =========================================================================
+    # 2. GAMES - TheSportsDB /schedule/league/4405/{season}
+    # =========================================================================
+
+    async def collect_games(self, seasons_back: int = 17) -> List[Dict]:
+        """
+        Collect CFL games from TheSportsDB for multiple seasons.
         
-        await session.flush()
-        logger.info(f"[CFL] Teams: {saved} new, {updated} updated")
-        return saved + updated
-    
-    async def _save_games(self, session: AsyncSession, games: List[Dict[str, Any]]) -> int:
-        """Save games to database with proper duplicate handling."""
+        Args:
+            seasons_back: Number of seasons to collect (default 17 = 2008-2025)
+        
+        Returns list of game dicts with: teams, scores, dates, venues, status.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 2: COLLECTING GAMES ({seasons_back} seasons)")
+        print(f"{'='*60}")
+
+        # Get available seasons
+        season_data = await self._sportsdb_get(f"/list/seasons/{CFL_LEAGUE_ID}")
+        available_seasons = self._extract_list(season_data, "seasons")
+        season_list = sorted(
+            [s.get("strSeason") for s in available_seasons if s.get("strSeason")],
+            reverse=True,
+        )
+
+        if not season_list:
+            # Fallback: generate season strings
+            current_year = datetime.now().year
+            season_list = [str(y) for y in range(current_year, CFL_FIRST_SEASON - 1, -1)]
+
+        # Limit to requested number
+        season_list = season_list[:seasons_back]
+        print(f"[CFL] Collecting seasons: {season_list}")
+
+        all_games = []
+        for season in season_list:
+            try:
+                data = await self._sportsdb_get(f"/schedule/league/{CFL_LEAGUE_ID}/{season}")
+                events = self._extract_list(data, "schedule", "events")
+
+                season_games = []
+                for e in events:
+                    game = self._parse_event(e)
+                    if game:
+                        season_games.append(game)
+
+                all_games.extend(season_games)
+                print(f"[CFL]   {season}: {len(season_games)} games")
+                await asyncio.sleep(0.5)  # Be nice to API
+
+            except Exception as e:
+                logger.error(f"[CFL] Error collecting {season}: {e}")
+                print(f"[CFL]   {season}: ❌ Error - {e}")
+
+        print(f"[CFL] Total games collected: {len(all_games)}")
+        return all_games
+
+    def _parse_event(self, e: Dict) -> Optional[Dict]:
+        """Parse a TheSportsDB event into a game dict."""
+        try:
+            date_str = e.get("dateEvent", "")
+            if not date_str:
+                return None
+
+            time_str = e.get("strTime", "00:00:00") or "00:00:00"
+            time_str = time_str.replace("+00:00", "").strip()
+            if len(time_str) == 5:
+                time_str += ":00"
+
+            try:
+                scheduled = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                scheduled = datetime.strptime(date_str, "%Y-%m-%d")
+
+            status_raw = e.get("strStatus") or ""
+            status = STATUS_MAP.get(status_raw, "scheduled")
+
+            return {
+                "external_id": f"sportsdb_{e.get('idEvent')}",
+                "sportsdb_id": e.get("idEvent"),
+                "home_team": e.get("strHomeTeam", "").strip(),
+                "away_team": e.get("strAwayTeam", "").strip(),
+                "scheduled_time": scheduled,
+                "home_score": self._safe_int(e.get("intHomeScore")),
+                "away_score": self._safe_int(e.get("intAwayScore")),
+                "venue": e.get("strVenue"),
+                "round": e.get("intRound"),
+                "season": e.get("strSeason"),
+                "status": status,
+                "sport_code": "CFL",
+            }
+
+        except Exception as ex:
+            logger.debug(f"[CFL] Parse error: {ex}")
+            return None
+
+    async def save_games(self, games: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL games to database. Auto-creates teams if needed."""
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0, "updated": 0}
+
         saved = 0
         updated = 0
         skipped = 0
-        
-        # Get sport
-        result = await session.execute(
-            select(Sport).where(Sport.code == "CFL")
-        )
-        sport = result.scalar_one_or_none()
-        if not sport:
-            return 0
-        
-        for game_data in games:
+        teams_created = 0
+
+        for g in games:
             try:
-                external_id = game_data.get("external_id", "")
-                
-                # Find home team
-                home_abbr = game_data.get("home_team_abbr", "")
-                home_external_id = f"cfl_{home_abbr}"
-                
-                result = await session.execute(
-                    select(Team).where(Team.external_id == home_external_id)
-                )
-                home_team = result.scalar_one_or_none()
-                
-                # Fallback by name
-                if not home_team and game_data.get("home_team_name"):
-                    result = await session.execute(
-                        select(Team).where(
-                            and_(
-                                Team.sport_id == sport.id,
-                                Team.name == game_data.get("home_team_name")
-                            )
-                        )
-                    )
-                    home_team = result.scalar_one_or_none()
-                
-                # Find away team
-                away_abbr = game_data.get("away_team_abbr", "")
-                away_external_id = f"cfl_{away_abbr}"
-                
-                result = await session.execute(
-                    select(Team).where(Team.external_id == away_external_id)
-                )
-                away_team = result.scalar_one_or_none()
-                
-                # Fallback by name
-                if not away_team and game_data.get("away_team_name"):
-                    result = await session.execute(
-                        select(Team).where(
-                            and_(
-                                Team.sport_id == sport.id,
-                                Team.name == game_data.get("away_team_name")
-                            )
-                        )
-                    )
-                    away_team = result.scalar_one_or_none()
-                
-                if not home_team or not away_team:
+                home_name = g.get("home_team", "")
+                away_name = g.get("away_team", "")
+                if not home_name or not away_name:
                     skipped += 1
                     continue
-                
+
+                # Find or create home team
+                home_team = await self._find_or_create_team(home_name, sport, session)
+                if not home_team:
+                    skipped += 1
+                    continue
+
+                # Find or create away team
+                away_team = await self._find_or_create_team(away_name, sport, session)
+                if not away_team:
+                    skipped += 1
+                    continue
+
+                ext_id = g.get("external_id")
+
                 # Check if game exists
-                result = await session.execute(
-                    select(Game).where(Game.external_id == external_id)
-                )
-                existing = result.scalar_one_or_none()
-                
-                # Map status
-                status_map = {
-                    "final": GameStatus.FINAL,
-                    "in_progress": GameStatus.IN_PROGRESS,
-                    "scheduled": GameStatus.SCHEDULED,
-                    "postponed": GameStatus.POSTPONED,
-                    "cancelled": GameStatus.CANCELLED,
-                }
-                game_status = status_map.get(game_data.get("status", "scheduled"), GameStatus.SCHEDULED)
-                
-                if existing:
-                    # Update scores
-                    existing.home_score = game_data.get("home_score")
-                    existing.away_score = game_data.get("away_score")
-                    existing.status = game_status
+                existing = await session.execute(select(Game).where(Game.external_id == ext_id))
+                game = existing.scalar_one_or_none()
+
+                if game:
+                    game.home_score = g.get("home_score")
+                    game.away_score = g.get("away_score")
+                    game.scheduled_at = g.get("scheduled_time")
                     updated += 1
                 else:
-                    # Create new game
                     game = Game(
+                        external_id=ext_id,
                         sport_id=sport.id,
-                        external_id=external_id,
                         home_team_id=home_team.id,
                         away_team_id=away_team.id,
-                        scheduled_at=game_data.get("scheduled_at", datetime.now()),
-                        status=game_status,
-                        home_score=game_data.get("home_score"),
-                        away_score=game_data.get("away_score"),
+                        scheduled_at=g.get("scheduled_time"),
+                        home_score=g.get("home_score"),
+                        away_score=g.get("away_score"),
                     )
                     session.add(game)
                     saved += 1
-                
+
             except Exception as e:
-                logger.debug(f"[CFL] Error saving game: {e}")
-                continue
-        
+                logger.debug(f"[CFL] Game save error: {e}")
+                skipped += 1
+
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.error(f"[CFL] Commit error: {e}")
+            await session.rollback()
+
+        print(f"[CFL] Games: {saved} new, {updated} updated, {skipped} skipped")
+        return {"saved": saved, "updated": updated, "skipped": skipped}
+
+    async def _find_or_create_team(
+        self, team_name: str, sport: Sport, session: AsyncSession
+    ) -> Optional[Team]:
+        """Find a CFL team by name (multiple matching strategies), or create it."""
+        # 1. Exact name match
+        result = await session.execute(
+            select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
+        )
+        team = result.scalar_one_or_none()
+        if team:
+            return team
+
+        # 2. ILIKE partial match
+        result = await session.execute(
+            select(Team).where(
+                and_(Team.sport_id == sport.id, Team.name.ilike(f"%{team_name}%"))
+            ).limit(1)
+        )
+        team = result.scalar_one_or_none()
+        if team:
+            return team
+
+        # 3. Reverse partial match (team_name contains DB team name)
+        all_teams_result = await session.execute(
+            select(Team).where(Team.sport_id == sport.id)
+        )
+        all_teams = all_teams_result.scalars().all()
+        for t in all_teams:
+            if t.name and (t.name.lower() in team_name.lower() or team_name.lower() in t.name.lower()):
+                return t
+
+        # 4. Abbreviation-based lookup
+        abbr = self._normalize_team_name(team_name)
+        if abbr:
+            for t in all_teams:
+                if t.abbreviation and t.abbreviation.upper() == abbr.upper():
+                    return t
+
+        # 5. Auto-create team
+        new_ext = f"sportsdb_CFL_{team_name.replace(' ', '_').lower()}"
+        new_team = Team(
+            name=team_name,
+            sport_id=sport.id,
+            external_id=new_ext,
+            abbreviation=(abbr or team_name[:3].upper())[:10],
+        )
+        # Enrich from hardcoded data
+        if abbr and abbr in CFL_TEAMS:
+            info = CFL_TEAMS[abbr]
+            new_team.city = info["city"]
+            new_team.division = info["division"]
+            new_team.conference = info["division"]
+
+        session.add(new_team)
         await session.flush()
-        logger.info(f"[CFL] Games: {saved} new, {updated} updated, {skipped} skipped")
-        return saved + updated
-    
-    async def _save_rosters(self, session: AsyncSession, rosters: List[Dict[str, Any]]) -> int:
-        """Save roster/player data to database."""
+        print(f"[CFL]   ➕ Auto-created team: {team_name}")
+        return new_team
+
+    # =========================================================================
+    # 3. PLAYERS - TheSportsDB /list/players/{teamId}
+    # =========================================================================
+
+    async def collect_players(self) -> List[Dict]:
+        """
+        Collect CFL players from TheSportsDB by fetching rosters for each team.
+        
+        Returns list of player dicts with: name, team, position, nationality, etc.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 3: COLLECTING PLAYERS")
+        print(f"{'='*60}")
+
+        # First get all CFL teams from API
+        data = await self._sportsdb_get(f"/list/teams/{CFL_LEAGUE_ID}")
+        teams = self._extract_list(data, "list", "teams")
+
+        if not teams:
+            print("[CFL] ⚠️ No teams found, cannot collect players")
+            return []
+
+        all_players = []
+        for t in teams:
+            team_id = t.get("idTeam")
+            team_name = t.get("strTeam", "Unknown")
+
+            if not team_id:
+                continue
+
+            player_data = await self._sportsdb_get(f"/list/players/{team_id}")
+            players = self._extract_list(player_data, "player", "players", "list")
+
+            if not players:
+                print(f"[CFL]   {team_name}: 0 players (empty roster)")
+                await asyncio.sleep(0.15)
+                continue
+
+            for p in players:
+                player_entry = {
+                    "external_id": f"sportsdb_{p.get('idPlayer')}",
+                    "sportsdb_id": p.get("idPlayer"),
+                    "name": p.get("strPlayer", "Unknown"),
+                    "team_name": team_name,
+                    "team_sportsdb_id": team_id,
+                    "position": p.get("strPosition"),
+                    "number": p.get("strNumber"),
+                    "nationality": p.get("strNationality"),
+                    "birth_date": p.get("dateBorn"),
+                    "height": p.get("strHeight"),
+                    "weight": p.get("strWeight"),
+                    "photo_url": p.get("strCutout") or p.get("strThumb"),
+                    "description": (p.get("strDescriptionEN") or "")[:500] or None,
+                    "sport_code": "CFL",
+                }
+                all_players.append(player_entry)
+
+            print(f"[CFL]   {team_name}: {len(players)} players")
+            await asyncio.sleep(0.15)
+
+        print(f"[CFL] Total players collected: {len(all_players)}")
+        return all_players
+
+    async def save_players(self, players: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL players to database."""
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0, "updated": 0}
+
         saved = 0
         updated = 0
-        
-        # Get sport
-        result = await session.execute(
-            select(Sport).where(Sport.code == "CFL")
-        )
-        sport = result.scalar_one_or_none()
-        if not sport:
-            return 0
-        
-        for roster_data in rosters:
+
+        for p in players:
             try:
-                external_id = roster_data.get("external_id", "")
-                
-                # Check if player exists
-                result = await session.execute(
-                    select(Player).where(Player.external_id == external_id)
-                )
-                existing = result.scalar_one_or_none()
-                
-                # Find team
-                team_abbr = roster_data.get("team_abbr", "")
-                team_external_id = f"cfl_{team_abbr}"
-                
-                team_result = await session.execute(
-                    select(Team).where(Team.external_id == team_external_id)
-                )
-                team = team_result.scalar_one_or_none()
-                
-                if existing:
-                    # Update player info
-                    existing.name = roster_data.get("player_name", existing.name)
-                    existing.position = roster_data.get("position", existing.position)
-                    if team:
-                        existing.team_id = team.id
-                    existing.height = roster_data.get("height", existing.height)
-                    try:
-                        jersey = roster_data.get("jersey_number")
-                        if jersey:
-                            existing.jersey_number = int(jersey)
-                    except:
-                        pass
-                    try:
-                        weight = roster_data.get("weight")
-                        if weight:
-                            existing.weight = int(weight)
-                    except:
-                        pass
+                ext_id = p.get("external_id")
+                if not ext_id:
+                    continue
+
+                # Check if player exists by external_id
+                result = await session.execute(select(Player).where(Player.external_id == ext_id))
+                player = result.scalar_one_or_none()
+
+                if player:
+                    # Update existing
+                    player.name = p.get("name") or player.name
+                    player.position = p.get("position") or player.position
+                    # Update team assignment
+                    team_name = p.get("team_name")
+                    if team_name:
+                        team_result = await session.execute(
+                            select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
+                        )
+                        team = team_result.scalar_one_or_none()
+                        if team:
+                            player.team_id = team.id
                     updated += 1
                 else:
-                    # Create new player
+                    # Find team
+                    team = None
+                    team_name = p.get("team_name")
+                    if team_name:
+                        team_result = await session.execute(
+                            select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
+                        )
+                        team = team_result.scalar_one_or_none()
+                        # Try partial match
+                        if not team:
+                            team_result = await session.execute(
+                                select(Team).where(
+                                    and_(Team.sport_id == sport.id, Team.name.ilike(f"%{team_name}%"))
+                                ).limit(1)
+                            )
+                            team = team_result.scalar_one_or_none()
+
+                    # Parse jersey number
+                    jersey = None
+                    if p.get("number"):
+                        try:
+                            jersey = int(str(p["number"]).strip())
+                        except (ValueError, TypeError):
+                            pass
+
                     player = Player(
-                        external_id=external_id,
-                        name=roster_data.get("player_name", ""),
-                        position=roster_data.get("position", ""),
+                        external_id=ext_id,
+                        name=p.get("name", "Unknown")[:200],
                         team_id=team.id if team else None,
-                        height=roster_data.get("height", ""),
-                        is_active=True,
+                        position=p.get("position"),
+                        jersey_number=jersey,
                     )
-                    
-                    try:
-                        jersey = roster_data.get("jersey_number")
-                        if jersey:
-                            player.jersey_number = int(jersey)
-                    except:
-                        pass
-                    
-                    try:
-                        weight = roster_data.get("weight")
-                        if weight:
-                            player.weight = int(weight)
-                    except:
-                        pass
-                    
                     session.add(player)
                     saved += 1
-                
+
             except Exception as e:
-                logger.debug(f"[CFL] Error saving player: {e}")
-                continue
+                logger.debug(f"[CFL] Player save error: {e}")
+
+        await session.commit()
+        print(f"[CFL] Players: {saved} new, {updated} updated")
+        return {"saved": saved, "updated": updated}
+
+    # =========================================================================
+    # 4. PLAYER STATS - TheSportsDB (Limited)
+    # =========================================================================
+
+    async def collect_player_stats(self) -> List[Dict]:
+        """
+        Collect CFL player stats.
         
-        await session.flush()
-        logger.info(f"[CFL] Players: {saved} new, {updated} updated")
-        return saved + updated
-    
-    async def _save_team_stats(self, session: AsyncSession, team_stats: List[Dict[str, Any]]) -> int:
-        """Save team statistics to database."""
+        LIMITATION: TheSportsDB does not provide per-game CFL player statistics
+        (no passing/rushing/receiving/defense stats). This method returns an empty
+        list and logs the limitation.
+        
+        Future: Can be extended to scrape from footballdb.com or StatsCrew.com
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 4: COLLECTING PLAYER STATS")
+        print(f"{'='*60}")
+        print("[CFL] ⚠️ TheSportsDB does NOT provide per-game CFL player statistics")
+        print("[CFL]    Future sources: footballdb.com, StatsCrew.com scraping")
+        print("[CFL]    Player stats: 0 collected (source limitation)")
+
+        logger.info("[CFL] Player stats not available from TheSportsDB for CFL")
+        return []
+
+    async def save_player_stats(self, stats: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL player stats to database."""
+        if not stats:
+            return {"saved": 0}
+
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0}
+
         saved = 0
-        
-        for stat_data in team_stats:
+        for stat in stats:
             try:
-                team_abbr = stat_data.get("team_abbr", "")
-                team_external_id = f"cfl_{team_abbr}"
-                
+                player_ext_id = stat.get("player_external_id")
+                if not player_ext_id:
+                    continue
+
+                result = await session.execute(
+                    select(Player).where(Player.external_id == player_ext_id)
+                )
+                player = result.scalar_one_or_none()
+                if not player:
+                    continue
+
+                stat_type = stat.get("stat_type", "general")
+                game_id = stat.get("game_id")
+
+                player_stat = PlayerStats(
+                    player_id=player.id,
+                    game_id=game_id,
+                    stat_type=stat_type,
+                    value=float(stat.get("value", 0)),
+                )
+                session.add(player_stat)
+                saved += 1
+
+            except Exception as e:
+                logger.debug(f"[CFL] Player stat save error: {e}")
+
+        if saved > 0:
+            await session.commit()
+        print(f"[CFL] Player stats: {saved} saved")
+        return {"saved": saved}
+
+    # =========================================================================
+    # 5. TEAM STATS - TheSportsDB /lookup/table/4405/{season}
+    # =========================================================================
+
+    async def collect_team_stats(self, seasons_back: int = 17) -> List[Dict]:
+        """
+        Collect CFL team stats (standings) from TheSportsDB.
+        
+        Returns: W, L, D, GF (points for), GA (points against), etc. per team per season.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 5: COLLECTING TEAM STATS (STANDINGS)")
+        print(f"{'='*60}")
+
+        current_year = datetime.now().year
+        start_year = max(CFL_FIRST_SEASON, current_year - seasons_back + 1)
+
+        all_stats = []
+        for year in range(start_year, current_year + 1):
+            season_str = str(year)
+            try:
+                data = await self._sportsdb_get(f"/lookup/table/{CFL_LEAGUE_ID}/{season_str}")
+                standings = self._extract_list(data, "table", "standings")
+
+                if not standings:
+                    print(f"[CFL]   {year}: No standings data")
+                    await asyncio.sleep(0.3)
+                    continue
+
+                season_count = 0
+                for s in standings:
+                    team_name = s.get("strTeam", "")
+                    if not team_name:
+                        continue
+
+                    # Each standing entry becomes multiple TeamStats records
+                    # (one per stat type for ML flexibility)
+                    base = {
+                        "team_name": team_name,
+                        "team_sportsdb_id": s.get("idTeam"),
+                        "season": year,
+                        "sport_code": "CFL",
+                    }
+
+                    stat_fields = {
+                        "wins": self._safe_int(s.get("intWin")) or 0,
+                        "losses": self._safe_int(s.get("intLoss")) or 0,
+                        "draws": self._safe_int(s.get("intDraw")) or 0,
+                        "played": self._safe_int(s.get("intPlayed")) or 0,
+                        "points_for": self._safe_int(s.get("intGoalsFor")) or 0,
+                        "points_against": self._safe_int(s.get("intGoalsAgainst")) or 0,
+                        "goal_difference": self._safe_int(s.get("intGoalDifference")) or 0,
+                        "standings_points": self._safe_int(s.get("intPoints")) or 0,
+                        "rank": self._safe_int(s.get("intRank")) or 0,
+                    }
+
+                    for stat_name, stat_value in stat_fields.items():
+                        all_stats.append({
+                            **base,
+                            "stat_type": f"CFL_{year}_{stat_name}",
+                            "stat_name": stat_name,
+                            "value": float(stat_value),
+                            "games_played": stat_fields["played"],
+                        })
+                        season_count += 1
+
+                print(f"[CFL]   {year}: {len(standings)} teams, {season_count} stat records")
+                await asyncio.sleep(0.3)
+
+            except Exception as e:
+                logger.error(f"[CFL] Error collecting standings for {year}: {e}")
+                print(f"[CFL]   {year}: ❌ Error - {e}")
+
+        print(f"[CFL] Total team stats collected: {len(all_stats)}")
+        return all_stats
+
+    async def save_team_stats(self, stats: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL team stats (standings) to database."""
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0}
+
+        saved = 0
+        skipped = 0
+
+        for stat in stats:
+            try:
+                team_name = stat.get("team_name", "")
+                if not team_name:
+                    skipped += 1
+                    continue
+
                 # Find team
                 team_result = await session.execute(
-                    select(Team).where(Team.external_id == team_external_id)
+                    select(Team).where(and_(Team.sport_id == sport.id, Team.name == team_name))
                 )
                 team = team_result.scalar_one_or_none()
-                
+
                 if not team:
+                    # Try partial match
+                    team_result = await session.execute(
+                        select(Team).where(
+                            and_(Team.sport_id == sport.id, Team.name.ilike(f"%{team_name}%"))
+                        ).limit(1)
+                    )
+                    team = team_result.scalar_one_or_none()
+
+                if not team:
+                    skipped += 1
                     continue
-                
-                season = stat_data.get("season", datetime.now().year)
-                stat_type = f"CFL_{season}_standings"
-                
-                # Check existing
-                result = await session.execute(
+
+                stat_type = stat.get("stat_type", "")
+
+                # Check if stat already exists
+                existing = await session.execute(
                     select(TeamStats).where(
-                        and_(
-                            TeamStats.team_id == team.id,
-                            TeamStats.stat_type == stat_type
-                        )
+                        and_(TeamStats.team_id == team.id, TeamStats.stat_type == stat_type)
                     )
                 )
-                existing = result.scalar_one_or_none()
-                
-                wins = stat_data.get("wins", 0)
-                losses = stat_data.get("losses", 0)
-                
-                if existing:
-                    existing.value = float(wins)
-                    existing.games_played = wins + losses + stat_data.get("ties", 0)
+                existing_stat = existing.scalar_one_or_none()
+
+                if existing_stat:
+                    existing_stat.value = stat.get("value", 0.0)
+                    existing_stat.games_played = stat.get("games_played", 0)
                 else:
                     team_stat = TeamStats(
                         team_id=team.id,
                         stat_type=stat_type,
-                        value=float(wins),
-                        games_played=wins + losses + stat_data.get("ties", 0),
+                        value=stat.get("value", 0.0),
+                        games_played=stat.get("games_played", 0),
                     )
                     session.add(team_stat)
                     saved += 1
-                
+
             except Exception as e:
-                logger.debug(f"[CFL] Error saving team stat: {e}")
-                continue
-        
-        await session.flush()
-        return saved
-    
-    async def _save_player_stats(self, session: AsyncSession, player_stats: List[Dict[str, Any]]) -> int:
-        """Save player statistics to database."""
-        saved = 0
-        
-        for stat_data in player_stats:
-            try:
-                player_external_id = stat_data.get("player_id", "")
-                
-                # Find player
-                player_result = await session.execute(
-                    select(Player).where(Player.external_id == player_external_id)
-                )
-                player = player_result.scalar_one_or_none()
-                
-                if not player:
-                    continue
-                
-                season = stat_data.get("season", datetime.now().year)
-                category = stat_data.get("stat_category", "general")
-                stat_type = f"CFL_{season}_{category}"
-                
-                # Check existing
-                result = await session.execute(
-                    select(PlayerStats).where(
-                        and_(
-                            PlayerStats.player_id == player.id,
-                            PlayerStats.stat_type == stat_type
-                        )
-                    )
-                )
-                existing = result.scalar_one_or_none()
-                
-                stat_value = stat_data.get("stat_value", 0)
-                
-                if existing:
-                    existing.value = float(stat_value)
-                else:
-                    player_stat = PlayerStats(
-                        player_id=player.id,
-                        stat_type=stat_type,
-                        value=float(stat_value),
-                    )
-                    session.add(player_stat)
-                    saved += 1
-                
-            except Exception as e:
-                logger.debug(f"[CFL] Error saving player stat: {e}")
-                continue
-        
-        await session.flush()
-        return saved
+                logger.debug(f"[CFL] Team stat save error: {e}")
+                skipped += 1
+
+        await session.commit()
+        print(f"[CFL] Team stats: {saved} saved, {skipped} skipped")
+        return {"saved": saved, "skipped": skipped}
 
     # =========================================================================
-    # VALIDATION METHOD (Required by BaseCollector)
+    # 6. INJURIES - Not available from TheSportsDB
     # =========================================================================
-    
+
+    async def collect_injuries(self) -> List[Dict]:
+        """
+        Collect CFL injuries.
+        
+        LIMITATION: TheSportsDB does not provide CFL injury data.
+        This method returns an empty list and logs the limitation.
+        
+        Future: Can be extended to scrape from CFL.ca/injuries or TSN CFL reports.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 6: COLLECTING INJURIES")
+        print(f"{'='*60}")
+        print("[CFL] ⚠️ TheSportsDB does NOT provide CFL injury data")
+        print("[CFL]    Future sources: CFL.ca, TSN, Sportsnet CFL injury reports")
+        print("[CFL]    Injuries: 0 collected (source limitation)")
+
+        logger.info("[CFL] Injury data not available from TheSportsDB for CFL")
+        return []
+
+    async def save_injuries(self, injuries: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL injuries to database."""
+        if not injuries:
+            return {"saved": 0, "updated": 0}
+
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0, "updated": 0}
+
+        saved = 0
+        for inj in injuries:
+            try:
+                ext_id = inj.get("external_id")
+                if not ext_id:
+                    continue
+
+                # Check existing
+                result = await session.execute(
+                    select(Injury).where(Injury.external_id == ext_id)
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    continue
+
+                # Find team
+                team_name = inj.get("team_name", "")
+                team_result = await session.execute(
+                    select(Team).where(
+                        and_(Team.sport_id == sport.id, Team.name.ilike(f"%{team_name}%"))
+                    ).limit(1)
+                )
+                team = team_result.scalar_one_or_none()
+                if not team:
+                    continue
+
+                injury = Injury(
+                    external_id=ext_id,
+                    team_id=team.id,
+                    sport_code="CFL",
+                    player_name=inj.get("player_name", ""),
+                    position=inj.get("position"),
+                    injury_type=inj.get("injury_type"),
+                    status=inj.get("status", "Unknown"),
+                    source="thesportsdb",
+                )
+                session.add(injury)
+                saved += 1
+
+            except Exception as e:
+                logger.debug(f"[CFL] Injury save error: {e}")
+
+        if saved > 0:
+            await session.commit()
+        print(f"[CFL] Injuries: {saved} saved")
+        return {"saved": saved, "updated": 0}
+
+    # =========================================================================
+    # 7. ODDS - The Odds API /v4/sports/americanfootball_cfl/odds
+    # =========================================================================
+
+    async def collect_odds(self, days_back: int = 30) -> List[Dict]:
+        """
+        Collect CFL odds from The Odds API.
+        
+        Collects moneyline (h2h), spreads, and totals from available bookmakers.
+        Uses /odds endpoint for upcoming games, /odds-history for historical.
+        
+        Args:
+            days_back: Number of days back for historical odds (default 30)
+        
+        Returns list of odds dicts ready for database save.
+        """
+        print(f"\n{'='*60}")
+        print(f"[CFL] STEP 7: COLLECTING ODDS (The Odds API)")
+        print(f"{'='*60}")
+
+        if not self.odds_api_key:
+            print("[CFL] ⚠️ No ODDS_API_KEY set - cannot collect odds")
+            print("[CFL]    Set ODDS_API_KEY environment variable")
+            return []
+
+        all_odds = []
+
+        # 1. Upcoming odds (live/upcoming games)
+        print("[CFL] Fetching upcoming CFL odds...")
+        upcoming = await self._odds_api_get(
+            f"/sports/{CFL_ODDS_SPORT_KEY}/odds",
+            params={
+                "regions": "us,us2",
+                "markets": "h2h,spreads,totals",
+                "oddsFormat": "american",
+            },
+        )
+
+        if upcoming and isinstance(upcoming, list):
+            for event in upcoming:
+                odds_records = self._parse_odds_event(event)
+                all_odds.extend(odds_records)
+            print(f"[CFL]   Upcoming: {len(upcoming)} events → {len(all_odds)} odds records")
+        else:
+            print("[CFL]   Upcoming: No active CFL events (may be off-season)")
+
+        # 2. Historical odds (recent past)
+        print(f"[CFL] Fetching historical CFL odds ({days_back} days back)...")
+        today = datetime.now()
+
+        for days_ago in range(1, days_back + 1, 3):  # Sample every 3 days to conserve API calls
+            target_date = today - timedelta(days=days_ago)
+            date_str = target_date.strftime("%Y-%m-%dT12:00:00Z")
+
+            hist = await self._odds_api_get(
+                f"/sports/{CFL_ODDS_SPORT_KEY}/odds-history",
+                params={
+                    "regions": "us,us2",
+                    "markets": "h2h,spreads,totals",
+                    "oddsFormat": "american",
+                    "date": date_str,
+                },
+            )
+
+            if hist and isinstance(hist, dict):
+                events = hist.get("data", [])
+                for event in events:
+                    odds_records = self._parse_odds_event(event, recorded_at=target_date)
+                    all_odds.extend(odds_records)
+
+                if events:
+                    print(f"[CFL]   {target_date.strftime('%Y-%m-%d')}: {len(events)} events")
+
+            await asyncio.sleep(0.2)  # Rate limit
+
+        print(f"[CFL] Total odds collected: {len(all_odds)}")
+        return all_odds
+
+    def _parse_odds_event(self, event: Dict, recorded_at: datetime = None) -> List[Dict]:
+        """Parse a single Odds API event into multiple odds records."""
+        records = []
+
+        home_team = event.get("home_team", "")
+        away_team = event.get("away_team", "")
+        commence_time_str = event.get("commence_time", "")
+
+        try:
+            if commence_time_str:
+                commence_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
+                commence_time = commence_time.replace(tzinfo=None)
+            else:
+                commence_time = None
+        except (ValueError, TypeError):
+            commence_time = None
+
+        bookmakers = event.get("bookmakers", [])
+
+        for bookie in bookmakers:
+            bookie_key = bookie.get("key", "unknown")
+            markets = bookie.get("markets", [])
+
+            for market in markets:
+                market_key = market.get("key", "")
+                outcomes = market.get("outcomes", [])
+
+                if market_key == "h2h":
+                    # Moneyline
+                    home_odds = None
+                    away_odds = None
+                    for o in outcomes:
+                        if o.get("name") == home_team:
+                            home_odds = self._safe_int(o.get("price"))
+                        elif o.get("name") == away_team:
+                            away_odds = self._safe_int(o.get("price"))
+
+                    if home_odds is not None or away_odds is not None:
+                        records.append({
+                            "home_team": home_team,
+                            "away_team": away_team,
+                            "commence_time": commence_time,
+                            "sportsbook_key": bookie_key,
+                            "bet_type": "moneyline",
+                            "home_odds": home_odds,
+                            "away_odds": away_odds,
+                            "recorded_at": recorded_at or datetime.utcnow(),
+                        })
+
+                elif market_key == "spreads":
+                    # Point spread
+                    home_line = None
+                    away_line = None
+                    home_odds = None
+                    away_odds = None
+                    for o in outcomes:
+                        if o.get("name") == home_team:
+                            home_line = o.get("point")
+                            home_odds = self._safe_int(o.get("price"))
+                        elif o.get("name") == away_team:
+                            away_line = o.get("point")
+                            away_odds = self._safe_int(o.get("price"))
+
+                    records.append({
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "sportsbook_key": bookie_key,
+                        "bet_type": "spread",
+                        "home_line": home_line,
+                        "away_line": away_line,
+                        "home_odds": home_odds,
+                        "away_odds": away_odds,
+                        "recorded_at": recorded_at or datetime.utcnow(),
+                    })
+
+                elif market_key == "totals":
+                    # Over/Under
+                    total = None
+                    over_odds = None
+                    under_odds = None
+                    for o in outcomes:
+                        if o.get("name") == "Over":
+                            total = o.get("point")
+                            over_odds = self._safe_int(o.get("price"))
+                        elif o.get("name") == "Under":
+                            under_odds = self._safe_int(o.get("price"))
+
+                    records.append({
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "sportsbook_key": bookie_key,
+                        "bet_type": "total",
+                        "total": total,
+                        "over_odds": over_odds,
+                        "under_odds": under_odds,
+                        "recorded_at": recorded_at or datetime.utcnow(),
+                    })
+
+        return records
+
+    async def save_odds(self, odds: List[Dict], session: AsyncSession) -> Dict[str, int]:
+        """Save CFL odds to database. Matches games by team names + date."""
+        sport = await self._ensure_sport(session)
+        if not sport:
+            return {"saved": 0}
+
+        saved = 0
+        unmatched = 0
+
+        for odd in odds:
+            try:
+                home_name = odd.get("home_team", "")
+                away_name = odd.get("away_team", "")
+                commence = odd.get("commence_time")
+
+                if not home_name or not away_name or not commence:
+                    unmatched += 1
+                    continue
+
+                # Find matching game (team names + date ±2 days)
+                game = await self._match_game(
+                    home_name, away_name, commence, sport, session
+                )
+
+                if not game:
+                    unmatched += 1
+                    continue
+
+                # Create odds record
+                odds_record = Odds(
+                    game_id=game.id,
+                    sportsbook_key=odd.get("sportsbook_key"),
+                    bet_type=odd.get("bet_type", "moneyline"),
+                    home_line=odd.get("home_line"),
+                    away_line=odd.get("away_line"),
+                    home_odds=odd.get("home_odds"),
+                    away_odds=odd.get("away_odds"),
+                    total=odd.get("total"),
+                    over_odds=odd.get("over_odds"),
+                    under_odds=odd.get("under_odds"),
+                    recorded_at=odd.get("recorded_at", datetime.utcnow()),
+                )
+                session.add(odds_record)
+                saved += 1
+
+            except Exception as e:
+                logger.debug(f"[CFL] Odds save error: {e}")
+                unmatched += 1
+
+        await session.commit()
+        print(f"[CFL] Odds: {saved} saved, {unmatched} unmatched")
+        return {"saved": saved, "unmatched": unmatched}
+
+    async def _match_game(
+        self,
+        home_name: str,
+        away_name: str,
+        commence_time: datetime,
+        sport: Sport,
+        session: AsyncSession,
+    ) -> Optional[Game]:
+        """Match an odds event to a database game by team names + date (±2 days)."""
+        date_start = commence_time - timedelta(days=2)
+        date_end = commence_time + timedelta(days=2)
+
+        # Get CFL teams that match the names
+        home_team = await self._find_team_by_name(home_name, sport, session)
+        away_team = await self._find_team_by_name(away_name, sport, session)
+
+        if not home_team or not away_team:
+            return None
+
+        # Search for game with these teams in date range
+        result = await session.execute(
+            select(Game).where(
+                and_(
+                    Game.sport_id == sport.id,
+                    Game.home_team_id == home_team.id,
+                    Game.away_team_id == away_team.id,
+                    Game.scheduled_at >= date_start,
+                    Game.scheduled_at <= date_end,
+                )
+            ).limit(1)
+        )
+        game = result.scalar_one_or_none()
+
+        # Try reversed home/away (neutral site games)
+        if not game:
+            result = await session.execute(
+                select(Game).where(
+                    and_(
+                        Game.sport_id == sport.id,
+                        Game.home_team_id == away_team.id,
+                        Game.away_team_id == home_team.id,
+                        Game.scheduled_at >= date_start,
+                        Game.scheduled_at <= date_end,
+                    )
+                ).limit(1)
+            )
+            game = result.scalar_one_or_none()
+
+        return game
+
+    async def _find_team_by_name(
+        self, name: str, sport: Sport, session: AsyncSession
+    ) -> Optional[Team]:
+        """Find a CFL team by name (exact, partial, or abbreviation lookup)."""
+        # Exact match
+        result = await session.execute(
+            select(Team).where(and_(Team.sport_id == sport.id, Team.name == name))
+        )
+        team = result.scalar_one_or_none()
+        if team:
+            return team
+
+        # ILIKE partial match
+        result = await session.execute(
+            select(Team).where(
+                and_(Team.sport_id == sport.id, Team.name.ilike(f"%{name}%"))
+            ).limit(1)
+        )
+        team = result.scalar_one_or_none()
+        if team:
+            return team
+
+        # Try via name map → abbreviation → DB lookup
+        abbr = self._normalize_team_name(name)
+        if abbr:
+            result = await session.execute(
+                select(Team).where(
+                    and_(Team.sport_id == sport.id, Team.abbreviation == abbr)
+                ).limit(1)
+            )
+            team = result.scalar_one_or_none()
+            if team:
+                return team
+
+        return None
+
+    # =========================================================================
+    # MAIN COLLECT METHOD (Orchestrates all 7 steps)
+    # =========================================================================
+
+    async def collect(self, **kwargs) -> CollectorResult:
+        """
+        Main collection entry point. Runs all 7 data collection steps in order.
+        
+        Keyword Args:
+            collect_type: str - "all", "teams", "games", "players", 
+                                "player_stats", "team_stats", "injuries", "odds"
+            seasons_back: int - Number of seasons for games/team_stats (default 17)
+            odds_days_back: int - Days back for odds history (default 30)
+        
+        Returns: CollectorResult with summary
+        """
+        collect_type = kwargs.get("collect_type", "all")
+        seasons_back = kwargs.get("seasons_back", 17)
+        odds_days_back = kwargs.get("odds_days_back", 30)
+
+        print(f"\n{'='*70}")
+        print(f"  ROYALEY CFL COLLECTOR - TheSportsDB V2 + The Odds API")
+        print(f"  Type: {collect_type} | Seasons: {seasons_back} | Odds Days: {odds_days_back}")
+        print(f"{'='*70}")
+
+        data = {
+            "teams": [], "games": [], "players": [],
+            "player_stats": [], "team_stats": [],
+            "injuries": [], "odds": [],
+        }
+        total = 0
+
+        try:
+            if collect_type in ("all", "teams"):
+                data["teams"] = await self.collect_teams()
+                total += len(data["teams"])
+
+            if collect_type in ("all", "games"):
+                data["games"] = await self.collect_games(seasons_back=seasons_back)
+                total += len(data["games"])
+
+            if collect_type in ("all", "players"):
+                data["players"] = await self.collect_players()
+                total += len(data["players"])
+
+            if collect_type in ("all", "player_stats"):
+                data["player_stats"] = await self.collect_player_stats()
+                total += len(data["player_stats"])
+
+            if collect_type in ("all", "team_stats"):
+                data["team_stats"] = await self.collect_team_stats(seasons_back=seasons_back)
+                total += len(data["team_stats"])
+
+            if collect_type in ("all", "injuries"):
+                data["injuries"] = await self.collect_injuries()
+                total += len(data["injuries"])
+
+            if collect_type in ("all", "odds"):
+                data["odds"] = await self.collect_odds(days_back=odds_days_back)
+                total += len(data["odds"])
+
+        except Exception as e:
+            logger.error(f"[CFL] Collection error: {e}")
+            print(f"[CFL] ❌ Collection error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"\n{'='*70}")
+        print(f"  CFL COLLECTION SUMMARY")
+        print(f"  Teams: {len(data['teams']):,}")
+        print(f"  Games: {len(data['games']):,}")
+        print(f"  Players: {len(data['players']):,}")
+        print(f"  Player Stats: {len(data['player_stats']):,} (limited)")
+        print(f"  Team Stats: {len(data['team_stats']):,}")
+        print(f"  Injuries: {len(data['injuries']):,} (not available)")
+        print(f"  Odds: {len(data['odds']):,}")
+        print(f"  TOTAL: {total:,} records")
+        print(f"{'='*70}")
+
+        return CollectorResult(
+            success=total > 0,
+            data=data,
+            records_count=total,
+        )
+
+    async def save_to_database(self, data: Dict[str, Any], session: AsyncSession) -> int:
+        """Save all collected CFL data to database (all 7 types)."""
+        total_saved = 0
+
+        try:
+            # Ensure sport exists first
+            await self._ensure_sport(session)
+
+            # 1. Teams (must be first - games/players reference teams)
+            if data.get("teams"):
+                result = await self.save_teams(data["teams"], session)
+                total_saved += result.get("saved", 0) + result.get("updated", 0)
+
+            # 2. Games (must be before odds - odds reference games)
+            if data.get("games"):
+                result = await self.save_games(data["games"], session)
+                total_saved += result.get("saved", 0) + result.get("updated", 0)
+
+            # 3. Players
+            if data.get("players"):
+                result = await self.save_players(data["players"], session)
+                total_saved += result.get("saved", 0) + result.get("updated", 0)
+
+            # 4. Player Stats
+            if data.get("player_stats"):
+                result = await self.save_player_stats(data["player_stats"], session)
+                total_saved += result.get("saved", 0)
+
+            # 5. Team Stats
+            if data.get("team_stats"):
+                result = await self.save_team_stats(data["team_stats"], session)
+                total_saved += result.get("saved", 0)
+
+            # 6. Injuries
+            if data.get("injuries"):
+                result = await self.save_injuries(data["injuries"], session)
+                total_saved += result.get("saved", 0)
+
+            # 7. Odds (last - needs games to exist for matching)
+            if data.get("odds"):
+                result = await self.save_odds(data["odds"], session)
+                total_saved += result.get("saved", 0)
+
+            print(f"[CFL] ✅ Total saved to database: {total_saved:,}")
+
+        except Exception as e:
+            logger.error(f"[CFL] Database save error: {e}")
+            print(f"[CFL] ❌ Save error: {e}")
+            await session.rollback()
+            raise
+
+        return total_saved
+
+    # =========================================================================
+    # REQUIRED ABSTRACT METHODS (BaseCollector)
+    # =========================================================================
+
     async def validate(self, data: Any) -> bool:
         """Validate collected CFL data."""
-        if data is None:
+        if not data or not isinstance(data, dict):
             return False
-        if not isinstance(data, dict):
-            return False
-        
-        # Check that we have at least some data
-        has_teams = len(data.get("teams", [])) > 0
-        has_games = len(data.get("games", [])) > 0
-        
-        return has_teams or has_games
+        return any(len(data.get(k, [])) > 0 for k in ["teams", "games", "players"])
 
 
 # =============================================================================
@@ -1363,6 +1548,7 @@ class CFLCollector(BaseCollector):
 
 cfl_collector = CFLCollector()
 
-# Register with collector manager
-collector_manager.register(cfl_collector)
-logger.info("Registered collector: CFL")
+try:
+    collector_manager.register(cfl_collector)
+except Exception:
+    pass

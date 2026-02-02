@@ -1,12 +1,13 @@
 """
 ROYALEY - Master Data Architecture Models
-Data Unification Layer: 9 tables that create a single source of truth
+Data Unification Layer: 12 tables that create a single source of truth
 across all 27 data collectors.
 
 Tables:
-  TIER 1 - Core:   master_teams, master_players, master_games
-  TIER 2 - Maps:   team_mappings, player_mappings, game_mappings, venue_mappings
+  TIER 1 - Core:   master_teams, master_players, master_games, master_odds
+  TIER 2 - Maps:   team_mappings, player_mappings, game_mappings, venue_mappings, odds_mappings
   TIER 3 - Infra:  source_registry, mapping_audit_log
+  TIER 4 - ML:     ml_training_dataset
 """
 
 from datetime import datetime, date
@@ -330,4 +331,188 @@ class VenueMapping(Base):
     __table_args__ = (
         UniqueConstraint("source_key", "source_venue_name", name="uq_venue_map_source_name"),
         Index("ix_venue_map_venue", "venue_id"),
+    )
+
+
+# =============================================================================
+# TIER 1 — MASTER ODDS (added in migration 004)
+# =============================================================================
+
+class MasterOdds(Base):
+    """
+    Canonical odds record. One row per (master_game × sportsbook × bet_type).
+    Consolidates duplicate odds from multiple collectors into a single truth.
+
+    Example: Pinnacle spread for Chiefs-Ravens collected by OddsAPI, Pinnacle direct,
+    and ActionNetwork → 3 raw rows → 1 master_odds row with open/close/movement.
+    """
+    __tablename__ = "master_odds"
+
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    master_game_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("master_games.id", ondelete="CASCADE"), nullable=False
+    )
+    sportsbook_key: Mapped[str] = mapped_column(String(50), nullable=False)  # "pinnacle", "draftkings"
+    sportsbook_id: Mapped[Optional[UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sportsbooks.id"), nullable=True
+    )
+    bet_type: Mapped[str] = mapped_column(String(30), nullable=False)  # spread, moneyline, total
+    period: Mapped[str] = mapped_column(String(20), default="full")  # full, 1h, 1q
+
+    # Spread fields
+    opening_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    opening_odds_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    opening_odds_away: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    closing_odds_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    closing_odds_away: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Total fields
+    opening_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    opening_over_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    opening_under_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    closing_over_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    closing_under_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Computed
+    line_movement: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    no_vig_prob_home: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Metadata
+    is_sharp: Mapped[bool] = mapped_column(Boolean, default=False)
+    num_source_records: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    odds_mappings: Mapped[List["OddsMapping"]] = relationship(back_populates="master_odds", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("master_game_id", "sportsbook_key", "bet_type", "period",
+                         name="uq_master_odds_game_book_type"),
+        Index("ix_master_odds_game", "master_game_id"),
+        Index("ix_master_odds_book", "sportsbook_key"),
+        Index("ix_master_odds_sharp", "is_sharp"),
+    )
+
+
+# =============================================================================
+# TIER 2 — ODDS MAPPING (added in migration 004)
+# =============================================================================
+
+class OddsMapping(Base):
+    """Maps raw odds records to consolidated master_odds."""
+    __tablename__ = "odds_mappings"
+
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    master_odds_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("master_odds.id", ondelete="CASCADE"), nullable=False
+    )
+    source_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_odds_db_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)  # FK to odds.id
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    master_odds: Mapped["MasterOdds"] = relationship(back_populates="odds_mappings")
+
+    __table_args__ = (
+        Index("ix_odds_map_master", "master_odds_id"),
+        Index("ix_odds_map_source", "source_key"),
+    )
+
+
+# =============================================================================
+# TIER 4 — ML TRAINING DATASET (added in migration 004)
+# =============================================================================
+
+class MLTrainingDataset(Base):
+    """
+    Materialized feature table for ML training. One row per master_game.
+    Pre-computed from master_odds + public_betting + weather + injuries.
+    Ready for H2O / AutoGluon — export to DataFrame or CSV.
+
+    ~45 explicit columns + JSONB for extensibility.
+    Rebuilt by scripts/build_ml_training_data.py
+    """
+    __tablename__ = "ml_training_dataset"
+
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    master_game_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("master_games.id", ondelete="CASCADE"),
+        nullable=False, unique=True
+    )
+
+    # Identifiers
+    sport_code: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    home_team: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    away_team: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+
+    # ── TARGET VARIABLES ──
+    home_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_win: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1/0
+    total_points: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    score_margin: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # home - away
+
+    # ── ODDS FEATURES (from master_odds) ──
+    spread_open: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    spread_close: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    spread_movement: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    moneyline_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    moneyline_away: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_open: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_close: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_movement: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pinnacle_spread: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pinnacle_ml_home: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pinnacle_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    num_books_with_odds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    consensus_spread: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    consensus_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    implied_prob_home: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    no_vig_prob_home: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # ── PUBLIC BETTING FEATURES ──
+    public_spread_home_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_ml_home_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_total_over_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_money_spread_home_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharp_action_indicator: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    is_rlm_spread: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+    # ── WEATHER FEATURES ──
+    temperature_f: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    wind_speed_mph: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    precipitation_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_dome: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    humidity_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # ── INJURY FEATURES ──
+    home_injuries_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_injuries_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_injury_impact: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_injury_impact: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_starter_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_starter_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # ── CONTEXT FEATURES ──
+    is_playoff: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    is_neutral_site: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+    # ── EXTENSIBILITY ──
+    extra_features: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # ── METADATA ──
+    feature_version: Mapped[str] = mapped_column(String(20), default="2.0")
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    __table_args__ = (
+        Index("ix_ml_training_sport_season", "sport_code", "season"),
+        Index("ix_ml_training_date", "scheduled_at"),
+        Index("ix_ml_training_home_win", "home_win"),  # quick target filtering
     )

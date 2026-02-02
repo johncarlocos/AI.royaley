@@ -1,7 +1,7 @@
 """
 ROYALEY - Database Models
 Complete SQLAlchemy 2.0 models for the enterprise sports prediction platform.
-54 tables: 45 original + 9 master data unification tables.
+57 tables: 45 original + 12 master data unification tables.
 """
 
 from app.models.models import (
@@ -86,7 +86,7 @@ from app.models.injury_models import (
     GameInjury,
 )
 
-# Import master data models (46-54)
+# Import master data models (46-57)
 from app.models.master_data_models import (
     SourceRegistry,
     MappingAuditLog,
@@ -97,6 +97,9 @@ from app.models.master_data_models import (
     PlayerMapping,
     GameMapping,
     VenueMapping,
+    MasterOdds,
+    OddsMapping,
+    MLTrainingDataset,
 )
 
 __all__ = [
@@ -178,7 +181,7 @@ __all__ = [
     "Injury",
     "GameInjury",
 
-    # Master Data Architecture (46-54)
+    # Master Data Architecture (46-57)
     "SourceRegistry",
     "MappingAuditLog",
     "MasterTeam",
@@ -188,4 +191,7 @@ __all__ = [
     "PlayerMapping",
     "GameMapping",
     "VenueMapping",
+    "MasterOdds",
+    "OddsMapping",
+    "MLTrainingDataset",
 ]

@@ -1,142 +1,274 @@
 """
-ROYALEY - Master Data Verification
-Run after auto_map_existing_data.py to verify everything is linked correctly.
+ROYALEY - Verify Master Data Architecture (All 12 Tables)
+Runs diagnostic queries to confirm the health of the entire master data layer.
 
 Run: python -m scripts.verify_master_data
 """
 
 import asyncio
 import logging
-import os
 import sys
+import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
 from app.core.database import db_manager
 
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
 async def verify():
     await db_manager.initialize()
 
-    async with db_manager.session() as session:
+    async with db_manager.async_session() as session:
+
         print("\n" + "=" * 70)
-        print("ROYALEY — Master Data Verification Report")
+        print("   ROYALEY — MASTER DATA ARCHITECTURE VERIFICATION REPORT")
         print("=" * 70)
 
-        # 1. Table counts
+        # ── 1. TABLE COUNTS ──
         print("\n📊 TABLE COUNTS:")
         tables = [
             "master_teams", "master_players", "master_games",
+            "master_odds", "ml_training_dataset",
             "team_mappings", "player_mappings", "game_mappings",
-            "venue_mappings", "source_registry", "mapping_audit_log",
+            "venue_mappings", "odds_mappings",
+            "source_registry", "mapping_audit_log",
         ]
         for t in tables:
-            row = await session.execute(text(f"SELECT COUNT(*) FROM {t}"))
-            print(f"  {t:30s} {row.scalar():>10,}")
+            try:
+                r = await session.execute(text(f"SELECT COUNT(*) FROM {t}"))
+                c = r.scalar()
+                print(f"  {t:<30} {c:>10,}")
+            except Exception:
+                print(f"  {t:<30} {'⚠️ TABLE NOT FOUND':>10}")
 
-        # 2. Mapping coverage
+        # ── 2. MAPPING COVERAGE ──
         print("\n📈 MAPPING COVERAGE:")
-        row = await session.execute(text(
-            "SELECT COUNT(*) FROM teams WHERE master_team_id IS NOT NULL"
-        ))
-        mapped_teams = row.scalar()
-        row = await session.execute(text("SELECT COUNT(*) FROM teams"))
-        total_teams = row.scalar()
-        print(f"  Teams mapped:      {mapped_teams:,} / {total_teams:,} ({100*mapped_teams/max(total_teams,1):.1f}%)")
 
-        row = await session.execute(text(
-            "SELECT COUNT(*) FROM games WHERE master_game_id IS NOT NULL"
-        ))
-        mapped_games = row.scalar()
-        row = await session.execute(text("SELECT COUNT(*) FROM games"))
-        total_games = row.scalar()
-        print(f"  Games mapped:      {mapped_games:,} / {total_games:,} ({100*mapped_games/max(total_games,1):.1f}%)")
+        # Teams mapped
+        try:
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM teams WHERE master_team_id IS NOT NULL"
+            ))
+            mapped = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM teams"))
+            total = r.scalar()
+            pct = (100 * mapped / total) if total > 0 else 0
+            icon = "✅" if pct > 95 else "⚠️" if pct > 80 else "❌"
+            print(f"  {icon} Teams mapped:      {mapped:>10,} / {total:>10,} ({pct:.1f}%)")
+        except Exception as e:
+            print(f"  ⚠️  Teams: {e}")
 
-        row = await session.execute(text(
-            "SELECT COUNT(*) FROM odds WHERE master_game_id IS NOT NULL"
-        ))
-        mapped_odds = row.scalar()
-        row = await session.execute(text("SELECT COUNT(*) FROM odds"))
-        total_odds = row.scalar()
-        print(f"  Odds linked:       {mapped_odds:,} / {total_odds:,} ({100*mapped_odds/max(total_odds,1):.1f}%)")
+        # Games mapped
+        try:
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM games WHERE master_game_id IS NOT NULL"
+            ))
+            mapped = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM games"))
+            total = r.scalar()
+            pct = (100 * mapped / total) if total > 0 else 0
+            icon = "✅" if pct > 95 else "⚠️" if pct > 80 else "❌"
+            print(f"  {icon} Games mapped:      {mapped:>10,} / {total:>10,} ({pct:.1f}%)")
+        except Exception as e:
+            print(f"  ⚠️  Games: {e}")
 
-        row = await session.execute(text(
-            "SELECT COUNT(*) FROM public_betting WHERE master_game_id IS NOT NULL"
-        ))
-        mapped_pb = row.scalar()
-        row = await session.execute(text("SELECT COUNT(*) FROM public_betting"))
-        total_pb = row.scalar()
-        print(f"  Public betting:    {mapped_pb:,} / {total_pb:,} ({100*mapped_pb/max(total_pb,1):.1f}%)")
+        # Odds linked (raw odds with master_game_id)
+        try:
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM odds WHERE master_game_id IS NOT NULL"
+            ))
+            linked = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM odds"))
+            total = r.scalar()
+            pct = (100 * linked / total) if total > 0 else 0
+            icon = "✅" if pct > 90 else "⚠️" if pct > 70 else "❌"
+            print(f"  {icon} Odds linked:       {linked:>10,} / {total:>10,} ({pct:.1f}%)")
+        except Exception as e:
+            print(f"  ⚠️  Odds: {e}")
 
-        # 3. Deduplication ratio
+        # Public betting linked
+        try:
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM public_betting WHERE master_game_id IS NOT NULL"
+            ))
+            linked = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM public_betting"))
+            total = r.scalar()
+            pct = (100 * linked / total) if total > 0 else 0
+            icon = "✅" if pct > 70 else "⚠️" if pct > 40 else "❌"
+            print(f"  {icon} Public betting:    {linked:>10,} / {total:>10,} ({pct:.1f}%)")
+        except Exception as e:
+            print(f"  ⚠️  Public betting: {e}")
+
+        # ── 3. DEDUPLICATION ──
         print("\n🔗 DEDUPLICATION:")
-        print(f"  Source games:      {total_games:,}")
-        row = await session.execute(text("SELECT COUNT(*) FROM master_games"))
-        master_count = row.scalar()
-        print(f"  Master games:      {master_count:,}")
-        if total_games > 0:
-            ratio = total_games / max(master_count, 1)
-            print(f"  Dedup ratio:       {ratio:.2f}x ({total_games - master_count:,} duplicates removed)")
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM games"))
+            source_games = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM master_games"))
+            master_games = r.scalar()
+            if master_games > 0:
+                ratio = source_games / master_games
+                removed = source_games - master_games
+                print(f"  Source games:      {source_games:>10,}")
+                print(f"  Master games:      {master_games:>10,}")
+                print(f"  Dedup ratio:       {ratio:>10.2f}x ({removed:,} duplicates removed)")
+        except Exception:
+            pass
 
-        # 4. Per-sport odds linkage (the critical metric)
-        print("\n🎯 ODDS LINKAGE BY SPORT:")
-        rows = await session.execute(text("""
-            SELECT s.code,
-                   COUNT(o.id) as total_odds,
-                   COUNT(o.master_game_id) as linked_odds,
-                   ROUND(100.0 * COUNT(o.master_game_id) / NULLIF(COUNT(o.id), 0), 1) as pct
-            FROM odds o
-            JOIN games g ON o.game_id = g.id
-            JOIN sports s ON g.sport_id = s.id
-            GROUP BY s.code
-            ORDER BY COUNT(o.id) DESC
-        """))
-        for row in rows.fetchall():
-            sport, total, linked, pct = row
-            status = "✅" if (pct or 0) > 80 else "⚠️" if (pct or 0) > 50 else "❌"
-            print(f"  {status} {sport:8s} {linked:>10,} / {total:>10,} odds linked ({pct or 0}%)")
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM odds WHERE master_game_id IS NOT NULL"))
+            source_odds = r.scalar()
+            r = await session.execute(text("SELECT COUNT(*) FROM master_odds"))
+            master_odds = r.scalar()
+            if master_odds > 0:
+                ratio = source_odds / master_odds
+                print(f"  Source odds:       {source_odds:>10,}")
+                print(f"  Master odds:       {master_odds:>10,}")
+                print(f"  Odds dedup ratio:  {ratio:>10.2f}x")
+        except Exception:
+            pass
 
-        # 5. Sportsbook priority check
+        # ── 4. MASTER ODDS HEALTH ──
+        print("\n📉 MASTER ODDS BY SPORT:")
+        try:
+            r = await session.execute(text("""
+                SELECT mg.sport_code,
+                       COUNT(DISTINCT mo.master_game_id) as games_with_odds,
+                       COUNT(*) as total_master_odds,
+                       COUNT(*) FILTER (WHERE mo.is_sharp) as sharp_odds,
+                       COUNT(*) FILTER (WHERE mo.closing_line IS NOT NULL OR mo.closing_odds_home IS NOT NULL) as with_closing
+                FROM master_odds mo
+                JOIN master_games mg ON mo.master_game_id = mg.id
+                GROUP BY mg.sport_code
+                ORDER BY mg.sport_code
+            """))
+            rows = r.fetchall()
+            for row in rows:
+                sport, games_w, total_mo, sharp, closing = row
+                print(f"  {sport:<8} {total_mo:>8,} master odds  |  {games_w:>6,} games  |  "
+                      f"⭐{sharp:>5,} sharp  |  📊{closing:>6,} with closing")
+        except Exception as e:
+            print(f"  ⚠️  Master odds query failed: {e}")
+
+        # ── 5. SPORTSBOOK PRIORITIES ──
         print("\n📚 SPORTSBOOK PRIORITIES:")
-        rows = await session.execute(text(
-            "SELECT name, key, is_sharp, priority FROM sportsbooks ORDER BY priority"
-        ))
-        for row in rows.fetchall():
-            name, key, is_sharp, pri = row
-            sharp_tag = " ⭐ SHARP" if is_sharp else ""
-            print(f"  Priority {pri:3d}: {name:25s} ({key}){sharp_tag}")
+        try:
+            r = await session.execute(text("""
+                SELECT name, key, priority, is_sharp, is_active
+                FROM sportsbooks
+                ORDER BY priority ASC, name
+            """))
+            rows = r.fetchall()
+            for row in rows:
+                name, key, prio, sharp, active = row
+                sharp_icon = "⭐" if sharp else "  "
+                active_icon = "✅" if active else "❌"
+                print(f"  {sharp_icon} {active_icon} {name:<30} key={key:<20} priority={prio}")
+        except Exception:
+            pass
 
-        # 6. Master game feature readiness
-        print("\n🤖 ML READINESS (features available per master_game):")
-        row = await session.execute(text("""
-            SELECT
-                COUNT(*) as total_master_games,
-                COUNT(CASE WHEN has_odds THEN 1 END) as with_odds,
-                COUNT(CASE WHEN has_score THEN 1 END) as with_scores
-            FROM (
-                SELECT mg.id,
-                    EXISTS(SELECT 1 FROM odds o WHERE o.master_game_id = mg.id) as has_odds,
-                    (mg.home_score IS NOT NULL) as has_score
-                FROM master_games mg
-            ) sub
-        """))
-        r = row.fetchone()
-        if r:
-            total_mg, with_odds, with_scores = r
-            print(f"  Total master games: {total_mg:,}")
-            print(f"  With odds:          {with_odds:,} ({100*with_odds/max(total_mg,1):.1f}%)")
-            print(f"  With final scores:  {with_scores:,} ({100*with_scores/max(total_mg,1):.1f}%)")
-            trainable = min(with_odds, with_scores)
-            print(f"  🏆 ML-trainable:    {trainable:,} games (have both odds + scores)")
+        # ── 6. ML TRAINING READINESS ──
+        print("\n🤖 ML TRAINING READINESS:")
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM ml_training_dataset"))
+            total_rows = r.scalar()
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM ml_training_dataset WHERE num_books_with_odds > 0"
+            ))
+            with_odds = r.scalar()
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM ml_training_dataset WHERE home_score IS NOT NULL"
+            ))
+            with_scores = r.scalar()
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM ml_training_dataset WHERE num_books_with_odds > 0 AND home_score IS NOT NULL"
+            ))
+            ml_ready = r.scalar()
+            r = await session.execute(text(
+                "SELECT COUNT(*) FROM ml_training_dataset WHERE pinnacle_spread IS NOT NULL"
+            ))
+            with_pinnacle = r.scalar()
+
+            print(f"  Total rows:         {total_rows:>10,}")
+            print(f"  With odds:          {with_odds:>10,} ({_pct(with_odds, total_rows)})")
+            print(f"  With final scores:  {with_scores:>10,} ({_pct(with_scores, total_rows)})")
+            print(f"  With Pinnacle:      {with_pinnacle:>10,} ({_pct(with_pinnacle, total_rows)})")
+            print(f"  🏆 ML-TRAINABLE:    {ml_ready:>10,} (odds + scores)")
+        except Exception as e:
+            print(f"  ⚠️  ML training dataset not yet built: {e}")
+            print(f"      Run: python -m scripts.build_ml_training_data")
+
+        # ── 7. ML TRAINING BY SPORT ──
+        print("\n🏆 ML-TRAINABLE BY SPORT:")
+        try:
+            r = await session.execute(text("""
+                SELECT sport_code,
+                       COUNT(*) as total,
+                       COUNT(*) FILTER (WHERE num_books_with_odds > 0 AND home_score IS NOT NULL) as trainable,
+                       COUNT(*) FILTER (WHERE pinnacle_spread IS NOT NULL) as with_pinnacle
+                FROM ml_training_dataset
+                GROUP BY sport_code
+                ORDER BY sport_code
+            """))
+            rows = r.fetchall()
+            for row in rows:
+                sport, total, trainable, pinnacle = row
+                icon = "✅" if trainable > 1000 else "⚠️" if trainable > 100 else "❌"
+                print(f"  {icon} {sport:<8} {trainable:>8,} trainable / {total:>8,} total  |  ⭐{pinnacle:>6,} Pinnacle")
+        except Exception:
+            pass
+
+        # ── 8. FEATURE COMPLETENESS ──
+        print("\n📋 FEATURE COMPLETENESS (ML Training Dataset):")
+        try:
+            r = await session.execute(text("""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(spread_close) as has_spread,
+                    COUNT(moneyline_home) as has_ml,
+                    COUNT(total_close) as has_total,
+                    COUNT(public_spread_home_pct) as has_betting,
+                    COUNT(temperature_f) as has_weather,
+                    COUNT(home_injuries_out) as has_injuries,
+                    COUNT(no_vig_prob_home) as has_novig
+                FROM ml_training_dataset
+            """))
+            row = r.fetchone()
+            if row and row[0] > 0:
+                total = row[0]
+                features = [
+                    ("Spread (close)", row[1]),
+                    ("Moneyline", row[2]),
+                    ("Total (close)", row[3]),
+                    ("Public betting", row[4]),
+                    ("Weather", row[5]),
+                    ("Injuries", row[6]),
+                    ("No-vig probability", row[7]),
+                ]
+                for name, count in features:
+                    pct = 100 * count / total
+                    icon = "✅" if pct > 80 else "⚠️" if pct > 40 else "❌"
+                    print(f"  {icon} {name:<25} {count:>8,} ({pct:.1f}%)")
+        except Exception:
+            pass
 
         print("\n" + "=" * 70)
-        print("Verification complete!")
-        print("=" * 70)
+        print("   VERIFICATION COMPLETE")
+        print("=" * 70 + "\n")
+
+    await db_manager.close()
+
+
+def _pct(part, total):
+    if total == 0:
+        return "0.0%"
+    return f"{100 * part / total:.1f}%"
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     asyncio.run(verify())

@@ -1,48 +1,399 @@
 #!/usr/bin/env python
 """
-ROYALEY - ML Feature Extraction Test Script
-============================================
+ROYALEY - ML Feature Extraction & CSV Export
+=============================================
 
-Test each feature dimension for ONE sport:
+Generates ML features and saves to CSV files in ./ml_csv/ folder.
+
+OUTPUT STRUCTURE (81 files total):
+    Per sport (8 files × 10 sports = 80 files):
+        ml_features_{SPORT}_{timestamp}.csv           - Combined all ~92 features
+        ml_features_{SPORT}_team_{timestamp}.csv      - ~24 team rolling stats
+        ml_features_{SPORT}_game_{timestamp}.csv      - ~15 game context features
+        ml_features_{SPORT}_player_{timestamp}.csv    - ~10 player features
+        ml_features_{SPORT}_odds_{timestamp}.csv      - ~24 odds/market features
+        ml_features_{SPORT}_situation_{timestamp}.csv - ~10 situational features
+        ml_features_{SPORT}_weather_{timestamp}.csv   - ~5 weather features
+        ml_features_{SPORT}_target_{timestamp}.csv    - ~7 target variables
+    
+    Grand combined (1 file):
+        ml_features_ALL_SPORTS_{timestamp}.csv        - All sports combined
+
+COMMANDS:
+    # Generate 8 CSV files for ONE sport
+    python -m scripts.test_ml_features --export --sport NBA --limit 1000
+    
+    # Generate 81 CSV files for ALL 10 sports (RECOMMENDED)
+    python -m scripts.test_ml_features --export --sport ALL --limit 1000
+    
+    # Test dimensions without saving (console only)
     python -m scripts.test_ml_features --team --sport NBA --limit 5
-    python -m scripts.test_ml_features --context --sport NFL --limit 5
-    python -m scripts.test_ml_features --player --sport MLB --limit 5
-    python -m scripts.test_ml_features --odds --sport NHL --limit 5
-    python -m scripts.test_ml_features --situational --sport WNBA --limit 5
-    python -m scripts.test_ml_features --all --sport NBA --limit 5
-    python -m scripts.test_ml_features --full --sport NBA --limit 10
-
-Test ALL 10 sports at once (use --sport ALL):
-    python -m scripts.test_ml_features --team --sport ALL --limit 3
-    python -m scripts.test_ml_features --context --sport ALL --limit 3
-    python -m scripts.test_ml_features --player --sport ALL --limit 3
-    python -m scripts.test_ml_features --odds --sport ALL --limit 3
-    python -m scripts.test_ml_features --situational --sport ALL --limit 3
-    python -m scripts.test_ml_features --all --sport ALL --limit 3
-    python -m scripts.test_ml_features --full --sport ALL --limit 5
+    python -m scripts.test_ml_features --odds --sport NFL --limit 5
 
 Supported sports: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA
 """
 
 import argparse
 import asyncio
-import json
 import logging
+import os
 import sys
 from datetime import datetime
+from typing import Dict, List, Optional
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# All 10 sports
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
 ALL_SPORTS = ['NFL', 'NBA', 'MLB', 'NHL', 'WNBA', 'CFL', 'NCAAF', 'NCAAB', 'ATP', 'WTA']
 
+# =============================================================================
+# COLUMN DEFINITIONS BY DIMENSION (must match MLFeatureVector in ml_features.py)
+# =============================================================================
+
+# ID columns (included in all dimension files)
+ID_COLUMNS = [
+    'master_game_id', 'sport_code', 'scheduled_at', 'season',
+    'home_team_id', 'away_team_id', 'home_team_name', 'away_team_name'
+]
+
+# Target columns (~7)
+TARGET_COLUMNS = [
+    'home_score', 'away_score', 'home_win', 'total_points',
+    'score_margin', 'spread_result', 'over_result'
+]
+
+# Team features (~24)
+TEAM_COLUMNS = [
+    'home_wins_last5', 'home_wins_last10', 'home_win_pct_last10',
+    'home_avg_pts_last10', 'home_avg_pts_allowed_last10', 'home_avg_margin_last10',
+    'home_home_win_pct', 'home_ats_record_last10', 'home_ou_over_pct_last10',
+    'away_wins_last5', 'away_wins_last10', 'away_win_pct_last10',
+    'away_avg_pts_last10', 'away_avg_pts_allowed_last10', 'away_avg_margin_last10',
+    'away_away_win_pct', 'away_ats_record_last10', 'away_ou_over_pct_last10',
+    'h2h_home_wins_last5', 'h2h_home_avg_margin', 'h2h_total_avg',
+    'home_power_rating', 'away_power_rating', 'power_rating_diff'
+]
+
+# Game context features (~15)
+GAME_COLUMNS = [
+    'home_rest_days', 'away_rest_days', 'rest_advantage',
+    'home_is_back_to_back', 'away_is_back_to_back',
+    'home_3_in_4_nights', 'away_3_in_4_nights',
+    'is_divisional', 'is_conference', 'is_rivalry',
+    'is_playoff', 'is_neutral_site',
+    'day_of_week', 'is_night_game', 'month'
+]
+
+# Player features (~10)
+PLAYER_COLUMNS = [
+    'home_star_player_pts_avg', 'away_star_player_pts_avg',
+    'home_top3_players_pts_avg', 'away_top3_players_pts_avg',
+    'home_injuries_out', 'away_injuries_out',
+    'home_injury_impact', 'away_injury_impact',
+    'home_starters_out', 'away_starters_out'
+]
+
+# Odds/Market features (~24)
+ODDS_COLUMNS = [
+    'spread_open', 'spread_close', 'spread_movement',
+    'moneyline_home_open', 'moneyline_home_close', 'moneyline_away_close',
+    'total_open', 'total_close', 'total_movement',
+    'pinnacle_spread', 'pinnacle_ml_home', 'pinnacle_total',
+    'num_books', 'consensus_spread', 'consensus_total',
+    'implied_home_prob', 'no_vig_home_prob',
+    'public_spread_home_pct', 'public_ml_home_pct', 'public_total_over_pct',
+    'public_money_home_pct', 'is_reverse_line_move', 'sharp_action_indicator', 'steam_move'
+]
+
+# Situational features (~10)
+SITUATION_COLUMNS = [
+    'home_streak', 'away_streak',
+    'home_is_revenge', 'away_is_revenge',
+    'home_letdown_spot', 'away_letdown_spot',
+    'home_lookahead_spot', 'away_lookahead_spot',
+    'home_season_game_num', 'away_season_game_num'
+]
+
+# Weather features (~5)
+WEATHER_COLUMNS = [
+    'temperature_f', 'wind_speed_mph', 'precipitation_pct',
+    'humidity_pct', 'is_dome'
+]
+
+# Dimension mapping for CSV export
+DIMENSIONS = {
+    'team': TEAM_COLUMNS,
+    'game': GAME_COLUMNS,
+    'player': PLAYER_COLUMNS,
+    'odds': ODDS_COLUMNS,
+    'situation': SITUATION_COLUMNS,
+    'weather': WEATHER_COLUMNS,
+    'target': TARGET_COLUMNS,
+}
+
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+def get_output_dir() -> str:
+    """Get ml_csv output directory in project root."""
+    current_dir = os.getcwd()
+    
+    # Try to find project root
+    if os.path.exists(os.path.join(current_dir, 'app')):
+        project_root = current_dir
+    elif os.path.exists('/nvme0n1-disk/royaley'):
+        project_root = '/nvme0n1-disk/royaley'
+    else:
+        project_root = current_dir
+    
+    output_dir = os.path.join(project_root, 'ml_csv')
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
+
+
+def filter_columns(df, columns: List[str], include_ids: bool = True):
+    """Filter DataFrame to include only specified columns that exist."""
+    if include_ids:
+        cols = ID_COLUMNS + columns
+    else:
+        cols = columns
+    
+    existing_cols = [c for c in cols if c in df.columns]
+    return df[existing_cols].copy()
+
+
+def calculate_coverage(df, columns: List[str]) -> float:
+    """Calculate non-null coverage percentage for given columns."""
+    existing_cols = [c for c in columns if c in df.columns]
+    if not existing_cols:
+        return 0.0
+    return df[existing_cols].notna().mean().mean() * 100
+
+
+# =============================================================================
+# CSV EXPORT FUNCTIONS
+# =============================================================================
+
+def save_sport_csvs(df, sport: str, output_dir: str, timestamp: str) -> Dict[str, str]:
+    """
+    Save 8 CSV files for a single sport.
+    
+    Files created:
+        1. ml_features_{SPORT}_{timestamp}.csv (combined)
+        2. ml_features_{SPORT}_team_{timestamp}.csv
+        3. ml_features_{SPORT}_game_{timestamp}.csv
+        4. ml_features_{SPORT}_player_{timestamp}.csv
+        5. ml_features_{SPORT}_odds_{timestamp}.csv
+        6. ml_features_{SPORT}_situation_{timestamp}.csv
+        7. ml_features_{SPORT}_weather_{timestamp}.csv
+        8. ml_features_{SPORT}_target_{timestamp}.csv
+    
+    Returns dict of dimension -> filepath
+    """
+    files_created = {}
+    
+    print(f"\n   📁 Saving 8 CSV files for {sport}...")
+    
+    # 1. Combined (all features)
+    combined_path = os.path.join(output_dir, f"ml_features_{sport}_{timestamp}.csv")
+    df.to_csv(combined_path, index=False)
+    files_created['combined'] = combined_path
+    print(f"      ✅ ml_features_{sport}_{timestamp}.csv ({len(df)} rows × {len(df.columns)} cols)")
+    
+    # 2-8. Individual dimensions
+    for dimension, columns in DIMENSIONS.items():
+        dim_df = filter_columns(df, columns, include_ids=True)
+        dim_path = os.path.join(output_dir, f"ml_features_{sport}_{dimension}_{timestamp}.csv")
+        dim_df.to_csv(dim_path, index=False)
+        files_created[dimension] = dim_path
+        
+        coverage = calculate_coverage(df, columns)
+        print(f"      ✅ ml_features_{sport}_{dimension}_{timestamp}.csv ({len(dim_df)} rows × {len(dim_df.columns)} cols, {coverage:.1f}% coverage)")
+    
+    return files_created
+
+
+async def export_single_sport(sport: str, limit: int) -> tuple:
+    """Extract features and save 8 CSV files for one sport."""
+    from app.core.database import db_manager
+    from app.services.master_data.ml_features import MLFeatureService, features_to_dataframe
+    
+    output_dir = get_output_dir()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    print("\n" + "=" * 70)
+    print(f"🏆 ML FEATURE EXTRACTION - {sport}")
+    print("=" * 70)
+    print(f"   Output folder: {output_dir}")
+    print(f"   Timestamp: {timestamp}")
+    print(f"   Limit: {limit}")
+    print(f"   Expected files: 8")
+    
+    await db_manager.initialize()
+    
+    async with db_manager.session() as session:
+        svc = MLFeatureService(session)
+        
+        print(f"\n   🔄 Extracting features...")
+        features = await svc.extract_all_features(sport, limit=limit)
+        
+        if not features:
+            print(f"   ⚠️ No games found for {sport}")
+            return None, {}
+        
+        print(f"   ✅ Extracted {len(features)} games")
+        
+        df = features_to_dataframe(features)
+        files = save_sport_csvs(df, sport, output_dir, timestamp)
+        
+        print(f"\n{'=' * 70}")
+        print("📁 FILES CREATED")
+        print("=" * 70)
+        print(f"\n   Location: {output_dir}/")
+        print(f"\n   {sport} files (8 files):")
+        for dim, path in files.items():
+            filename = os.path.basename(path)
+            print(f"      - {filename}")
+        
+        print(f"\n{'=' * 70}")
+        print(f"✅ COMPLETE! 8 CSV files created for {sport}")
+        print("=" * 70)
+        
+        return df, files
+
+
+async def export_all_sports(limit: int):
+    """
+    Export features for ALL 10 sports.
+    Creates 81 CSV files total (8 per sport + 1 grand combined).
+    """
+    import pandas as pd
+    from app.core.database import db_manager
+    from app.services.master_data.ml_features import MLFeatureService, features_to_dataframe
+    
+    output_dir = get_output_dir()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    print("\n" + "=" * 70)
+    print("🏆 ML FEATURE EXTRACTION - ALL 10 SPORTS")
+    print("=" * 70)
+    print(f"   Output folder: {output_dir}")
+    print(f"   Timestamp: {timestamp}")
+    print(f"   Limit per sport: {limit}")
+    print(f"   Sports: {', '.join(ALL_SPORTS)}")
+    print(f"   Expected files: 81 (8 per sport × 10 + 1 combined)")
+    
+    await db_manager.initialize()
+    
+    all_dfs = []
+    all_files = {}
+    summary = []
+    
+    async with db_manager.session() as session:
+        svc = MLFeatureService(session)
+        
+        for sport in ALL_SPORTS:
+            print(f"\n{'=' * 70}")
+            print(f"📊 EXTRACTING: {sport}")
+            print("=" * 70)
+            
+            features = await svc.extract_all_features(sport, limit=limit)
+            
+            if features:
+                df = features_to_dataframe(features)
+                all_dfs.append(df)
+                
+                files = save_sport_csvs(df, sport, output_dir, timestamp)
+                all_files[sport] = files
+                
+                coverage = calculate_coverage(df, TEAM_COLUMNS + ODDS_COLUMNS)
+                summary.append({
+                    'sport': sport,
+                    'games': len(df),
+                    'columns': len(df.columns),
+                    'coverage': f"{coverage:.1f}%",
+                    'files': 8
+                })
+            else:
+                print(f"   ⚠️ No games found for {sport}")
+                summary.append({
+                    'sport': sport,
+                    'games': 0,
+                    'columns': 0,
+                    'coverage': "N/A",
+                    'files': 0
+                })
+    
+    # Save grand combined file (81st file)
+    combined_path = None
+    if all_dfs:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        combined_path = os.path.join(output_dir, f"ml_features_ALL_SPORTS_{timestamp}.csv")
+        combined_df.to_csv(combined_path, index=False)
+        
+        print(f"\n{'=' * 70}")
+        print(f"📦 GRAND COMBINED FILE")
+        print("=" * 70)
+        print(f"   ✅ ml_features_ALL_SPORTS_{timestamp}.csv")
+        print(f"      Rows: {len(combined_df)}")
+        print(f"      Columns: {len(combined_df.columns)}")
+    
+    # Print summary
+    print(f"\n{'=' * 70}")
+    print("📊 SUMMARY")
+    print("=" * 70)
+    print(f"\n{'Sport':<10} {'Games':<10} {'Columns':<10} {'Coverage':<12} {'Files':<6}")
+    print("-" * 48)
+    
+    total_games = 0
+    total_files = 0
+    for s in summary:
+        print(f"{s['sport']:<10} {s['games']:<10} {s['columns']:<10} {s['coverage']:<12} {s['files']:<6}")
+        total_games += s['games']
+        total_files += s['files']
+    
+    print("-" * 48)
+    print(f"{'TOTAL':<10} {total_games:<10} {'-':<10} {'-':<12} {total_files + 1:<6}")
+    
+    # File listing
+    print(f"\n{'=' * 70}")
+    print("📁 ALL FILES CREATED (81 total)")
+    print("=" * 70)
+    print(f"\n   Location: {output_dir}/")
+    
+    for sport in ALL_SPORTS:
+        if sport in all_files:
+            print(f"\n   {sport} (8 files):")
+            for dim, path in all_files[sport].items():
+                filename = os.path.basename(path)
+                print(f"      - {filename}")
+    
+    if combined_path:
+        print(f"\n   GRAND COMBINED (1 file):")
+        print(f"      - {os.path.basename(combined_path)}")
+    
+    print(f"\n{'=' * 70}")
+    print(f"✅ COMPLETE! {total_files + 1} CSV files created in {output_dir}/")
+    print("=" * 70)
+    
+    return summary
+
+
+# =============================================================================
+# TEST FUNCTIONS (Console output only - no CSV export)
+# =============================================================================
 
 async def test_team_features(sport: str, limit: int):
-    """Test team features only."""
+    """Test team features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -52,13 +403,13 @@ async def test_team_features(sport: str, limit: int):
         results = await svc.test_team_features(sport, limit=limit)
         
         print(f"\n{'=' * 70}")
-        print(f"TEAM FEATURES TEST - {sport}")
+        print(f"TEAM FEATURES - {sport}")
         print("=" * 70)
         
         if not results:
-            print(f"  ⚠️ No games found for {sport}")
+            print(f"   ⚠️ No games found")
             return
-            
+        
         for r in results:
             print(f"\n📊 {r['game']} ({r['date']})")
             print(f"   Home Win% L10: {r['home_win_pct_last10']}")
@@ -71,7 +422,7 @@ async def test_team_features(sport: str, limit: int):
 
 
 async def test_game_context_features(sport: str, limit: int):
-    """Test game context features only."""
+    """Test game context features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -81,13 +432,13 @@ async def test_game_context_features(sport: str, limit: int):
         results = await svc.test_game_context_features(sport, limit=limit)
         
         print(f"\n{'=' * 70}")
-        print(f"GAME CONTEXT FEATURES TEST - {sport}")
+        print(f"GAME CONTEXT FEATURES - {sport}")
         print("=" * 70)
         
         if not results:
-            print(f"  ⚠️ No games found for {sport}")
+            print(f"   ⚠️ No games found")
             return
-            
+        
         for r in results:
             print(f"\n📅 {r['game']} ({r['date']})")
             print(f"   Home Rest Days: {r['home_rest_days']}")
@@ -100,7 +451,7 @@ async def test_game_context_features(sport: str, limit: int):
 
 
 async def test_player_features(sport: str, limit: int):
-    """Test player features only."""
+    """Test player features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -110,13 +461,13 @@ async def test_player_features(sport: str, limit: int):
         results = await svc.test_player_features(sport, limit=limit)
         
         print(f"\n{'=' * 70}")
-        print(f"PLAYER FEATURES TEST - {sport}")
+        print(f"PLAYER FEATURES - {sport}")
         print("=" * 70)
         
         if not results:
-            print(f"  ⚠️ No games found for {sport}")
+            print(f"   ⚠️ No games found")
             return
-            
+        
         for r in results:
             print(f"\n👤 {r['game']} ({r['date']})")
             print(f"   Home Star Pts Avg: {r['home_star_pts_avg']}")
@@ -126,7 +477,7 @@ async def test_player_features(sport: str, limit: int):
 
 
 async def test_odds_features(sport: str, limit: int):
-    """Test odds features only."""
+    """Test odds features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -136,13 +487,13 @@ async def test_odds_features(sport: str, limit: int):
         results = await svc.test_odds_features(sport, limit=limit)
         
         print(f"\n{'=' * 70}")
-        print(f"ODDS/MARKET FEATURES TEST - {sport}")
+        print(f"ODDS/MARKET FEATURES - {sport}")
         print("=" * 70)
         
         if not results:
-            print(f"  ⚠️ No games found for {sport}")
+            print(f"   ⚠️ No games found")
             return
-            
+        
         for r in results:
             print(f"\n💰 {r['game']} ({r['date']})")
             print(f"   Spread Open: {r['spread_open']}")
@@ -155,7 +506,7 @@ async def test_odds_features(sport: str, limit: int):
 
 
 async def test_situational_features(sport: str, limit: int):
-    """Test situational features only."""
+    """Test situational features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -165,13 +516,13 @@ async def test_situational_features(sport: str, limit: int):
         results = await svc.test_situational_features(sport, limit=limit)
         
         print(f"\n{'=' * 70}")
-        print(f"SITUATIONAL FEATURES TEST - {sport}")
+        print(f"SITUATIONAL FEATURES - {sport}")
         print("=" * 70)
         
         if not results:
-            print(f"  ⚠️ No games found for {sport}")
+            print(f"   ⚠️ No games found")
             return
-            
+        
         for r in results:
             print(f"\n🎯 {r['game']} ({r['date']})")
             print(f"   Home Streak: {r['home_streak']}")
@@ -182,76 +533,8 @@ async def test_situational_features(sport: str, limit: int):
             print(f"   Away Game #: {r['away_game_num']}")
 
 
-async def test_full_extraction(sport: str, limit: int):
-    """Test full feature extraction."""
-    from app.core.database import db_manager
-    from app.services.master_data.ml_features import MLFeatureService, features_to_dataframe
-    
-    await db_manager.initialize()
-    async with db_manager.session() as session:
-        svc = MLFeatureService(session)
-        
-        print(f"\n🚀 Extracting ALL features for {sport} (limit={limit})...")
-        features = await svc.extract_all_features(sport, limit=limit)
-        
-        if not features:
-            print(f"  ⚠️ No games found for {sport}")
-            return None
-        
-        print(f"\n✅ Extracted {len(features)} feature vectors")
-        
-        # Convert to DataFrame
-        df = features_to_dataframe(features)
-        print(f"\n📊 DataFrame shape: {df.shape}")
-        print(f"\n📋 Columns ({len(df.columns)}):")
-        
-        # Group columns by type
-        id_cols = [c for c in df.columns if 'id' in c or 'name' in c or c in ['sport_code', 'scheduled_at', 'season']]
-        target_cols = [c for c in df.columns if c in ['home_win', 'total_points', 'score_margin', 'spread_result', 'over_result', 'home_score', 'away_score']]
-        team_cols = [c for c in df.columns if c.startswith('home_') or c.startswith('away_') or c.startswith('h2h_') or 'power' in c]
-        odds_cols = [c for c in df.columns if 'spread' in c or 'total' in c or 'money' in c or 'pinnacle' in c or 'book' in c or 'implied' in c or 'public' in c or 'sharp' in c or 'rlm' in c or 'steam' in c]
-        context_cols = [c for c in df.columns if 'rest' in c or 'b2b' in c or 'night' in c or 'day' in c or 'month' in c or 'playoff' in c or 'neutral' in c or 'divisional' in c or 'conference' in c or 'rivalry' in c]
-        situational_cols = [c for c in df.columns if 'streak' in c or 'revenge' in c or 'letdown' in c or 'lookahead' in c or 'game_num' in c]
-        weather_cols = [c for c in df.columns if 'temperature' in c or 'wind' in c or 'precipitation' in c or 'humidity' in c or 'dome' in c]
-        
-        print(f"\n  🆔 ID columns ({len(id_cols)}): {id_cols[:5]}...")
-        print(f"  🎯 Target columns ({len(target_cols)}): {target_cols}")
-        print(f"  📊 Team features: {len([c for c in team_cols if c not in id_cols + target_cols])}")
-        print(f"  💰 Odds features: {len(odds_cols)}")
-        print(f"  📅 Context features: {len(context_cols)}")
-        print(f"  🎯 Situational features: {len(situational_cols)}")
-        print(f"  🌤️ Weather features: {len(weather_cols)}")
-        
-        # Show sample
-        print(f"\n📈 Sample data (first row):")
-        if len(df) > 0:
-            row = df.iloc[0]
-            sample_cols = ['home_team_name', 'away_team_name', 'home_win', 
-                          'home_win_pct_last10', 'away_win_pct_last10',
-                          'spread_close', 'pinnacle_spread', 'home_rest_days']
-            for col in sample_cols:
-                if col in df.columns:
-                    print(f"   {col}: {row[col]}")
-        
-        # Non-null counts
-        print(f"\n📉 Feature coverage (non-null %):")
-        feature_groups = {
-            'Team': team_cols[:5],
-            'Odds': odds_cols[:5],
-            'Context': context_cols[:5],
-            'Situational': situational_cols[:5],
-        }
-        for group, cols in feature_groups.items():
-            valid_cols = [c for c in cols if c in df.columns]
-            if valid_cols:
-                coverage = df[valid_cols].notna().mean().mean() * 100
-                print(f"   {group}: {coverage:.1f}%")
-        
-        return df
-
-
 async def test_all_dimensions(sport: str, limit: int):
-    """Run all individual tests for one sport."""
+    """Test all dimensions for one sport (console output)."""
     await test_team_features(sport, limit)
     await test_game_context_features(sport, limit)
     await test_player_features(sport, limit)
@@ -259,152 +542,97 @@ async def test_all_dimensions(sport: str, limit: int):
     await test_situational_features(sport, limit)
 
 
-async def test_all_sports_all_dimensions(limit: int):
-    """Test all dimensions for ALL 10 sports."""
-    from app.core.database import db_manager
-    
-    await db_manager.initialize()
-    
-    print("\n" + "=" * 70)
-    print("🏆 TESTING ALL 10 SPORTS - ALL DIMENSIONS")
-    print("=" * 70)
-    print(f"Sports: {', '.join(ALL_SPORTS)}")
-    print(f"Limit per sport: {limit}")
-    
-    for sport in ALL_SPORTS:
-        print(f"\n\n{'#' * 70}")
-        print(f"# {sport}")
-        print(f"{'#' * 70}")
-        await test_all_dimensions(sport, limit)
-    
-    print("\n\n" + "=" * 70)
-    print("✅ ALL 10 SPORTS TESTED!")
-    print("=" * 70)
-
-
-async def test_all_sports_full_extraction(limit: int):
-    """Full feature extraction for ALL 10 sports."""
-    from app.core.database import db_manager
-    from app.services.master_data.ml_features import features_to_dataframe
-    import pandas as pd
-    
-    await db_manager.initialize()
-    
-    print("\n" + "=" * 70)
-    print("🏆 FULL EXTRACTION - ALL 10 SPORTS")
-    print("=" * 70)
-    print(f"Sports: {', '.join(ALL_SPORTS)}")
-    print(f"Limit per sport: {limit}")
-    
-    all_dfs = []
-    summary = []
-    
-    for sport in ALL_SPORTS:
-        print(f"\n\n{'#' * 70}")
-        print(f"# {sport}")
-        print(f"{'#' * 70}")
-        
-        df = await test_full_extraction(sport, limit)
-        
-        if df is not None and len(df) > 0:
-            all_dfs.append(df)
-            
-            # Calculate coverage
-            feature_cols = [c for c in df.columns if c not in ['master_game_id', 'sport_code', 'scheduled_at', 'season', 'home_team_id', 'away_team_id', 'home_team_name', 'away_team_name']]
-            coverage = df[feature_cols].notna().mean().mean() * 100
-            
-            summary.append({
-                'sport': sport,
-                'games': len(df),
-                'features': len(df.columns),
-                'coverage': f"{coverage:.1f}%"
-            })
-        else:
-            summary.append({
-                'sport': sport,
-                'games': 0,
-                'features': 0,
-                'coverage': "N/A"
-            })
-    
-    # Print summary
-    print("\n\n" + "=" * 70)
-    print("📊 SUMMARY - ALL 10 SPORTS")
-    print("=" * 70)
-    print(f"\n{'Sport':<10} {'Games':<10} {'Features':<12} {'Coverage':<10}")
-    print("-" * 42)
-    for s in summary:
-        print(f"{s['sport']:<10} {s['games']:<10} {s['features']:<12} {s['coverage']:<10}")
-    
-    # Combined stats
-    if all_dfs:
-        combined_df = pd.concat(all_dfs, ignore_index=True)
-        print(f"\n📈 COMBINED TOTAL:")
-        print(f"   Total games: {len(combined_df)}")
-        print(f"   Total features: {len(combined_df.columns)}")
-        print(f"   Sports with data: {len([s for s in summary if s['games'] > 0])}/10")
-    
-    print("\n✅ ALL 10 SPORTS EXTRACTION COMPLETE!")
-
+# =============================================================================
+# MAIN
+# =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Test ML Feature Extraction for ALL 10 Sports')
-    parser.add_argument('--sport', type=str, default='ALL', help='Sport code: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA, or ALL for all 10')
-    parser.add_argument('--limit', type=int, default=3, help='Number of games to test per sport (default: 3)')
+    parser = argparse.ArgumentParser(
+        description='ML Feature Extraction & CSV Export',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Export 8 CSV files for one sport
+  python -m scripts.test_ml_features --export --sport NBA --limit 1000
+
+  # Export 81 CSV files for all 10 sports (RECOMMENDED)
+  python -m scripts.test_ml_features --export --sport ALL --limit 1000
+
+  # Test team features (console only, no CSV)
+  python -m scripts.test_ml_features --team --sport NBA --limit 5
+  
+  # Test all dimensions (console only, no CSV)
+  python -m scripts.test_ml_features --all --sport NFL --limit 5
+        """
+    )
     
-    # Test dimensions
-    parser.add_argument('--team', action='store_true', help='Test team features')
-    parser.add_argument('--context', action='store_true', help='Test game context features')
-    parser.add_argument('--player', action='store_true', help='Test player features')
-    parser.add_argument('--odds', action='store_true', help='Test odds features')
-    parser.add_argument('--situational', action='store_true', help='Test situational features')
-    parser.add_argument('--all', action='store_true', help='Test all dimensions')
-    parser.add_argument('--full', action='store_true', help='Test full extraction')
+    parser.add_argument('--sport', type=str, default='ALL',
+                        help='Sport: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA, or ALL')
+    parser.add_argument('--limit', type=int, default=1000,
+                        help='Max games per sport (default: 1000)')
+    
+    # Export mode (saves CSV files)
+    parser.add_argument('--export', action='store_true',
+                        help='Export to CSV files (8 per sport, 81 total for ALL)')
+    
+    # Test modes (console output only)
+    parser.add_argument('--team', action='store_true', help='Test team features (console)')
+    parser.add_argument('--context', action='store_true', help='Test game context (console)')
+    parser.add_argument('--player', action='store_true', help='Test player features (console)')
+    parser.add_argument('--odds', action='store_true', help='Test odds features (console)')
+    parser.add_argument('--situational', action='store_true', help='Test situational (console)')
+    parser.add_argument('--all', action='store_true', help='Test all dimensions (console)')
     
     args = parser.parse_args()
     
-    # Default to --all if nothing specified
-    if not any([args.team, args.context, args.player, args.odds, args.situational, args.all, args.full]):
-        args.all = True
+    sport = args.sport.upper()
     
-    # Determine sports to test
-    if args.sport.upper() == 'ALL':
-        sports_to_test = ALL_SPORTS
-    else:
-        sports_to_test = [args.sport.upper()]
+    # Export mode - save CSV files
+    if args.export:
+        if sport == 'ALL':
+            asyncio.run(export_all_sports(args.limit))
+        else:
+            asyncio.run(export_single_sport(sport, args.limit))
+        return
+    
+    # Test modes - console output only
+    sports_to_test = ALL_SPORTS if sport == 'ALL' else [sport]
     
     print(f"\n{'=' * 70}")
-    print(f"ML FEATURE EXTRACTION TEST")
-    print(f"{'=' * 70}")
+    print(f"ML FEATURE EXTRACTION TEST (Console Only)")
+    print("=" * 70)
     print(f"Sports: {', '.join(sports_to_test)}")
     print(f"Limit per sport: {args.limit}")
+    print(f"\nTip: Use --export to save CSV files")
     
-    # Run tests for each sport
     if args.team:
-        for sport in sports_to_test:
-            asyncio.run(test_team_features(sport, args.limit))
+        for s in sports_to_test:
+            asyncio.run(test_team_features(s, args.limit))
     elif args.context:
-        for sport in sports_to_test:
-            asyncio.run(test_game_context_features(sport, args.limit))
+        for s in sports_to_test:
+            asyncio.run(test_game_context_features(s, args.limit))
     elif args.player:
-        for sport in sports_to_test:
-            asyncio.run(test_player_features(sport, args.limit))
+        for s in sports_to_test:
+            asyncio.run(test_player_features(s, args.limit))
     elif args.odds:
-        for sport in sports_to_test:
-            asyncio.run(test_odds_features(sport, args.limit))
+        for s in sports_to_test:
+            asyncio.run(test_odds_features(s, args.limit))
     elif args.situational:
-        for sport in sports_to_test:
-            asyncio.run(test_situational_features(sport, args.limit))
+        for s in sports_to_test:
+            asyncio.run(test_situational_features(s, args.limit))
     elif args.all:
-        for sport in sports_to_test:
-            asyncio.run(test_all_dimensions(sport, args.limit))
-    elif args.full:
-        if len(sports_to_test) > 1:
-            asyncio.run(test_all_sports_full_extraction(args.limit))
-        else:
-            asyncio.run(test_full_extraction(sports_to_test[0], args.limit))
-    
-    print(f"\n✅ Test complete!")
+        for s in sports_to_test:
+            asyncio.run(test_all_dimensions(s, args.limit))
+    else:
+        # Default: show help
+        parser.print_help()
+        print("\n" + "=" * 70)
+        print("QUICK START:")
+        print("=" * 70)
+        print("\n  # Export all 81 CSV files:")
+        print("  python -m scripts.test_ml_features --export --sport ALL --limit 1000")
+        print("\n  # Export 8 CSV files for NBA only:")
+        print("  python -m scripts.test_ml_features --export --sport NBA --limit 1000")
 
 
 if __name__ == "__main__":

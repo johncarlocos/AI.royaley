@@ -1276,50 +1276,57 @@ class MLFeatureService:
             return
         
         # Try to get weather data from weather_data table
-        result = await self.session.execute(text("""
-            SELECT 
-                wd.temperature,
-                wd.wind_speed,
-                wd.precipitation_chance,
-                wd.humidity,
-                v.is_dome,
-                v.is_outdoor
-            FROM weather_data wd
-            LEFT JOIN venues v ON wd.venue_id = v.id
-            WHERE wd.game_id IN (
-                SELECT gm.source_game_id 
-                FROM game_mappings gm 
-                WHERE gm.master_game_id = :mgid
-            )
-            LIMIT 1
-        """), {"mgid": fv.master_game_id})
-        
-        row = result.fetchone()
-        if row:
-            fv.temperature_f = row[0]
-            fv.wind_speed_mph = row[1]
-            fv.precipitation_pct = row[2]
-            fv.humidity_pct = row[3]
-            if row[4] is not None:
-                fv.is_dome = row[4]
-            elif row[5] is not None:
-                fv.is_dome = not row[5]
-            return
+        try:
+            result = await self.session.execute(text("""
+                SELECT 
+                    wd.temperature_f,
+                    wd.wind_speed_mph,
+                    wd.precipitation_pct,
+                    wd.humidity_pct,
+                    v.is_dome,
+                    v.is_outdoor
+                FROM weather_data wd
+                LEFT JOIN venues v ON wd.venue_id = v.id
+                WHERE wd.game_id IN (
+                    SELECT gm.source_game_id 
+                    FROM game_mappings gm 
+                    WHERE gm.master_game_id = :mgid
+                )
+                LIMIT 1
+            """), {"mgid": fv.master_game_id})
+            
+            row = result.fetchone()
+            if row:
+                fv.temperature_f = row[0]
+                fv.wind_speed_mph = row[1]
+                fv.precipitation_pct = row[2]
+                fv.humidity_pct = row[3]
+                if row[4] is not None:
+                    fv.is_dome = row[4]
+                elif row[5] is not None:
+                    fv.is_dome = not row[5]
+                return
+        except Exception:
+            # weather_data table may have different schema or not exist
+            pass
         
         # Fallback: Try to get venue info from master_games
-        result2 = await self.session.execute(text("""
-            SELECT v.is_dome, v.is_outdoor
-            FROM master_games mg
-            LEFT JOIN venues v ON mg.venue_id = v.id
-            WHERE mg.id = :mgid
-        """), {"mgid": fv.master_game_id})
-        
-        row2 = result2.fetchone()
-        if row2:
-            if row2[0] is not None:
-                fv.is_dome = row2[0]
-            elif row2[1] is not None:
-                fv.is_dome = not row2[1]
+        try:
+            result2 = await self.session.execute(text("""
+                SELECT v.is_dome, v.is_outdoor
+                FROM master_games mg
+                LEFT JOIN venues v ON mg.venue_id = v.id
+                WHERE mg.id = :mgid
+            """), {"mgid": fv.master_game_id})
+            
+            row2 = result2.fetchone()
+            if row2:
+                if row2[0] is not None:
+                    fv.is_dome = row2[0]
+                elif row2[1] is not None:
+                    fv.is_dome = not row2[1]
+        except Exception:
+            pass
 
 
 # =============================================================================

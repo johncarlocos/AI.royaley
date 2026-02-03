@@ -247,13 +247,42 @@ class MLFeatureService:
             # Compute basic targets (home_win, total_points, score_margin)
             self._compute_basic_targets(fv)
             
-            # Extract all 5 dimensions + weather
-            await self._extract_team_features(fv)
-            await self._extract_game_context_features(fv)
-            await self._extract_player_features(fv)
-            await self._extract_odds_features(fv)
-            await self._extract_situational_features(fv)
-            await self._extract_weather_features(fv)
+            # Extract all 5 dimensions + weather (with error handling)
+            try:
+                await self._extract_team_features(fv)
+            except Exception as e:
+                logger.warning(f"Team features failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
+            
+            try:
+                await self._extract_game_context_features(fv)
+            except Exception as e:
+                logger.warning(f"Game context failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
+            
+            try:
+                await self._extract_player_features(fv)
+            except Exception as e:
+                logger.warning(f"Player features failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
+            
+            try:
+                await self._extract_odds_features(fv)
+            except Exception as e:
+                logger.warning(f"Odds features failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
+            
+            try:
+                await self._extract_situational_features(fv)
+            except Exception as e:
+                logger.warning(f"Situational features failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
+            
+            try:
+                await self._extract_weather_features(fv)
+            except Exception as e:
+                logger.warning(f"Weather features failed for game {fv.master_game_id}: {e}")
+                await self.session.rollback()
             
             # Compute betting targets AFTER odds extraction (need spread_close, total_close)
             self._compute_betting_targets(fv)

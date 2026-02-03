@@ -3,35 +3,39 @@
 ROYALEY - ML Feature Extraction & CSV Export
 =============================================
 
-Generates ML features and saves to CSV files in ./ml_csv/ folder.
+Generates ML features and saves to CSV files organized by sport.
 
-OUTPUT STRUCTURE (81 files total):
-    Per sport (8 files × 10 sports = 80 files):
-        ml_features_{SPORT}_{timestamp}.csv           - Combined all ~92 features
-        ml_features_{SPORT}_team_{timestamp}.csv      - ~24 team rolling stats
-        ml_features_{SPORT}_game_{timestamp}.csv      - ~15 game context features
-        ml_features_{SPORT}_player_{timestamp}.csv    - ~10 player features
-        ml_features_{SPORT}_odds_{timestamp}.csv      - ~24 odds/market features
-        ml_features_{SPORT}_situation_{timestamp}.csv - ~10 situational features
-        ml_features_{SPORT}_weather_{timestamp}.csv   - ~5 weather features
-        ml_features_{SPORT}_target_{timestamp}.csv    - ~7 target variables
-    
-    Grand combined (1 file):
-        ml_features_ALL_SPORTS_{timestamp}.csv        - All sports combined
+OUTPUT STRUCTURE (80 files in 10 folders):
+    ml_csv/
+    ├── NBA/
+    │   ├── ml_features_NBA_{timestamp}.csv           - Combined all ~92 features
+    │   ├── ml_features_NBA_team_{timestamp}.csv      - ~24 team rolling stats
+    │   ├── ml_features_NBA_game_{timestamp}.csv      - ~15 game context features
+    │   ├── ml_features_NBA_player_{timestamp}.csv    - ~10 player features
+    │   ├── ml_features_NBA_odds_{timestamp}.csv      - ~24 odds/market features
+    │   ├── ml_features_NBA_situation_{timestamp}.csv - ~10 situational features
+    │   ├── ml_features_NBA_weather_{timestamp}.csv   - ~5 weather features
+    │   └── ml_features_NBA_target_{timestamp}.csv    - ~7 target variables
+    ├── NFL/
+    │   └── (8 files)
+    ├── MLB/
+    ├── NHL/
+    ├── WNBA/
+    ├── CFL/
+    ├── NCAAF/
+    ├── NCAAB/
+    ├── ATP/
+    └── WTA/
 
 COMMANDS:
-    # Export ALL games for ONE sport (no limit)
+    # Export ALL games for ONE sport
     python -m scripts.export_ml_features --export --sport NBA
     
-    # Export ALL games for ALL 10 sports (81 CSV files)
+    # Export ALL games for ALL 10 sports (80 CSV files in 10 folders)
     python -m scripts.export_ml_features --export --sport ALL
     
     # Export with limit (for testing)
     python -m scripts.export_ml_features --export --sport NBA --limit 1000
-    
-    # Preview dimensions without saving (console only)
-    python -m scripts.export_ml_features --team --sport NBA --limit 5
-    python -m scripts.export_ml_features --odds --sport NFL --limit 5
 
 Supported sports: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA
 """
@@ -188,9 +192,9 @@ def calculate_coverage(df, columns: List[str]) -> float:
 
 def save_sport_csvs(df, sport: str, output_dir: str, timestamp: str) -> Dict[str, str]:
     """
-    Save 8 CSV files for a single sport.
+    Save 8 CSV files for a single sport in sport-specific subfolder.
     
-    Files created:
+    Files created in {output_dir}/{sport}/:
         1. ml_features_{SPORT}_{timestamp}.csv (combined)
         2. ml_features_{SPORT}_team_{timestamp}.csv
         3. ml_features_{SPORT}_game_{timestamp}.csv
@@ -202,12 +206,16 @@ def save_sport_csvs(df, sport: str, output_dir: str, timestamp: str) -> Dict[str
     
     Returns dict of dimension -> filepath
     """
+    # Create sport-specific subfolder
+    sport_dir = os.path.join(output_dir, sport)
+    os.makedirs(sport_dir, exist_ok=True)
+    
     files_created = {}
     
-    print(f"\n   📁 Saving 8 CSV files for {sport}...")
+    print(f"\n   📁 Saving 8 CSV files for {sport} to {sport}/ folder...")
     
     # 1. Combined (all features)
-    combined_path = os.path.join(output_dir, f"ml_features_{sport}_{timestamp}.csv")
+    combined_path = os.path.join(sport_dir, f"ml_features_{sport}_{timestamp}.csv")
     df.to_csv(combined_path, index=False)
     files_created['combined'] = combined_path
     print(f"      ✅ ml_features_{sport}_{timestamp}.csv ({len(df)} rows × {len(df.columns)} cols)")
@@ -215,7 +223,7 @@ def save_sport_csvs(df, sport: str, output_dir: str, timestamp: str) -> Dict[str
     # 2-8. Individual dimensions
     for dimension, columns in DIMENSIONS.items():
         dim_df = filter_columns(df, columns, include_ids=True)
-        dim_path = os.path.join(output_dir, f"ml_features_{sport}_{dimension}_{timestamp}.csv")
+        dim_path = os.path.join(sport_dir, f"ml_features_{sport}_{dimension}_{timestamp}.csv")
         dim_df.to_csv(dim_path, index=False)
         files_created[dimension] = dim_path
         
@@ -243,35 +251,64 @@ async def export_single_sport(sport: str, limit: int) -> tuple:
     
     await db_manager.initialize()
     
+    # First, get all games
     async with db_manager.session() as session:
         svc = MLFeatureService(session)
+        games = await svc._get_games(sport, completed_only=True, limit=limit)
+    
+    if not games:
+        print(f"   ⚠️ No games found for {sport}")
+        return None, {}
+    
+    print(f"\n   🔄 Extracting features for {len(games)} games...")
+    
+    # Process in batches with fresh sessions to avoid transaction issues
+    BATCH_SIZE = 100
+    all_features = []
+    error_count = 0
+    
+    for batch_start in range(0, len(games), BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, len(games))
+        batch_games = games[batch_start:batch_end]
         
-        print(f"\n   🔄 Extracting features...")
-        features = await svc.extract_all_features(sport, limit=limit)
+        try:
+            async with db_manager.session() as session:
+                svc = MLFeatureService(session)
+                batch_features = await svc._extract_features_for_games(batch_games, sport)
+                all_features.extend(batch_features)
+        except Exception as e:
+            error_count += len(batch_games)
+            logger.warning(f"Batch {batch_start}-{batch_end} failed: {e}")
         
-        if not features:
-            print(f"   ⚠️ No games found for {sport}")
-            return None, {}
-        
-        print(f"   ✅ Extracted {len(features)} games")
-        
-        df = features_to_dataframe(features)
-        files = save_sport_csvs(df, sport, output_dir, timestamp)
-        
-        print(f"\n{'=' * 70}")
-        print("📁 FILES CREATED")
-        print("=" * 70)
-        print(f"\n   Location: {output_dir}/")
-        print(f"\n   {sport} files (8 files):")
-        for dim, path in files.items():
-            filename = os.path.basename(path)
-            print(f"      - {filename}")
-        
-        print(f"\n{'=' * 70}")
-        print(f"✅ COMPLETE! 8 CSV files created for {sport}")
-        print("=" * 70)
-        
-        return df, files
+        if (batch_end) % 500 == 0 or batch_end == len(games):
+            logger.info(f"  Processed {batch_end}/{len(games)} games")
+    
+    if error_count > 0:
+        logger.warning(f"  ⚠️ {error_count} games had errors during extraction")
+    
+    if not all_features:
+        print(f"   ⚠️ No features extracted for {sport}")
+        return None, {}
+    
+    print(f"   ✅ Extracted {len(all_features)} games")
+    
+    df = features_to_dataframe(all_features)
+    files = save_sport_csvs(df, sport, output_dir, timestamp)
+    
+    print(f"\n{'=' * 70}")
+    print("📁 FILES CREATED")
+    print("=" * 70)
+    print(f"\n   Location: {output_dir}/{sport}/")
+    print(f"\n   {sport} files (8 files):")
+    for dim, path in files.items():
+        filename = os.path.basename(path)
+        print(f"      - {filename}")
+    
+    print(f"\n{'=' * 70}")
+    print(f"✅ COMPLETE! 8 CSV files created for {sport}")
+    print("=" * 70)
+    
+    return df, files
 
 
 async def export_all_sports(limit: int):
@@ -556,10 +593,10 @@ def main():
         epilog="""
 Examples:
   # Export 8 CSV files for one sport
-  python -m scripts.export_ml_features --export --sport NBA 
+  python -m scripts.export_ml_features --export --sport NBA --limit 1000
 
   # Export 81 CSV files for all 10 sports (RECOMMENDED)
-  python -m scripts.export_ml_features --export --sport ALL 
+  python -m scripts.export_ml_features --export --sport ALL --limit 1000
 
   # Test team features (console only, no CSV)
   python -m scripts.export_ml_features --team --sport NBA --limit 5
@@ -572,7 +609,7 @@ Examples:
     parser.add_argument('--sport', type=str, default='ALL',
                         help='Sport: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA, or ALL')
     parser.add_argument('--limit', type=int, default=None,
-                        help='Max games per sport (default: ALL games)')
+                        help='Max games per sport (default: 1000)')
     
     # Export mode (saves CSV files)
     parser.add_argument('--export', action='store_true',
@@ -633,9 +670,9 @@ Examples:
         print("QUICK START:")
         print("=" * 70)
         print("\n  # Export all 81 CSV files:")
-        print("  python -m scripts.export_ml_features --export --sport ALL ")
+        print("  python -m scripts.export_ml_features --export --sport ALL --limit 1000")
         print("\n  # Export 8 CSV files for NBA only:")
-        print("  python -m scripts.export_ml_features --export --sport NBA ")
+        print("  python -m scripts.export_ml_features --export --sport NBA --limit 1000")
 
 
 if __name__ == "__main__":

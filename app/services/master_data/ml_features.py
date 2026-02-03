@@ -299,6 +299,81 @@ class MLFeatureService:
         logger.info(f"✅ Extracted {len(features)} feature vectors")
         return features
     
+    async def _extract_features_for_games(
+        self,
+        games: List[Dict],
+        sport_code: str
+    ) -> List[MLFeatureVector]:
+        """
+        Extract features for a batch of pre-fetched games.
+        Used for batched processing with fresh sessions.
+        """
+        features = []
+        
+        for g in games:
+            try:
+                fv = MLFeatureVector(
+                    master_game_id=str(g['id']),
+                    sport_code=g['sport_code'],
+                    scheduled_at=g['scheduled_at'],
+                    season=g['season'],
+                    home_team_id=str(g['home_team_id']) if g['home_team_id'] else None,
+                    away_team_id=str(g['away_team_id']) if g['away_team_id'] else None,
+                    home_team_name=g['home_name'],
+                    away_team_name=g['away_name'],
+                    home_score=g['home_score'],
+                    away_score=g['away_score'],
+                    is_playoff=g.get('is_playoff'),
+                    is_neutral_site=g.get('is_neutral_site'),
+                )
+                
+                # Compute basic targets
+                self._compute_basic_targets(fv)
+                
+                # Extract all dimensions (with error handling per dimension)
+                try:
+                    await self._extract_team_features(fv)
+                except Exception:
+                    pass
+                
+                try:
+                    await self._extract_game_context_features(fv)
+                except Exception:
+                    pass
+                
+                try:
+                    await self._extract_player_features(fv)
+                except Exception:
+                    pass
+                
+                try:
+                    await self._extract_odds_features(fv)
+                except Exception:
+                    pass
+                
+                try:
+                    await self._extract_situational_features(fv)
+                except Exception:
+                    pass
+                
+                try:
+                    await self._extract_weather_features(fv)
+                except Exception:
+                    pass
+                
+                # Compute betting targets
+                self._compute_betting_targets(fv)
+                
+                # Extract season if not set
+                if fv.season is None and fv.scheduled_at:
+                    fv.season = self._calculate_season(fv.scheduled_at, sport_code)
+                
+                features.append(fv)
+            except Exception as e:
+                logger.warning(f"Failed to extract features for game {g.get('id')}: {e}")
+        
+        return features
+    
     # =========================================================================
     # INDIVIDUAL TEST METHODS (test each dimension separately)
     # =========================================================================

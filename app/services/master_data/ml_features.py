@@ -575,14 +575,14 @@ class MLFeatureService:
         is_tennis = sport_code in ('ATP', 'WTA')
         
         if is_tennis:
-            # For tennis: get player IDs from source games table (players stored as "teams")
-            # IMPORTANT: Filter out duplicate entries with (Games) or (Sets) suffix
-            # These are score breakdowns, not actual matches
+            # For tennis: ALWAYS use source games.home_team_id / away_team_id
+            # These are the IDs that exist in the games table for rolling stats queries
+            # DO NOT use master_player_id - those IDs don't exist in games table!
             result = await self.session.execute(text(f"""
                 SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
                        mg.home_score, mg.away_score, mg.status,
-                       COALESCE(mg.home_master_player_id::text, g.home_team_id::text) as home_team_id,
-                       COALESCE(mg.away_master_player_id::text, g.away_team_id::text) as away_team_id,
+                       g.home_team_id::text as home_team_id,
+                       g.away_team_id::text as away_team_id,
                        mg.is_playoff, mg.is_neutral_site,
                        COALESCE(hp.canonical_name, ht.name, 'Player 1') as home_name,
                        COALESCE(ap.canonical_name, at_.name, 'Player 2') as away_name
@@ -594,6 +594,7 @@ class MLFeatureService:
                 LEFT JOIN teams ht ON g.home_team_id = ht.id
                 LEFT JOIN teams at_ ON g.away_team_id = at_.id
                 WHERE {where_clause}
+                  AND g.home_team_id IS NOT NULL
                   AND (ht.name IS NULL OR (ht.name NOT LIKE '%%(Games)' AND ht.name NOT LIKE '%%(Sets)'))
                 ORDER BY mg.scheduled_at DESC
                 {limit_clause}

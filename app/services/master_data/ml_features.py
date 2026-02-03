@@ -575,13 +575,12 @@ class MLFeatureService:
         is_tennis = sport_code in ('ATP', 'WTA')
         
         if is_tennis:
-            # For tennis: get player names from source Game/Team tables via game_mappings
-            # Tennis stores players as "teams" in the source system
+            # For tennis: get player IDs from source games table (players stored as "teams")
             result = await self.session.execute(text(f"""
                 SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
                        mg.home_score, mg.away_score, mg.status,
-                       COALESCE(mg.home_master_player_id::text, gm.source_game_db_id::text) as home_team_id,
-                       COALESCE(mg.away_master_player_id::text, gm.source_game_db_id::text) as away_team_id,
+                       COALESCE(mg.home_master_player_id::text, g.home_team_id::text) as home_team_id,
+                       COALESCE(mg.away_master_player_id::text, g.away_team_id::text) as away_team_id,
                        mg.is_playoff, mg.is_neutral_site,
                        COALESCE(hp.canonical_name, ht.name, 'Player 1') as home_name,
                        COALESCE(ap.canonical_name, at_.name, 'Player 2') as away_name
@@ -740,6 +739,7 @@ class MLFeatureService:
         
         if is_tennis:
             # For tennis: query via source games table using team IDs (players stored as teams)
+            # Use ILIKE for flexible sport code matching (ATP, WTA, tennis_atp, etc.)
             result = await self.session.execute(text("""
                 WITH player_games AS (
                     SELECT 
@@ -761,7 +761,7 @@ class MLFeatureService:
                       AND g.scheduled_at < :before
                       AND g.home_score IS NOT NULL
                       AND g.away_score IS NOT NULL
-                      AND s.code = :sport
+                      AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                     ORDER BY g.scheduled_at DESC
                     LIMIT 20
                 )
@@ -851,7 +851,7 @@ class MLFeatureService:
         is_tennis = sport_code in ('ATP', 'WTA')
         
         if is_tennis:
-            # For tennis: use source games table
+            # For tennis: use source games table with flexible sport matching
             result = await self.session.execute(text("""
                 SELECT 
                     SUM(CASE WHEN g.home_team_id = :home_tid::uuid 
@@ -871,7 +871,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                 LIMIT 5
             """), {
                 "home_tid": home_team_id,
@@ -961,7 +961,7 @@ class MLFeatureService:
         is_tennis = sport_code in ('ATP', 'WTA')
         
         if is_tennis:
-            # For tennis: use source games table
+            # For tennis: use source games table with flexible sport matching
             result = await self.session.execute(text("""
                 SELECT g.scheduled_at
                 FROM games g
@@ -970,7 +970,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :game_date
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                 ORDER BY g.scheduled_at DESC
                 LIMIT 1
             """), {
@@ -1015,7 +1015,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :game_date
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
             """), {
                 "tid": team_id,
                 "start_date": game_date - timedelta(days=4),
@@ -1393,7 +1393,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                 ORDER BY g.scheduled_at DESC
                 LIMIT 10
             """), {
@@ -1461,7 +1461,7 @@ class MLFeatureService:
                   AND g.scheduled_at >= :season_start
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
             """), {
                 "tid": team_id,
                 "game_date": game_date,
@@ -1508,7 +1508,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                 ORDER BY g.scheduled_at DESC
                 LIMIT 1
             """), {
@@ -1589,7 +1589,7 @@ class MLFeatureService:
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
-                  AND s.code = :sport
+                  AND (s.code = :sport OR s.code ILIKE '%' || :sport || '%' OR s.name ILIKE '%' || :sport || '%')
                 ORDER BY g.scheduled_at DESC
                 LIMIT 1
             """), {

@@ -821,79 +821,45 @@ class MLFeatureService:
     ) -> Optional[Dict]:
         """Get star player performance for a team."""
         # Try master_player_stats first
-        result = await self.session.execute(text("""
-            WITH player_avgs AS (
-                SELECT 
-                    mps.master_player_id,
-                    AVG(mps.points) as avg_pts
-                FROM master_player_stats mps
-                JOIN master_games mg ON mps.master_game_id = mg.id
-                WHERE mps.master_team_id = :tid
-                  AND mg.scheduled_at < :before
-                  AND mg.scheduled_at > :cutoff
-                  AND mg.sport_code = :sport
-                GROUP BY mps.master_player_id
-                HAVING COUNT(*) >= 3
-                ORDER BY AVG(mps.points) DESC
-                LIMIT 3
-            )
-            SELECT 
-                MAX(avg_pts) as star_pts,
-                AVG(avg_pts) as top3_pts
-            FROM player_avgs
-        """), {
-            "tid": team_id,
-            "before": before_date,
-            "cutoff": before_date - timedelta(days=60),
-            "sport": sport_code,
-        })
-        
-        row = result.fetchone()
-        if row and row[0] is not None:
-            return {
-                'star_pts_avg': round(row[0], 1) if row[0] else None,
-                'top3_pts_avg': round(row[1], 1) if row[1] else None,
-            }
-        
-        # Fallback: Try player_stats table if master_player_stats is empty
-        result2 = await self.session.execute(text("""
-            WITH player_avgs AS (
-                SELECT 
-                    ps.player_id,
-                    AVG(ps.points) as avg_pts
-                FROM player_stats ps
-                JOIN games g ON ps.game_id = g.id
-                WHERE ps.team_id IN (
-                    SELECT tm.source_team_id 
-                    FROM team_mappings tm 
-                    WHERE tm.master_team_id = :tid
+        try:
+            result = await self.session.execute(text("""
+                WITH player_avgs AS (
+                    SELECT 
+                        mps.master_player_id,
+                        AVG(mps.points) as avg_pts
+                    FROM master_player_stats mps
+                    JOIN master_games mg ON mps.master_game_id = mg.id
+                    WHERE mps.master_team_id = :tid
+                      AND mg.scheduled_at < :before
+                      AND mg.scheduled_at > :cutoff
+                      AND mg.sport_code = :sport
+                    GROUP BY mps.master_player_id
+                    HAVING COUNT(*) >= 3
+                    ORDER BY AVG(mps.points) DESC
+                    LIMIT 3
                 )
-                  AND g.scheduled_at < :before
-                  AND g.scheduled_at > :cutoff
-                  AND g.sport_code = :sport
-                GROUP BY ps.player_id
-                HAVING COUNT(*) >= 3
-                ORDER BY AVG(ps.points) DESC
-                LIMIT 3
-            )
-            SELECT 
-                MAX(avg_pts) as star_pts,
-                AVG(avg_pts) as top3_pts
-            FROM player_avgs
-        """), {
-            "tid": team_id,
-            "before": before_date,
-            "cutoff": before_date - timedelta(days=60),
-            "sport": sport_code,
-        })
+                SELECT 
+                    MAX(avg_pts) as star_pts,
+                    AVG(avg_pts) as top3_pts
+                FROM player_avgs
+            """), {
+                "tid": team_id,
+                "before": before_date,
+                "cutoff": before_date - timedelta(days=60),
+                "sport": sport_code,
+            })
+            
+            row = result.fetchone()
+            if row and row[0] is not None:
+                return {
+                    'star_pts_avg': round(row[0], 1) if row[0] else None,
+                    'top3_pts_avg': round(row[1], 1) if row[1] else None,
+                }
+        except Exception:
+            # master_player_stats table may not exist or have different schema
+            pass
         
-        row2 = result2.fetchone()
-        if row2 and row2[0] is not None:
-            return {
-                'star_pts_avg': round(row2[0], 1) if row2[0] else None,
-                'top3_pts_avg': round(row2[1], 1) if row2[1] else None,
-            }
-        
+        # No data available - player stats tables need to be populated
         return None
     
     async def _extract_injury_features(self, fv: MLFeatureVector):

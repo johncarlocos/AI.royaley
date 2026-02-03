@@ -21,14 +21,14 @@ OUTPUT STRUCTURE (81 files total):
 
 COMMANDS:
     # Generate 8 CSV files for ONE sport
-    python -m scripts.test_ml_features --export --sport NBA --limit 1000
+    python -m scripts.export_ml_features --export --sport NBA --limit 1000
     
     # Generate 81 CSV files for ALL 10 sports (RECOMMENDED)
-    python -m scripts.test_ml_features --export --sport ALL --limit 1000
+    python -m scripts.export_ml_features --export --sport ALL --limit 1000
     
-    # Test dimensions without saving (console only)
-    python -m scripts.test_ml_features --team --sport NBA --limit 5
-    python -m scripts.test_ml_features --odds --sport NFL --limit 5
+    # Preview dimensions without saving (console only)
+    python -m scripts.export_ml_features --team --sport NBA --limit 5
+    python -m scripts.export_ml_features --odds --sport NFL --limit 5
 
 Supported sports: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA
 """
@@ -392,8 +392,8 @@ async def export_all_sports(limit: int):
 # TEST FUNCTIONS (Console output only - no CSV export)
 # =============================================================================
 
-async def test_team_features(sport: str, limit: int):
-    """Test team features only (console output)."""
+async def preview_team_features(sport: str, limit: int):
+    """Preview team features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -421,8 +421,8 @@ async def test_team_features(sport: str, limit: int):
             print(f"   Power Rating Diff: {r['power_rating_diff']}")
 
 
-async def test_game_context_features(sport: str, limit: int):
-    """Test game context features only (console output)."""
+async def preview_game_context_features(sport: str, limit: int):
+    """Preview game context features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -450,8 +450,8 @@ async def test_game_context_features(sport: str, limit: int):
             print(f"   Night Game: {r['is_night_game']}")
 
 
-async def test_player_features(sport: str, limit: int):
-    """Test player features only (console output)."""
+async def preview_player_features(sport: str, limit: int):
+    """Preview player features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -476,8 +476,8 @@ async def test_player_features(sport: str, limit: int):
             print(f"   Away Injuries Out: {r['away_injuries_out']}")
 
 
-async def test_odds_features(sport: str, limit: int):
-    """Test odds features only (console output)."""
+async def preview_odds_features(sport: str, limit: int):
+    """Preview odds features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -505,8 +505,8 @@ async def test_odds_features(sport: str, limit: int):
             print(f"   Reverse Line Move: {r['is_rlm']}")
 
 
-async def test_situational_features(sport: str, limit: int):
-    """Test situational features only (console output)."""
+async def preview_situational_features(sport: str, limit: int):
+    """Preview situational features only (console output)."""
     from app.core.database import db_manager
     from app.services.master_data.ml_features import MLFeatureService
     
@@ -533,13 +533,13 @@ async def test_situational_features(sport: str, limit: int):
             print(f"   Away Game #: {r['away_game_num']}")
 
 
-async def test_all_dimensions(sport: str, limit: int):
-    """Test all dimensions for one sport (console output)."""
-    await test_team_features(sport, limit)
-    await test_game_context_features(sport, limit)
-    await test_player_features(sport, limit)
-    await test_odds_features(sport, limit)
-    await test_situational_features(sport, limit)
+async def preview_all_dimensions(sport: str, limit: int):
+    """Preview all dimensions for one sport (console output)."""
+    await preview_team_features(sport, limit)
+    await preview_game_context_features(sport, limit)
+    await preview_player_features(sport, limit)
+    await preview_odds_features(sport, limit)
+    await preview_situational_features(sport, limit)
 
 
 # =============================================================================
@@ -553,16 +553,16 @@ def main():
         epilog="""
 Examples:
   # Export 8 CSV files for one sport
-  python -m scripts.test_ml_features --export --sport NBA --limit 1000
+  python -m scripts.export_ml_features --export --sport NBA --limit 1000
 
   # Export 81 CSV files for all 10 sports (RECOMMENDED)
-  python -m scripts.test_ml_features --export --sport ALL --limit 1000
+  python -m scripts.export_ml_features --export --sport ALL --limit 1000
 
-  # Test team features (console only, no CSV)
-  python -m scripts.test_ml_features --team --sport NBA --limit 5
+  # Preview team features (console only, no CSV)
+  python -m scripts.export_ml_features --team --sport NBA --limit 5
   
-  # Test all dimensions (console only, no CSV)
-  python -m scripts.test_ml_features --all --sport NFL --limit 5
+  # Preview all dimensions (console only, no CSV)
+  python -m scripts.export_ml_features --all --sport NFL --limit 5
         """
     )
     
@@ -576,12 +576,12 @@ Examples:
                         help='Export to CSV files (8 per sport, 81 total for ALL)')
     
     # Test modes (console output only)
-    parser.add_argument('--team', action='store_true', help='Test team features (console)')
-    parser.add_argument('--context', action='store_true', help='Test game context (console)')
-    parser.add_argument('--player', action='store_true', help='Test player features (console)')
-    parser.add_argument('--odds', action='store_true', help='Test odds features (console)')
-    parser.add_argument('--situational', action='store_true', help='Test situational (console)')
-    parser.add_argument('--all', action='store_true', help='Test all dimensions (console)')
+    parser.add_argument('--team', action='store_true', help='Preview team features (preview)')
+    parser.add_argument('--context', action='store_true', help='Preview game context (preview)')
+    parser.add_argument('--player', action='store_true', help='Preview player features (preview)')
+    parser.add_argument('--odds', action='store_true', help='Preview odds features (preview)')
+    parser.add_argument('--situational', action='store_true', help='Preview situational (preview)')
+    parser.add_argument('--all', action='store_true', help='Preview all dimensions (preview)')
     
     args = parser.parse_args()
     
@@ -596,33 +596,33 @@ Examples:
         return
     
     # Test modes - console output only
-    sports_to_test = ALL_SPORTS if sport == 'ALL' else [sport]
+    sports_list = ALL_SPORTS if sport == 'ALL' else [sport]
     
     print(f"\n{'=' * 70}")
-    print(f"ML FEATURE EXTRACTION TEST (Console Only)")
+    print(f"ML FEATURE EXTRACTION PREVIEW (Console Only)")
     print("=" * 70)
-    print(f"Sports: {', '.join(sports_to_test)}")
+    print(f"Sports: {', '.join(sports_list)}")
     print(f"Limit per sport: {args.limit}")
     print(f"\nTip: Use --export to save CSV files")
     
     if args.team:
-        for s in sports_to_test:
-            asyncio.run(test_team_features(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_team_features(s, args.limit))
     elif args.context:
-        for s in sports_to_test:
-            asyncio.run(test_game_context_features(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_game_context_features(s, args.limit))
     elif args.player:
-        for s in sports_to_test:
-            asyncio.run(test_player_features(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_player_features(s, args.limit))
     elif args.odds:
-        for s in sports_to_test:
-            asyncio.run(test_odds_features(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_odds_features(s, args.limit))
     elif args.situational:
-        for s in sports_to_test:
-            asyncio.run(test_situational_features(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_situational_features(s, args.limit))
     elif args.all:
-        for s in sports_to_test:
-            asyncio.run(test_all_dimensions(s, args.limit))
+        for s in sports_list:
+            asyncio.run(preview_all_dimensions(s, args.limit))
     else:
         # Default: show help
         parser.print_help()
@@ -630,9 +630,9 @@ Examples:
         print("QUICK START:")
         print("=" * 70)
         print("\n  # Export all 81 CSV files:")
-        print("  python -m scripts.test_ml_features --export --sport ALL --limit 1000")
+        print("  python -m scripts.export_ml_features --export --sport ALL --limit 1000")
         print("\n  # Export 8 CSV files for NBA only:")
-        print("  python -m scripts.test_ml_features --export --sport NBA --limit 1000")
+        print("  python -m scripts.export_ml_features --export --sport NBA --limit 1000")
 
 
 if __name__ == "__main__":

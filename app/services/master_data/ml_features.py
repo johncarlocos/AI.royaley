@@ -850,6 +850,9 @@ class MLFeatureService:
     
     async def _extract_odds_features(self, fv: MLFeatureVector):
         """Extract odds and market features from master_odds."""
+        # Query all relevant columns from master_odds
+        # Schema: opening_line, closing_line (spread), opening_total, closing_total (total)
+        #         opening_odds_home, closing_odds_home (moneyline)
         result = await self.session.execute(text("""
             SELECT 
                 mo.bet_type,
@@ -857,11 +860,16 @@ class MLFeatureService:
                 mo.opening_line,
                 mo.closing_line,
                 mo.line_movement,
-                mo.opening_price,
-                mo.closing_price,
-                sr.is_sharp
+                mo.opening_odds_home,
+                mo.closing_odds_home,
+                mo.opening_odds_away,
+                mo.closing_odds_away,
+                mo.opening_total,
+                mo.closing_total,
+                mo.opening_over_odds,
+                mo.closing_over_odds,
+                mo.is_sharp
             FROM master_odds mo
-            LEFT JOIN source_registry sr ON mo.sportsbook_key = sr.key
             WHERE mo.master_game_id = :mgid
         """), {"mgid": fv.master_game_id})
         
@@ -874,8 +882,14 @@ class MLFeatureService:
         books_seen = set()
         
         for r in rows:
-            bet_type, book_key, open_line, close_line, movement, open_price, close_price, is_sharp = r
+            (bet_type, book_key, open_line, close_line, movement,
+             open_odds_home, close_odds_home, open_odds_away, close_odds_away,
+             open_total, close_total, open_over_odds, close_over_odds, is_sharp) = r
+            
             books_seen.add(book_key)
+            
+            # Check if this is a sharp book (pinnacle, etc)
+            is_sharp_book = is_sharp or (book_key and 'pinnacle' in book_key.lower())
             
             if bet_type == 'spread':
                 if close_line is not None:
@@ -888,33 +902,40 @@ class MLFeatureService:
                 if movement is not None:
                     fv.spread_movement = movement
                 
-                if is_sharp and fv.pinnacle_spread is None:
+                if is_sharp_book and fv.pinnacle_spread is None:
                     fv.pinnacle_spread = close_line or open_line
             
             elif bet_type == 'moneyline':
-                if close_price is not None:
+                # Use opening_odds_home and closing_odds_home for moneyline
+                if close_odds_home is not None:
                     if fv.moneyline_home_close is None:
-                        fv.moneyline_home_close = close_price
-                if open_price is not None:
+                        fv.moneyline_home_close = close_odds_home
+                    if fv.moneyline_away_close is None and close_odds_away is not None:
+                        fv.moneyline_away_close = close_odds_away
+                if open_odds_home is not None:
                     if fv.moneyline_home_open is None:
-                        fv.moneyline_home_open = open_price
+                        fv.moneyline_home_open = open_odds_home
                 
-                if is_sharp and fv.pinnacle_ml_home is None:
-                    fv.pinnacle_ml_home = close_price or open_price
+                if is_sharp_book and fv.pinnacle_ml_home is None:
+                    fv.pinnacle_ml_home = close_odds_home or open_odds_home
             
             elif bet_type == 'total':
-                if close_line is not None:
-                    totals.append(close_line)
+                # Use opening_total and closing_total for totals
+                actual_open = open_total if open_total is not None else open_line
+                actual_close = close_total if close_total is not None else close_line
                 
-                if fv.total_open is None and open_line is not None:
-                    fv.total_open = open_line
-                if close_line is not None:
-                    fv.total_close = close_line
+                if actual_close is not None:
+                    totals.append(actual_close)
+                
+                if fv.total_open is None and actual_open is not None:
+                    fv.total_open = actual_open
+                if actual_close is not None:
+                    fv.total_close = actual_close
                 if movement is not None:
                     fv.total_movement = movement
                 
-                if is_sharp and fv.pinnacle_total is None:
-                    fv.pinnacle_total = close_line or open_line
+                if is_sharp_book and fv.pinnacle_total is None:
+                    fv.pinnacle_total = actual_close or actual_open
         
         fv.num_books = len(books_seen)
         
@@ -930,6 +951,20 @@ class MLFeatureService:
                 fv.implied_home_prob = round(abs(ml) / (abs(ml) + 100), 4)
             else:
                 fv.implied_home_prob = round(100 / (ml + 100), 4)
+        
+        # No-vig probability
+        if fv.moneyline_home_close and fv.moneyline_away_close:
+            home_ml = fv.moneyline_home_close
+            away_ml = fv.moneyline_away_close
+            
+            # Convert to implied probabilities
+            home_imp = abs(home_ml) / (abs(home_ml) + 100) if home_ml < 0 else 100 / (home_ml + 100)
+            away_imp = abs(away_ml) / (abs(away_ml) + 100) if away_ml < 0 else 100 / (away_ml + 100)
+            
+            # Remove vig
+            total_imp = home_imp + away_imp
+            if total_imp > 0:
+                fv.no_vig_home_prob = round(home_imp / total_imp, 4)
         
         # Reverse line movement detection
         await self._detect_reverse_line_move(fv)

@@ -45,6 +45,7 @@ services:
       - /nvme0n1-disk/royaley/models:/app/models
       - /nvme0n1-disk/royaley/logs:/app/logs
       - /nvme0n1-disk/royaley/data:/app/data
+      - /nvme0n1-disk/royaley/ml_csv:/app/ml_csv  # ML Features CSV Export
       # NVMe 1 - ML workspace (training)
       - /nvme1n1-disk/ml-training:/app/ml-training
       - /nvme1n1-disk/features:/app/features
@@ -109,6 +110,7 @@ services:
       - /nvme0n1-disk/royaley/models:/app/models
       - /nvme0n1-disk/royaley/logs:/app/logs
       - /nvme0n1-disk/royaley/data:/app/data
+      - /nvme0n1-disk/royaley/ml_csv:/app/ml_csv  # ML Features CSV Export
       # NVMe 1 - ML workspace (training) - PRIMARY USE
       - /nvme1n1-disk/ml-training:/app/ml-training
       - /nvme1n1-disk/features:/app/features
@@ -162,6 +164,7 @@ services:
       - /nvme0n1-disk/royaley/models:/app/models
       - /nvme0n1-disk/royaley/logs:/app/logs
       - /nvme0n1-disk/royaley/data:/app/data
+      - /nvme0n1-disk/royaley/ml_csv:/app/ml_csv  # ML Features CSV Export
       # NVMe 1 - ML workspace (training) - PRIMARY USE
       - /nvme1n1-disk/ml-training:/app/ml-training
       - /nvme1n1-disk/features:/app/features
@@ -212,6 +215,7 @@ services:
       - /nvme0n1-disk/royaley/models:/app/models
       - /nvme0n1-disk/royaley/logs:/app/logs
       - /nvme0n1-disk/royaley/data:/app/data
+      - /nvme0n1-disk/royaley/ml_csv:/app/ml_csv  # ML Features CSV Export
       # NVMe 1 - ML workspace
       - /nvme1n1-disk/ml-training:/app/ml-training
       - /nvme1n1-disk/features:/app/features

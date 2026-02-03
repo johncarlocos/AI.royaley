@@ -23,6 +23,7 @@ Services:
 
 from .master_data_service import MasterDataService
 from .feature_extractor import MasterFeatureExtractor, GameFeatureVector
+from .ml_features import MLFeatureService, MLFeatureVector, extract_ml_features, features_to_dataframe
 from .population_service import PopulationService, populate_master_data
 from .mapping_service import MappingService, auto_map_existing_data
 from .player_service import PlayerMappingService, map_all_players
@@ -45,6 +46,8 @@ __all__ = [
     "MasterDataService",
     "MasterFeatureExtractor",
     "GameFeatureVector",
+    "MLFeatureService",
+    "MLFeatureVector",
     "PopulationService",
     "MappingService",
     "PlayerMappingService",
@@ -55,6 +58,8 @@ __all__ = [
     "auto_map_existing_data",
     "map_all_players",
     "consolidate_odds",
+    "extract_ml_features",
+    "features_to_dataframe",
     # Data
     "NFL_TEAMS", "NBA_TEAMS", "MLB_TEAMS", "NHL_TEAMS", "WNBA_TEAMS", "CFL_TEAMS",
     "ALL_SPORT_TEAMS", "TEAM_ALIASES",

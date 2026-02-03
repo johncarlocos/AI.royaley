@@ -244,15 +244,23 @@ class MLFeatureService:
                 is_neutral_site=g.get('is_neutral_site'),
             )
             
-            # Compute targets
-            await self._compute_targets(fv)
+            # Compute basic targets (home_win, total_points, score_margin)
+            self._compute_basic_targets(fv)
             
-            # Extract all 5 dimensions
+            # Extract all 5 dimensions + weather
             await self._extract_team_features(fv)
             await self._extract_game_context_features(fv)
             await self._extract_player_features(fv)
             await self._extract_odds_features(fv)
             await self._extract_situational_features(fv)
+            await self._extract_weather_features(fv)
+            
+            # Compute betting targets AFTER odds extraction (need spread_close, total_close)
+            self._compute_betting_targets(fv)
+            
+            # Extract season from scheduled_at if not set
+            if fv.season is None and fv.scheduled_at:
+                fv.season = self._calculate_season(fv.scheduled_at, sport_code)
             
             features.append(fv)
             
@@ -485,21 +493,56 @@ class MLFeatureService:
     # COMPUTE TARGETS
     # =========================================================================
     
-    async def _compute_targets(self, fv: MLFeatureVector):
-        """Compute target variables from scores."""
+    def _compute_basic_targets(self, fv: MLFeatureVector):
+        """Compute basic target variables from scores (called before odds extraction)."""
         if fv.home_score is not None and fv.away_score is not None:
             fv.home_win = 1 if fv.home_score > fv.away_score else 0
             fv.total_points = fv.home_score + fv.away_score
             fv.score_margin = fv.home_score - fv.away_score
-            
-            # Spread result (need closing spread)
-            if fv.spread_close is not None:
-                home_cover_margin = fv.score_margin + fv.spread_close
-                fv.spread_result = 1 if home_cover_margin > 0 else 0
-            
-            # Over/under result
-            if fv.total_close is not None:
-                fv.over_result = 1 if fv.total_points > fv.total_close else 0
+    
+    def _compute_betting_targets(self, fv: MLFeatureVector):
+        """Compute betting targets AFTER odds extraction (need spread_close, total_close)."""
+        if fv.score_margin is None:
+            return
+        
+        # Spread result: 1 if home covered, 0 if away covered
+        # Home covers if: score_margin > -spread_close (spread is negative for favorites)
+        # Example: Home -3.5, wins by 5 → margin=5, spread=-3.5 → 5 > 3.5 = True = 1 (covered)
+        # Example: Home -3.5, wins by 2 → margin=2, spread=-3.5 → 2 > 3.5 = False = 0 (didn't cover)
+        if fv.spread_close is not None:
+            # spread_close is from home perspective (negative = home favored)
+            home_cover_margin = fv.score_margin + fv.spread_close
+            fv.spread_result = 1 if home_cover_margin > 0 else 0
+        
+        # Over/Under result: 1 if over hit, 0 if under hit
+        if fv.total_points is not None and fv.total_close is not None:
+            fv.over_result = 1 if fv.total_points > fv.total_close else 0
+    
+    def _calculate_season(self, game_date: datetime, sport_code: str) -> int:
+        """Calculate season year from game date based on sport."""
+        year = game_date.year
+        month = game_date.month
+        
+        # Fall/Winter sports (NFL, NBA, NHL, NCAAF, NCAAB, CFL)
+        # Season spans two years, labeled by start year
+        if sport_code in ['NFL', 'NCAAF', 'CFL']:
+            # Football: Aug-Feb, season is the year it started
+            return year if month >= 8 else year - 1
+        elif sport_code in ['NBA', 'NHL', 'NCAAB', 'WNBA']:
+            # Basketball/Hockey: Oct-Jun, season is the year it started
+            return year if month >= 10 else year - 1
+        elif sport_code in ['MLB']:
+            # Baseball: Mar-Oct, season is same year
+            return year
+        elif sport_code in ['ATP', 'WTA']:
+            # Tennis: Jan-Nov, season is same year
+            return year
+        else:
+            return year
+    
+    async def _compute_targets(self, fv: MLFeatureVector):
+        """Legacy method - kept for backward compatibility."""
+        self._compute_basic_targets(fv)
     
     # =========================================================================
     # 1. TEAM FEATURES
@@ -777,7 +820,7 @@ class MLFeatureService:
         self, team_id: str, before_date: datetime, sport_code: str
     ) -> Optional[Dict]:
         """Get star player performance for a team."""
-        # This uses master_player_stats
+        # Try master_player_stats first
         result = await self.session.execute(text("""
             WITH player_avgs AS (
                 SELECT 
@@ -806,13 +849,52 @@ class MLFeatureService:
         })
         
         row = result.fetchone()
-        if not row or row[0] is None:
-            return None
+        if row and row[0] is not None:
+            return {
+                'star_pts_avg': round(row[0], 1) if row[0] else None,
+                'top3_pts_avg': round(row[1], 1) if row[1] else None,
+            }
         
-        return {
-            'star_pts_avg': round(row[0], 1) if row[0] else None,
-            'top3_pts_avg': round(row[1], 1) if row[1] else None,
-        }
+        # Fallback: Try player_stats table if master_player_stats is empty
+        result2 = await self.session.execute(text("""
+            WITH player_avgs AS (
+                SELECT 
+                    ps.player_id,
+                    AVG(ps.points) as avg_pts
+                FROM player_stats ps
+                JOIN games g ON ps.game_id = g.id
+                WHERE ps.team_id IN (
+                    SELECT tm.source_team_id 
+                    FROM team_mappings tm 
+                    WHERE tm.master_team_id = :tid
+                )
+                  AND g.scheduled_at < :before
+                  AND g.scheduled_at > :cutoff
+                  AND g.sport_code = :sport
+                GROUP BY ps.player_id
+                HAVING COUNT(*) >= 3
+                ORDER BY AVG(ps.points) DESC
+                LIMIT 3
+            )
+            SELECT 
+                MAX(avg_pts) as star_pts,
+                AVG(avg_pts) as top3_pts
+            FROM player_avgs
+        """), {
+            "tid": team_id,
+            "before": before_date,
+            "cutoff": before_date - timedelta(days=60),
+            "sport": sport_code,
+        })
+        
+        row2 = result2.fetchone()
+        if row2 and row2[0] is not None:
+            return {
+                'star_pts_avg': round(row2[0], 1) if row2[0] else None,
+                'top3_pts_avg': round(row2[1], 1) if row2[1] else None,
+            }
+        
+        return None
     
     async def _extract_injury_features(self, fv: MLFeatureVector):
         """Extract injury features from injuries table."""
@@ -970,10 +1052,20 @@ class MLFeatureService:
         await self._detect_reverse_line_move(fv)
     
     async def _detect_reverse_line_move(self, fv: MLFeatureVector):
-        """Detect reverse line movement (sharp indicator)."""
-        # Check public betting
+        """Detect reverse line movement and extract public betting data."""
+        # Check public betting - extract all relevant fields
         result = await self.session.execute(text("""
-            SELECT spread_home_bet_pct, spread_home_money_pct
+            SELECT 
+                spread_home_bet_pct,
+                spread_home_money_pct,
+                ml_home_bet_pct,
+                ml_home_money_pct,
+                total_over_bet_pct,
+                total_over_money_pct,
+                is_rlm_spread,
+                is_rlm_total,
+                is_steam_spread,
+                is_sharp_spread
             FROM public_betting
             WHERE master_game_id = :mgid
             LIMIT 1
@@ -983,23 +1075,38 @@ class MLFeatureService:
         if row:
             fv.public_spread_home_pct = row[0]
             fv.public_money_home_pct = row[1]
+            fv.public_ml_home_pct = row[2]
+            # public_money_ml_home_pct not in MLFeatureVector, skip row[3]
+            fv.public_total_over_pct = row[4]
+            # public_money_total_over_pct not in MLFeatureVector, skip row[5]
             
-            # RLM: Line moves opposite to public betting
-            if fv.spread_movement and fv.public_spread_home_pct:
-                # If public is on home (>50%) but line moved toward home (negative movement)
-                # that's reverse line movement
-                public_on_home = fv.public_spread_home_pct > 55
-                line_moved_to_home = fv.spread_movement < -0.5
-                line_moved_to_away = fv.spread_movement > 0.5
-                
-                fv.is_reverse_line_move = (
-                    (public_on_home and line_moved_to_home) or
-                    (not public_on_home and line_moved_to_away)
-                )
+            # Use pre-calculated RLM if available
+            if row[6] is not None:
+                fv.is_reverse_line_move = row[6]
             
-            # Sharp action indicator
-            if fv.public_money_home_pct and fv.public_spread_home_pct:
+            # Steam move from database
+            if row[8] is not None:
+                fv.steam_move = row[8]
+            
+            # Sharp action indicator from database or calculate
+            if row[9] is not None:
+                fv.sharp_action_indicator = 1.0 if row[9] else 0.0
+            elif fv.public_money_home_pct and fv.public_spread_home_pct:
+                # Calculate money vs bets divergence
                 fv.sharp_action_indicator = fv.public_money_home_pct - fv.public_spread_home_pct
+        
+        # Calculate RLM if not already set and we have the data
+        if fv.is_reverse_line_move is None and fv.spread_movement and fv.public_spread_home_pct:
+            # RLM: Line moves opposite to public betting
+            # If public is on home (>55%) but line moved toward home (negative movement), that's RLM
+            public_on_home = fv.public_spread_home_pct > 55
+            line_moved_to_home = fv.spread_movement < -0.5
+            line_moved_to_away = fv.spread_movement > 0.5
+            
+            fv.is_reverse_line_move = (
+                (public_on_home and line_moved_to_home) or
+                (not public_on_home and line_moved_to_away)
+            )
     
     # =========================================================================
     # 5. SITUATIONAL FEATURES
@@ -1189,6 +1296,64 @@ class MLFeatureService:
         
         # Big win = margin >= 15 points (adjust per sport)
         return row[0] >= 15
+    
+    # =========================================================================
+    # 6. WEATHER FEATURES
+    # =========================================================================
+    
+    async def _extract_weather_features(self, fv: MLFeatureVector):
+        """Extract weather features for outdoor sports."""
+        # Indoor sports - set is_dome and skip weather lookup
+        indoor_sports = ['NBA', 'NHL', 'WNBA', 'NCAAB']
+        if fv.sport_code in indoor_sports:
+            fv.is_dome = True
+            return
+        
+        # Try to get weather data from weather_data table
+        result = await self.session.execute(text("""
+            SELECT 
+                wd.temperature,
+                wd.wind_speed,
+                wd.precipitation_chance,
+                wd.humidity,
+                v.is_dome,
+                v.is_outdoor
+            FROM weather_data wd
+            LEFT JOIN venues v ON wd.venue_id = v.id
+            WHERE wd.game_id IN (
+                SELECT gm.source_game_id 
+                FROM game_mappings gm 
+                WHERE gm.master_game_id = :mgid
+            )
+            LIMIT 1
+        """), {"mgid": fv.master_game_id})
+        
+        row = result.fetchone()
+        if row:
+            fv.temperature_f = row[0]
+            fv.wind_speed_mph = row[1]
+            fv.precipitation_pct = row[2]
+            fv.humidity_pct = row[3]
+            if row[4] is not None:
+                fv.is_dome = row[4]
+            elif row[5] is not None:
+                fv.is_dome = not row[5]
+            return
+        
+        # Fallback: Try to get venue info from master_games
+        result2 = await self.session.execute(text("""
+            SELECT v.is_dome, v.is_outdoor
+            FROM master_games mg
+            LEFT JOIN venues v ON mg.venue_id = v.id
+            WHERE mg.id = :mgid
+        """), {"mgid": fv.master_game_id})
+        
+        row2 = result2.fetchone()
+        if row2:
+            if row2[0] is not None:
+                fv.is_dome = row2[0]
+            elif row2[1] is not None:
+                fv.is_dome = not row2[1]
 
 
 # =============================================================================

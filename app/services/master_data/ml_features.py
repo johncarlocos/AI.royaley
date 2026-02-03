@@ -452,6 +452,7 @@ class MLFeatureService:
         
         if completed_only:
             conditions.append("mg.home_score IS NOT NULL")
+            conditions.append("mg.away_score IS NOT NULL")
             conditions.append("mg.status = 'final'")
         if season:
             conditions.append("mg.season = :season")
@@ -623,6 +624,7 @@ class MLFeatureService:
                 WHERE (mg.home_master_team_id = :tid OR mg.away_master_team_id = :tid)
                   AND mg.scheduled_at < :before
                   AND mg.home_score IS NOT NULL
+                  AND mg.away_score IS NOT NULL
                   AND mg.sport_code = :sport
                 ORDER BY mg.scheduled_at DESC
                 LIMIT 20
@@ -683,6 +685,7 @@ class MLFeatureService:
                 OR (mg.home_master_team_id = :away_tid AND mg.away_master_team_id = :home_tid))
               AND mg.scheduled_at < :before
               AND mg.home_score IS NOT NULL
+              AND mg.away_score IS NOT NULL
               AND mg.sport_code = :sport
             LIMIT 5
         """), {
@@ -750,6 +753,7 @@ class MLFeatureService:
             WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
               AND scheduled_at < :game_date
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
             ORDER BY scheduled_at DESC
             LIMIT 1
@@ -774,6 +778,7 @@ class MLFeatureService:
               AND scheduled_at >= :start_date
               AND scheduled_at < :game_date
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
         """), {
             "tid": team_id,
@@ -1130,6 +1135,8 @@ class MLFeatureService:
             WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
               AND scheduled_at < :before
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
             ORDER BY scheduled_at DESC
             LIMIT 10
@@ -1172,6 +1179,7 @@ class MLFeatureService:
               AND scheduled_at < :game_date
               AND scheduled_at >= :season_start
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
         """), {
             "tid": team_id,
@@ -1198,6 +1206,8 @@ class MLFeatureService:
                 OR (home_master_team_id = :away AND away_master_team_id = :home))
               AND scheduled_at < :before
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
             ORDER BY scheduled_at DESC
             LIMIT 1
@@ -1213,6 +1223,10 @@ class MLFeatureService:
             return None
         
         last_home_id, last_away_id, last_home_score, last_away_score = row
+        
+        # Safety check for None scores
+        if last_home_score is None or last_away_score is None:
+            return None
         
         # Who lost last time?
         last_home_won = last_home_score > last_away_score
@@ -1247,6 +1261,7 @@ class MLFeatureService:
             WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
               AND scheduled_at < :before
               AND home_score IS NOT NULL
+              AND away_score IS NOT NULL
               AND sport_code = :sport
             ORDER BY scheduled_at DESC
             LIMIT 1

@@ -3,16 +3,25 @@
 ROYALEY - ML Feature Extraction Test Script
 ============================================
 
-Test each feature dimension one by one:
-    python -m scripts.test_ml_features --team
-    python -m scripts.test_ml_features --context
-    python -m scripts.test_ml_features --player
-    python -m scripts.test_ml_features --odds
-    python -m scripts.test_ml_features --situational
-    python -m scripts.test_ml_features --all
-
-Or test full extraction:
+Test each feature dimension for ONE sport:
+    python -m scripts.test_ml_features --team --sport NBA --limit 5
+    python -m scripts.test_ml_features --context --sport NFL --limit 5
+    python -m scripts.test_ml_features --player --sport MLB --limit 5
+    python -m scripts.test_ml_features --odds --sport NHL --limit 5
+    python -m scripts.test_ml_features --situational --sport WNBA --limit 5
+    python -m scripts.test_ml_features --all --sport NBA --limit 5
     python -m scripts.test_ml_features --full --sport NBA --limit 10
+
+Test ALL 10 sports at once (use --sport ALL):
+    python -m scripts.test_ml_features --team --sport ALL --limit 3
+    python -m scripts.test_ml_features --context --sport ALL --limit 3
+    python -m scripts.test_ml_features --player --sport ALL --limit 3
+    python -m scripts.test_ml_features --odds --sport ALL --limit 3
+    python -m scripts.test_ml_features --situational --sport ALL --limit 3
+    python -m scripts.test_ml_features --all --sport ALL --limit 3
+    python -m scripts.test_ml_features --full --sport ALL --limit 5
+
+Supported sports: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA
 """
 
 import argparse
@@ -28,6 +37,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# All 10 sports
+ALL_SPORTS = ['NFL', 'NBA', 'MLB', 'NHL', 'WNBA', 'CFL', 'NCAAF', 'NCAAB', 'ATP', 'WTA']
+
 
 async def test_team_features(sport: str, limit: int):
     """Test team features only."""
@@ -39,9 +51,14 @@ async def test_team_features(sport: str, limit: int):
         svc = MLFeatureService(session)
         results = await svc.test_team_features(sport, limit=limit)
         
-        print("\n" + "=" * 70)
-        print("TEAM FEATURES TEST")
+        print(f"\n{'=' * 70}")
+        print(f"TEAM FEATURES TEST - {sport}")
         print("=" * 70)
+        
+        if not results:
+            print(f"  ⚠️ No games found for {sport}")
+            return
+            
         for r in results:
             print(f"\n📊 {r['game']} ({r['date']})")
             print(f"   Home Win% L10: {r['home_win_pct_last10']}")
@@ -63,9 +80,14 @@ async def test_game_context_features(sport: str, limit: int):
         svc = MLFeatureService(session)
         results = await svc.test_game_context_features(sport, limit=limit)
         
-        print("\n" + "=" * 70)
-        print("GAME CONTEXT FEATURES TEST")
+        print(f"\n{'=' * 70}")
+        print(f"GAME CONTEXT FEATURES TEST - {sport}")
         print("=" * 70)
+        
+        if not results:
+            print(f"  ⚠️ No games found for {sport}")
+            return
+            
         for r in results:
             print(f"\n📅 {r['game']} ({r['date']})")
             print(f"   Home Rest Days: {r['home_rest_days']}")
@@ -87,9 +109,14 @@ async def test_player_features(sport: str, limit: int):
         svc = MLFeatureService(session)
         results = await svc.test_player_features(sport, limit=limit)
         
-        print("\n" + "=" * 70)
-        print("PLAYER FEATURES TEST")
+        print(f"\n{'=' * 70}")
+        print(f"PLAYER FEATURES TEST - {sport}")
         print("=" * 70)
+        
+        if not results:
+            print(f"  ⚠️ No games found for {sport}")
+            return
+            
         for r in results:
             print(f"\n👤 {r['game']} ({r['date']})")
             print(f"   Home Star Pts Avg: {r['home_star_pts_avg']}")
@@ -108,9 +135,14 @@ async def test_odds_features(sport: str, limit: int):
         svc = MLFeatureService(session)
         results = await svc.test_odds_features(sport, limit=limit)
         
-        print("\n" + "=" * 70)
-        print("ODDS/MARKET FEATURES TEST")
+        print(f"\n{'=' * 70}")
+        print(f"ODDS/MARKET FEATURES TEST - {sport}")
         print("=" * 70)
+        
+        if not results:
+            print(f"  ⚠️ No games found for {sport}")
+            return
+            
         for r in results:
             print(f"\n💰 {r['game']} ({r['date']})")
             print(f"   Spread Open: {r['spread_open']}")
@@ -132,9 +164,14 @@ async def test_situational_features(sport: str, limit: int):
         svc = MLFeatureService(session)
         results = await svc.test_situational_features(sport, limit=limit)
         
-        print("\n" + "=" * 70)
-        print("SITUATIONAL FEATURES TEST")
+        print(f"\n{'=' * 70}")
+        print(f"SITUATIONAL FEATURES TEST - {sport}")
         print("=" * 70)
+        
+        if not results:
+            print(f"  ⚠️ No games found for {sport}")
+            return
+            
         for r in results:
             print(f"\n🎯 {r['game']} ({r['date']})")
             print(f"   Home Streak: {r['home_streak']}")
@@ -156,6 +193,10 @@ async def test_full_extraction(sport: str, limit: int):
         
         print(f"\n🚀 Extracting ALL features for {sport} (limit={limit})...")
         features = await svc.extract_all_features(sport, limit=limit)
+        
+        if not features:
+            print(f"  ⚠️ No games found for {sport}")
+            return None
         
         print(f"\n✅ Extracted {len(features)} feature vectors")
         
@@ -205,10 +246,12 @@ async def test_full_extraction(sport: str, limit: int):
             if valid_cols:
                 coverage = df[valid_cols].notna().mean().mean() * 100
                 print(f"   {group}: {coverage:.1f}%")
+        
+        return df
 
 
 async def test_all_dimensions(sport: str, limit: int):
-    """Run all individual tests."""
+    """Run all individual tests for one sport."""
     await test_team_features(sport, limit)
     await test_game_context_features(sport, limit)
     await test_player_features(sport, limit)
@@ -216,10 +259,98 @@ async def test_all_dimensions(sport: str, limit: int):
     await test_situational_features(sport, limit)
 
 
+async def test_all_sports_all_dimensions(limit: int):
+    """Test all dimensions for ALL 10 sports."""
+    from app.core.database import db_manager
+    
+    await db_manager.initialize()
+    
+    print("\n" + "=" * 70)
+    print("🏆 TESTING ALL 10 SPORTS - ALL DIMENSIONS")
+    print("=" * 70)
+    print(f"Sports: {', '.join(ALL_SPORTS)}")
+    print(f"Limit per sport: {limit}")
+    
+    for sport in ALL_SPORTS:
+        print(f"\n\n{'#' * 70}")
+        print(f"# {sport}")
+        print(f"{'#' * 70}")
+        await test_all_dimensions(sport, limit)
+    
+    print("\n\n" + "=" * 70)
+    print("✅ ALL 10 SPORTS TESTED!")
+    print("=" * 70)
+
+
+async def test_all_sports_full_extraction(limit: int):
+    """Full feature extraction for ALL 10 sports."""
+    from app.core.database import db_manager
+    from app.services.master_data.ml_features import features_to_dataframe
+    import pandas as pd
+    
+    await db_manager.initialize()
+    
+    print("\n" + "=" * 70)
+    print("🏆 FULL EXTRACTION - ALL 10 SPORTS")
+    print("=" * 70)
+    print(f"Sports: {', '.join(ALL_SPORTS)}")
+    print(f"Limit per sport: {limit}")
+    
+    all_dfs = []
+    summary = []
+    
+    for sport in ALL_SPORTS:
+        print(f"\n\n{'#' * 70}")
+        print(f"# {sport}")
+        print(f"{'#' * 70}")
+        
+        df = await test_full_extraction(sport, limit)
+        
+        if df is not None and len(df) > 0:
+            all_dfs.append(df)
+            
+            # Calculate coverage
+            feature_cols = [c for c in df.columns if c not in ['master_game_id', 'sport_code', 'scheduled_at', 'season', 'home_team_id', 'away_team_id', 'home_team_name', 'away_team_name']]
+            coverage = df[feature_cols].notna().mean().mean() * 100
+            
+            summary.append({
+                'sport': sport,
+                'games': len(df),
+                'features': len(df.columns),
+                'coverage': f"{coverage:.1f}%"
+            })
+        else:
+            summary.append({
+                'sport': sport,
+                'games': 0,
+                'features': 0,
+                'coverage': "N/A"
+            })
+    
+    # Print summary
+    print("\n\n" + "=" * 70)
+    print("📊 SUMMARY - ALL 10 SPORTS")
+    print("=" * 70)
+    print(f"\n{'Sport':<10} {'Games':<10} {'Features':<12} {'Coverage':<10}")
+    print("-" * 42)
+    for s in summary:
+        print(f"{s['sport']:<10} {s['games']:<10} {s['features']:<12} {s['coverage']:<10}")
+    
+    # Combined stats
+    if all_dfs:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        print(f"\n📈 COMBINED TOTAL:")
+        print(f"   Total games: {len(combined_df)}")
+        print(f"   Total features: {len(combined_df.columns)}")
+        print(f"   Sports with data: {len([s for s in summary if s['games'] > 0])}/10")
+    
+    print("\n✅ ALL 10 SPORTS EXTRACTION COMPLETE!")
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Test ML Feature Extraction')
-    parser.add_argument('--sport', type=str, default='NBA', help='Sport code (NBA, NFL, MLB, NHL)')
-    parser.add_argument('--limit', type=int, default=5, help='Number of games to test')
+    parser = argparse.ArgumentParser(description='Test ML Feature Extraction for ALL 10 Sports')
+    parser.add_argument('--sport', type=str, default='ALL', help='Sport code: NFL, NBA, MLB, NHL, WNBA, CFL, NCAAF, NCAAB, ATP, WTA, or ALL for all 10')
+    parser.add_argument('--limit', type=int, default=3, help='Number of games to test per sport (default: 3)')
     
     # Test dimensions
     parser.add_argument('--team', action='store_true', help='Test team features')
@@ -236,24 +367,42 @@ def main():
     if not any([args.team, args.context, args.player, args.odds, args.situational, args.all, args.full]):
         args.all = True
     
-    print(f"\n{'=' * 70}")
-    print(f"ML FEATURE EXTRACTION TEST - {args.sport}")
-    print(f"{'=' * 70}")
+    # Determine sports to test
+    if args.sport.upper() == 'ALL':
+        sports_to_test = ALL_SPORTS
+    else:
+        sports_to_test = [args.sport.upper()]
     
+    print(f"\n{'=' * 70}")
+    print(f"ML FEATURE EXTRACTION TEST")
+    print(f"{'=' * 70}")
+    print(f"Sports: {', '.join(sports_to_test)}")
+    print(f"Limit per sport: {args.limit}")
+    
+    # Run tests for each sport
     if args.team:
-        asyncio.run(test_team_features(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_team_features(sport, args.limit))
     elif args.context:
-        asyncio.run(test_game_context_features(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_game_context_features(sport, args.limit))
     elif args.player:
-        asyncio.run(test_player_features(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_player_features(sport, args.limit))
     elif args.odds:
-        asyncio.run(test_odds_features(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_odds_features(sport, args.limit))
     elif args.situational:
-        asyncio.run(test_situational_features(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_situational_features(sport, args.limit))
     elif args.all:
-        asyncio.run(test_all_dimensions(args.sport, args.limit))
+        for sport in sports_to_test:
+            asyncio.run(test_all_dimensions(sport, args.limit))
     elif args.full:
-        asyncio.run(test_full_extraction(args.sport, args.limit))
+        if len(sports_to_test) > 1:
+            asyncio.run(test_all_sports_full_extraction(args.limit))
+        else:
+            asyncio.run(test_full_extraction(sports_to_test[0], args.limit))
     
     print(f"\n✅ Test complete!")
 

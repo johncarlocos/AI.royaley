@@ -571,21 +571,48 @@ class MLFeatureService:
         where_clause = " AND ".join(conditions)
         limit_clause = f"LIMIT {limit}" if limit else ""
         
-        result = await self.session.execute(text(f"""
-            SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
-                   mg.home_score, mg.away_score, mg.status,
-                   mg.home_master_team_id as home_team_id,
-                   mg.away_master_team_id as away_team_id,
-                   mg.is_playoff, mg.is_neutral_site,
-                   ht.canonical_name as home_name,
-                   at_.canonical_name as away_name
-            FROM master_games mg
-            LEFT JOIN master_teams ht ON mg.home_master_team_id = ht.id
-            LEFT JOIN master_teams at_ ON mg.away_master_team_id = at_.id
-            WHERE {where_clause}
-            ORDER BY mg.scheduled_at DESC
-            {limit_clause}
-        """), params)
+        # Tennis (ATP, WTA) uses player IDs instead of team IDs
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            # For tennis: get player names from source Game/Team tables via game_mappings
+            # Tennis stores players as "teams" in the source system
+            result = await self.session.execute(text(f"""
+                SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
+                       mg.home_score, mg.away_score, mg.status,
+                       COALESCE(mg.home_master_player_id::text, gm.source_game_db_id::text) as home_team_id,
+                       COALESCE(mg.away_master_player_id::text, gm.source_game_db_id::text) as away_team_id,
+                       mg.is_playoff, mg.is_neutral_site,
+                       COALESCE(hp.canonical_name, ht.name, 'Player 1') as home_name,
+                       COALESCE(ap.canonical_name, at_.name, 'Player 2') as away_name
+                FROM master_games mg
+                LEFT JOIN master_players hp ON mg.home_master_player_id = hp.id
+                LEFT JOIN master_players ap ON mg.away_master_player_id = ap.id
+                LEFT JOIN game_mappings gm ON mg.id = gm.master_game_id
+                LEFT JOIN games g ON gm.source_game_db_id = g.id
+                LEFT JOIN teams ht ON g.home_team_id = ht.id
+                LEFT JOIN teams at_ ON g.away_team_id = at_.id
+                WHERE {where_clause}
+                ORDER BY mg.scheduled_at DESC
+                {limit_clause}
+            """), params)
+        else:
+            # For team sports: use team tables
+            result = await self.session.execute(text(f"""
+                SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
+                       mg.home_score, mg.away_score, mg.status,
+                       mg.home_master_team_id as home_team_id,
+                       mg.away_master_team_id as away_team_id,
+                       mg.is_playoff, mg.is_neutral_site,
+                       ht.canonical_name as home_name,
+                       at_.canonical_name as away_name
+                FROM master_games mg
+                LEFT JOIN master_teams ht ON mg.home_master_team_id = ht.id
+                LEFT JOIN master_teams at_ ON mg.away_master_team_id = at_.id
+                WHERE {where_clause}
+                ORDER BY mg.scheduled_at DESC
+                {limit_clause}
+            """), params)
         
         rows = result.fetchall()
         columns = ['id', 'sport_code', 'scheduled_at', 'season', 'home_score', 
@@ -708,49 +735,98 @@ class MLFeatureService:
     async def _get_team_rolling_stats(
         self, team_id: str, before_date: datetime, sport_code: str
     ) -> Optional[Dict]:
-        """Get rolling stats for a team before a specific date."""
-        result = await self.session.execute(text("""
-            WITH team_games AS (
+        """Get rolling stats for a team/player before a specific date."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            # For tennis: query via source games table using team IDs (players stored as teams)
+            result = await self.session.execute(text("""
+                WITH player_games AS (
+                    SELECT 
+                        g.id,
+                        g.scheduled_at,
+                        g.home_score,
+                        g.away_score,
+                        CASE WHEN g.home_team_id = :tid::uuid THEN 'home' ELSE 'away' END as side,
+                        CASE WHEN g.home_team_id = :tid::uuid 
+                             THEN g.home_score ELSE g.away_score END as team_pts,
+                        CASE WHEN g.home_team_id = :tid::uuid 
+                             THEN g.away_score ELSE g.home_score END as opp_pts,
+                        CASE WHEN (g.home_team_id = :tid::uuid AND g.home_score > g.away_score)
+                               OR (g.away_team_id = :tid::uuid AND g.away_score > g.home_score)
+                             THEN 1 ELSE 0 END as win
+                    FROM games g
+                    JOIN sports s ON g.sport_id = s.id
+                    WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                      AND g.scheduled_at < :before
+                      AND g.home_score IS NOT NULL
+                      AND g.away_score IS NOT NULL
+                      AND s.code = :sport
+                    ORDER BY g.scheduled_at DESC
+                    LIMIT 20
+                )
                 SELECT 
-                    mg.id,
-                    mg.scheduled_at,
-                    mg.home_score,
-                    mg.away_score,
-                    CASE WHEN mg.home_master_team_id = :tid THEN 'home' ELSE 'away' END as side,
-                    CASE WHEN mg.home_master_team_id = :tid 
-                         THEN mg.home_score ELSE mg.away_score END as team_pts,
-                    CASE WHEN mg.home_master_team_id = :tid 
-                         THEN mg.away_score ELSE mg.home_score END as opp_pts,
-                    CASE WHEN (mg.home_master_team_id = :tid AND mg.home_score > mg.away_score)
-                           OR (mg.away_master_team_id = :tid AND mg.away_score > mg.home_score)
-                         THEN 1 ELSE 0 END as win
-                FROM master_games mg
-                WHERE (mg.home_master_team_id = :tid OR mg.away_master_team_id = :tid)
-                  AND mg.scheduled_at < :before
-                  AND mg.home_score IS NOT NULL
-                  AND mg.away_score IS NOT NULL
-                  AND mg.sport_code = :sport
-                ORDER BY mg.scheduled_at DESC
-                LIMIT 20
-            )
-            SELECT 
-                SUM(CASE WHEN rn <= 5 THEN win ELSE 0 END) as wins_last5,
-                SUM(CASE WHEN rn <= 10 THEN win ELSE 0 END) as wins_last10,
-                AVG(CASE WHEN rn <= 10 THEN win::float ELSE NULL END) as win_pct_last10,
-                AVG(CASE WHEN rn <= 10 THEN team_pts::float ELSE NULL END) as avg_pts_last10,
-                AVG(CASE WHEN rn <= 10 THEN opp_pts::float ELSE NULL END) as avg_pts_allowed_last10,
-                AVG(CASE WHEN rn <= 10 THEN (team_pts - opp_pts)::float ELSE NULL END) as avg_margin_last10,
-                AVG(CASE WHEN rn <= 10 AND side = 'home' THEN win::float ELSE NULL END) as home_win_pct,
-                AVG(CASE WHEN rn <= 10 AND side = 'away' THEN win::float ELSE NULL END) as away_win_pct
-            FROM (
-                SELECT *, ROW_NUMBER() OVER (ORDER BY scheduled_at DESC) as rn
-                FROM team_games
-            ) t
-        """), {
-            "tid": team_id,
-            "before": before_date,
-            "sport": sport_code,
-        })
+                    SUM(CASE WHEN rn <= 5 THEN win ELSE 0 END) as wins_last5,
+                    SUM(CASE WHEN rn <= 10 THEN win ELSE 0 END) as wins_last10,
+                    AVG(CASE WHEN rn <= 10 THEN win::float ELSE NULL END) as win_pct_last10,
+                    AVG(CASE WHEN rn <= 10 THEN team_pts::float ELSE NULL END) as avg_pts_last10,
+                    AVG(CASE WHEN rn <= 10 THEN opp_pts::float ELSE NULL END) as avg_pts_allowed_last10,
+                    AVG(CASE WHEN rn <= 10 THEN (team_pts - opp_pts)::float ELSE NULL END) as avg_margin_last10,
+                    AVG(CASE WHEN rn <= 10 AND side = 'home' THEN win::float ELSE NULL END) as home_win_pct,
+                    AVG(CASE WHEN rn <= 10 AND side = 'away' THEN win::float ELSE NULL END) as away_win_pct
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (ORDER BY scheduled_at DESC) as rn
+                    FROM player_games
+                ) t
+            """), {
+                "tid": team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
+        else:
+            # For team sports: use master_games
+            result = await self.session.execute(text("""
+                WITH team_games AS (
+                    SELECT 
+                        mg.id,
+                        mg.scheduled_at,
+                        mg.home_score,
+                        mg.away_score,
+                        CASE WHEN mg.home_master_team_id = :tid THEN 'home' ELSE 'away' END as side,
+                        CASE WHEN mg.home_master_team_id = :tid 
+                             THEN mg.home_score ELSE mg.away_score END as team_pts,
+                        CASE WHEN mg.home_master_team_id = :tid 
+                             THEN mg.away_score ELSE mg.home_score END as opp_pts,
+                        CASE WHEN (mg.home_master_team_id = :tid AND mg.home_score > mg.away_score)
+                               OR (mg.away_master_team_id = :tid AND mg.away_score > mg.home_score)
+                             THEN 1 ELSE 0 END as win
+                    FROM master_games mg
+                    WHERE (mg.home_master_team_id = :tid OR mg.away_master_team_id = :tid)
+                      AND mg.scheduled_at < :before
+                      AND mg.home_score IS NOT NULL
+                      AND mg.away_score IS NOT NULL
+                      AND mg.sport_code = :sport
+                    ORDER BY mg.scheduled_at DESC
+                    LIMIT 20
+                )
+                SELECT 
+                    SUM(CASE WHEN rn <= 5 THEN win ELSE 0 END) as wins_last5,
+                    SUM(CASE WHEN rn <= 10 THEN win ELSE 0 END) as wins_last10,
+                    AVG(CASE WHEN rn <= 10 THEN win::float ELSE NULL END) as win_pct_last10,
+                    AVG(CASE WHEN rn <= 10 THEN team_pts::float ELSE NULL END) as avg_pts_last10,
+                    AVG(CASE WHEN rn <= 10 THEN opp_pts::float ELSE NULL END) as avg_pts_allowed_last10,
+                    AVG(CASE WHEN rn <= 10 THEN (team_pts - opp_pts)::float ELSE NULL END) as avg_margin_last10,
+                    AVG(CASE WHEN rn <= 10 AND side = 'home' THEN win::float ELSE NULL END) as home_win_pct,
+                    AVG(CASE WHEN rn <= 10 AND side = 'away' THEN win::float ELSE NULL END) as away_win_pct
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (ORDER BY scheduled_at DESC) as rn
+                    FROM team_games
+                ) t
+            """), {
+                "tid": team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
         
         row = result.fetchone()
         if not row:
@@ -771,33 +847,65 @@ class MLFeatureService:
         self, home_team_id: str, away_team_id: str, 
         before_date: datetime, sport_code: str
     ) -> Optional[Dict]:
-        """Get head-to-head record between two teams."""
-        result = await self.session.execute(text("""
-            SELECT 
-                SUM(CASE WHEN mg.home_master_team_id = :home_tid 
-                         AND mg.home_score > mg.away_score THEN 1
-                         WHEN mg.away_master_team_id = :home_tid 
-                         AND mg.away_score > mg.home_score THEN 1
-                         ELSE 0 END) as home_team_wins,
-                AVG(CASE WHEN mg.home_master_team_id = :home_tid 
-                         THEN mg.home_score - mg.away_score
-                         ELSE mg.away_score - mg.home_score END) as home_avg_margin,
-                AVG(mg.home_score + mg.away_score) as total_avg,
-                COUNT(*) as games
-            FROM master_games mg
-            WHERE ((mg.home_master_team_id = :home_tid AND mg.away_master_team_id = :away_tid)
-                OR (mg.home_master_team_id = :away_tid AND mg.away_master_team_id = :home_tid))
-              AND mg.scheduled_at < :before
-              AND mg.home_score IS NOT NULL
-              AND mg.away_score IS NOT NULL
-              AND mg.sport_code = :sport
-            LIMIT 5
-        """), {
-            "home_tid": home_team_id,
-            "away_tid": away_team_id,
-            "before": before_date,
-            "sport": sport_code,
-        })
+        """Get head-to-head record between two teams/players."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            # For tennis: use source games table
+            result = await self.session.execute(text("""
+                SELECT 
+                    SUM(CASE WHEN g.home_team_id = :home_tid::uuid 
+                             AND g.home_score > g.away_score THEN 1
+                             WHEN g.away_team_id = :home_tid::uuid 
+                             AND g.away_score > g.home_score THEN 1
+                             ELSE 0 END) as home_team_wins,
+                    AVG(CASE WHEN g.home_team_id = :home_tid::uuid 
+                             THEN g.home_score - g.away_score
+                             ELSE g.away_score - g.home_score END) as home_avg_margin,
+                    AVG(g.home_score + g.away_score) as total_avg,
+                    COUNT(*) as games
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE ((g.home_team_id = :home_tid::uuid AND g.away_team_id = :away_tid::uuid)
+                    OR (g.home_team_id = :away_tid::uuid AND g.away_team_id = :home_tid::uuid))
+                  AND g.scheduled_at < :before
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+                LIMIT 5
+            """), {
+                "home_tid": home_team_id,
+                "away_tid": away_team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
+        else:
+            result = await self.session.execute(text("""
+                SELECT 
+                    SUM(CASE WHEN mg.home_master_team_id = :home_tid 
+                             AND mg.home_score > mg.away_score THEN 1
+                             WHEN mg.away_master_team_id = :home_tid 
+                             AND mg.away_score > mg.home_score THEN 1
+                             ELSE 0 END) as home_team_wins,
+                    AVG(CASE WHEN mg.home_master_team_id = :home_tid 
+                             THEN mg.home_score - mg.away_score
+                             ELSE mg.away_score - mg.home_score END) as home_avg_margin,
+                    AVG(mg.home_score + mg.away_score) as total_avg,
+                    COUNT(*) as games
+                FROM master_games mg
+                WHERE ((mg.home_master_team_id = :home_tid AND mg.away_master_team_id = :away_tid)
+                    OR (mg.home_master_team_id = :away_tid AND mg.away_master_team_id = :home_tid))
+                  AND mg.scheduled_at < :before
+                  AND mg.home_score IS NOT NULL
+                  AND mg.away_score IS NOT NULL
+                  AND mg.sport_code = :sport
+                LIMIT 5
+            """), {
+                "home_tid": home_team_id,
+                "away_tid": away_team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
         
         row = result.fetchone()
         if not row or row[3] == 0:
@@ -849,23 +957,45 @@ class MLFeatureService:
     async def _get_rest_days(
         self, team_id: str, game_date: datetime, sport_code: str
     ) -> Optional[Dict]:
-        """Calculate rest days and schedule density for a team."""
-        # Get last game
-        result = await self.session.execute(text("""
-            SELECT scheduled_at
-            FROM master_games
-            WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
-              AND scheduled_at < :game_date
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-            ORDER BY scheduled_at DESC
-            LIMIT 1
-        """), {
-            "tid": team_id,
-            "game_date": game_date,
-            "sport": sport_code,
-        })
+        """Calculate rest days and schedule density for a team/player."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            # For tennis: use source games table
+            result = await self.session.execute(text("""
+                SELECT g.scheduled_at
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                  AND g.scheduled_at < :game_date
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+                ORDER BY g.scheduled_at DESC
+                LIMIT 1
+            """), {
+                "tid": team_id,
+                "game_date": game_date,
+                "sport": sport_code,
+            })
+        else:
+            # Get last game from master_games
+            result = await self.session.execute(text("""
+                SELECT scheduled_at
+                FROM master_games
+                WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
+                  AND scheduled_at < :game_date
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+                ORDER BY scheduled_at DESC
+                LIMIT 1
+            """), {
+                "tid": team_id,
+                "game_date": game_date,
+                "sport": sport_code,
+            })
+        
         last_game = result.fetchone()
         
         if not last_game:
@@ -875,21 +1005,40 @@ class MLFeatureService:
         is_b2b = rest_days <= 1
         
         # Check for 3 games in 4 nights
-        result2 = await self.session.execute(text("""
-            SELECT COUNT(*)
-            FROM master_games
-            WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
-              AND scheduled_at >= :start_date
-              AND scheduled_at < :game_date
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-        """), {
-            "tid": team_id,
-            "start_date": game_date - timedelta(days=4),
-            "game_date": game_date,
-            "sport": sport_code,
-        })
+        if is_tennis:
+            result2 = await self.session.execute(text("""
+                SELECT COUNT(*)
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                  AND g.scheduled_at >= :start_date
+                  AND g.scheduled_at < :game_date
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+            """), {
+                "tid": team_id,
+                "start_date": game_date - timedelta(days=4),
+                "game_date": game_date,
+                "sport": sport_code,
+            })
+        else:
+            result2 = await self.session.execute(text("""
+                SELECT COUNT(*)
+                FROM master_games
+                WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
+                  AND scheduled_at >= :start_date
+                  AND scheduled_at < :game_date
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+            """), {
+                "tid": team_id,
+                "start_date": game_date - timedelta(days=4),
+                "game_date": game_date,
+                "sport": sport_code,
+            })
+        
         games_in_4 = result2.scalar()
         is_3_in_4 = games_in_4 >= 2  # This game would be 3rd
         
@@ -1229,26 +1378,50 @@ class MLFeatureService:
         self, team_id: str, before_date: datetime, sport_code: str
     ) -> Optional[int]:
         """Get current win/loss streak (positive=wins, negative=losses)."""
-        result = await self.session.execute(text("""
-            SELECT 
-                CASE WHEN home_master_team_id = :tid 
-                     THEN CASE WHEN home_score > away_score THEN 1 ELSE -1 END
-                     ELSE CASE WHEN away_score > home_score THEN 1 ELSE -1 END
-                END as result
-            FROM master_games
-            WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
-              AND scheduled_at < :before
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-            ORDER BY scheduled_at DESC
-            LIMIT 10
-        """), {
-            "tid": team_id,
-            "before": before_date,
-            "sport": sport_code,
-        })
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            result = await self.session.execute(text("""
+                SELECT 
+                    CASE WHEN g.home_team_id = :tid::uuid 
+                         THEN CASE WHEN g.home_score > g.away_score THEN 1 ELSE -1 END
+                         ELSE CASE WHEN g.away_score > g.home_score THEN 1 ELSE -1 END
+                    END as result
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                  AND g.scheduled_at < :before
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+                ORDER BY g.scheduled_at DESC
+                LIMIT 10
+            """), {
+                "tid": team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
+        else:
+            result = await self.session.execute(text("""
+                SELECT 
+                    CASE WHEN home_master_team_id = :tid 
+                         THEN CASE WHEN home_score > away_score THEN 1 ELSE -1 END
+                         ELSE CASE WHEN away_score > home_score THEN 1 ELSE -1 END
+                    END as result
+                FROM master_games
+                WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
+                  AND scheduled_at < :before
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+                ORDER BY scheduled_at DESC
+                LIMIT 10
+            """), {
+                "tid": team_id,
+                "before": before_date,
+                "sport": sport_code,
+            })
         
         rows = result.fetchall()
         if not rows:
@@ -1268,7 +1441,9 @@ class MLFeatureService:
     async def _get_season_game_num(
         self, team_id: str, game_date: datetime, sport_code: str
     ) -> Optional[int]:
-        """Get team's game number in the season."""
+        """Get team's/player's game number in the season."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
         # Approximate season start
         season_start = datetime(game_date.year, 1, 1)
         if game_date.month >= 9:  # Fall sports
@@ -1276,21 +1451,39 @@ class MLFeatureService:
         elif game_date.month <= 6:  # Continuing from prior year
             season_start = datetime(game_date.year - 1, 9, 1)
         
-        result = await self.session.execute(text("""
-            SELECT COUNT(*) + 1
-            FROM master_games
-            WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
-              AND scheduled_at < :game_date
-              AND scheduled_at >= :season_start
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-        """), {
-            "tid": team_id,
-            "game_date": game_date,
-            "season_start": season_start,
-            "sport": sport_code,
-        })
+        if is_tennis:
+            result = await self.session.execute(text("""
+                SELECT COUNT(*) + 1
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                  AND g.scheduled_at < :game_date
+                  AND g.scheduled_at >= :season_start
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+            """), {
+                "tid": team_id,
+                "game_date": game_date,
+                "season_start": season_start,
+                "sport": sport_code,
+            })
+        else:
+            result = await self.session.execute(text("""
+                SELECT COUNT(*) + 1
+                FROM master_games
+                WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
+                  AND scheduled_at < :game_date
+                  AND scheduled_at >= :season_start
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+            """), {
+                "tid": team_id,
+                "game_date": game_date,
+                "season_start": season_start,
+                "sport": sport_code,
+            })
         
         return result.scalar()
     
@@ -1298,29 +1491,55 @@ class MLFeatureService:
         self, home_team_id: str, away_team_id: str,
         game_date: datetime, sport_code: str
     ) -> Optional[Dict]:
-        """Check if either team lost to the other in their last meeting."""
-        result = await self.session.execute(text("""
-            SELECT 
-                home_master_team_id,
-                away_master_team_id,
-                home_score,
-                away_score
-            FROM master_games
-            WHERE ((home_master_team_id = :home AND away_master_team_id = :away)
-                OR (home_master_team_id = :away AND away_master_team_id = :home))
-              AND scheduled_at < :before
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-            ORDER BY scheduled_at DESC
-            LIMIT 1
-        """), {
-            "home": home_team_id,
-            "away": away_team_id,
-            "before": game_date,
-            "sport": sport_code,
-        })
+        """Check if either team/player lost to the other in their last meeting."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            result = await self.session.execute(text("""
+                SELECT 
+                    g.home_team_id,
+                    g.away_team_id,
+                    g.home_score,
+                    g.away_score
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE ((g.home_team_id = :home::uuid AND g.away_team_id = :away::uuid)
+                    OR (g.home_team_id = :away::uuid AND g.away_team_id = :home::uuid))
+                  AND g.scheduled_at < :before
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+                ORDER BY g.scheduled_at DESC
+                LIMIT 1
+            """), {
+                "home": home_team_id,
+                "away": away_team_id,
+                "before": game_date,
+                "sport": sport_code,
+            })
+        else:
+            result = await self.session.execute(text("""
+                SELECT 
+                    home_master_team_id,
+                    away_master_team_id,
+                    home_score,
+                    away_score
+                FROM master_games
+                WHERE ((home_master_team_id = :home AND away_master_team_id = :away)
+                    OR (home_master_team_id = :away AND away_master_team_id = :home))
+                  AND scheduled_at < :before
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+                ORDER BY scheduled_at DESC
+                LIMIT 1
+            """), {
+                "home": home_team_id,
+                "away": away_team_id,
+                "before": game_date,
+                "sport": sport_code,
+            })
         
         row = result.fetchone()
         if not row:
@@ -1355,32 +1574,56 @@ class MLFeatureService:
     async def _check_letdown_spot(
         self, team_id: str, game_date: datetime, sport_code: str
     ) -> Optional[bool]:
-        """Check if team is in a letdown spot (after big win)."""
-        result = await self.session.execute(text("""
-            SELECT 
-                CASE WHEN home_master_team_id = :tid 
-                     THEN home_score - away_score
-                     ELSE away_score - home_score END as margin
-            FROM master_games
-            WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
-              AND scheduled_at < :before
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
-              AND sport_code = :sport
-            ORDER BY scheduled_at DESC
-            LIMIT 1
-        """), {
-            "tid": team_id,
-            "before": game_date,
-            "sport": sport_code,
-        })
+        """Check if team/player is in a letdown spot (after big win)."""
+        is_tennis = sport_code in ('ATP', 'WTA')
+        
+        if is_tennis:
+            result = await self.session.execute(text("""
+                SELECT 
+                    CASE WHEN g.home_team_id = :tid::uuid 
+                         THEN g.home_score - g.away_score
+                         ELSE g.away_score - g.home_score END as margin
+                FROM games g
+                JOIN sports s ON g.sport_id = s.id
+                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                  AND g.scheduled_at < :before
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND s.code = :sport
+                ORDER BY g.scheduled_at DESC
+                LIMIT 1
+            """), {
+                "tid": team_id,
+                "before": game_date,
+                "sport": sport_code,
+            })
+        else:
+            result = await self.session.execute(text("""
+                SELECT 
+                    CASE WHEN home_master_team_id = :tid 
+                         THEN home_score - away_score
+                         ELSE away_score - home_score END as margin
+                FROM master_games
+                WHERE (home_master_team_id = :tid OR away_master_team_id = :tid)
+                  AND scheduled_at < :before
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND sport_code = :sport
+                ORDER BY scheduled_at DESC
+                LIMIT 1
+            """), {
+                "tid": team_id,
+                "before": game_date,
+                "sport": sport_code,
+            })
         
         row = result.fetchone()
         if not row:
             return False
         
         # Big win = margin >= 15 points (adjust per sport)
-        return row[0] >= 15
+        # For tennis, this would be sets margin
+        return row[0] >= 15 if not is_tennis else row[0] >= 2
     
     # =========================================================================
     # 6. WEATHER FEATURES

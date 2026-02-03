@@ -262,26 +262,26 @@ async def export_single_sport(sport: str, limit: int) -> tuple:
     
     print(f"\n   🔄 Extracting features for {len(games)} games...")
     
-    # Process in batches with fresh sessions to avoid transaction issues
-    BATCH_SIZE = 100
+    # Process each game with its own session to avoid transaction corruption
     all_features = []
     error_count = 0
     
-    for batch_start in range(0, len(games), BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, len(games))
-        batch_games = games[batch_start:batch_end]
-        
+    for i, g in enumerate(games):
         try:
             async with db_manager.session() as session:
                 svc = MLFeatureService(session)
-                batch_features = await svc._extract_features_for_games(batch_games, sport)
+                batch_features = await svc._extract_features_for_games([g], sport)
                 all_features.extend(batch_features)
         except Exception as e:
-            error_count += len(batch_games)
-            logger.warning(f"Batch {batch_start}-{batch_end} failed: {e}")
+            error_count += 1
+            if error_count <= 5:  # Only log first 5 errors
+                logger.warning(f"Game {g.get('id')} failed: {e}")
         
-        if (batch_end) % 500 == 0 or batch_end == len(games):
-            logger.info(f"  Processed {batch_end}/{len(games)} games")
+        if (i + 1) % 100 == 0:
+            logger.info(f"  Processed {i + 1}/{len(games)} games")
+    
+    if (i + 1) % 100 != 0:  # Log final count if not already logged
+        logger.info(f"  Processed {len(games)}/{len(games)} games")
     
     if error_count > 0:
         logger.warning(f"  ⚠️ {error_count} games had errors during extraction")

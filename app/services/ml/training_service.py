@@ -822,37 +822,52 @@ class TrainingService:
         bet_type_lower = bet_type.lower()
         
         # Define search patterns for each bet type
+        # IMPORTANT: Order matters - more specific patterns first
         if bet_type_lower == 'spread':
             patterns = ['spread_result', 'spread_target', 'spread_outcome', 'ats_result', 
-                       'against_spread', 'cover_result', 'spread_cover', 'spread']
+                       'against_spread', 'cover_result', 'spread_cover']
         elif bet_type_lower == 'moneyline':
-            patterns = ['moneyline_result', 'moneyline_target', 'ml_result', 'ml_target',
-                       'winner', 'win_result', 'game_result', 'moneyline', 'straight_up']
+            # For moneyline, home_win IS the target (1 = home won, 0 = away won)
+            # DO NOT match moneyline_*_close/open as those are odds, not results
+            patterns = ['home_win', 'moneyline_result', 'moneyline_target', 'ml_result', 
+                       'winner', 'win_result', 'game_result', 'straight_up']
         elif bet_type_lower == 'total':
-            patterns = ['total_result', 'total_target', 'ou_result', 'over_under_result',
-                       'over_under', 'totals_result', 'total']
+            patterns = ['over_result', 'total_result', 'total_target', 'ou_result', 
+                       'over_under_result', 'totals_result']
         else:
             patterns = [f'{bet_type_lower}_result', f'{bet_type_lower}_target', bet_type_lower]
         
-        # Also add generic patterns
-        patterns.extend(['target', 'label', 'result', 'outcome', 'y'])
+        # Also add generic patterns (but NOT 'result' alone as it's too broad)
+        patterns.extend(['target', 'label', 'outcome', 'y'])
         
         # Search for matching column
         df_columns_lower = {col.lower(): col for col in df.columns}
         
+        # Columns to NEVER use as targets (these are features/odds, not outcomes)
+        exclude_from_target = ['_close', '_open', '_line', '_odds', '_prob', '_pct', '_avg']
+        
         for pattern in patterns:
             pattern_lower = pattern.lower()
-            # Exact match
+            # Exact match first
             if pattern_lower in df_columns_lower:
-                return df_columns_lower[pattern_lower]
-            # Partial match
+                col = df_columns_lower[pattern_lower]
+                # Check it's not an odds/line column
+                if not any(excl in col.lower() for excl in exclude_from_target):
+                    return col
+            # Partial match (but be careful)
             for col_lower, col_original in df_columns_lower.items():
                 if pattern_lower in col_lower:
+                    # Skip odds/line columns
+                    if any(excl in col_lower for excl in exclude_from_target):
+                        continue
                     return col_original
         
         # If still not found, look for any column with 'result' or 'target' in name
         for col_lower, col_original in df_columns_lower.items():
-            if 'result' in col_lower or 'target' in col_lower:
+            if ('result' in col_lower or 'target' in col_lower):
+                # Skip odds columns
+                if any(excl in col_lower for excl in exclude_from_target):
+                    continue
                 logger.warning(f"Using fallback target column: {col_original}")
                 return col_original
         

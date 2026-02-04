@@ -661,55 +661,19 @@ class TrainingService:
                 '_result', '_target', '_outcome',
             ])
             
-            # CRITICAL: Exclude features that leak game outcomes (DATA LEAKAGE FIX)
-            # These reveal actual game results and cause artificially high accuracy (97%+)
-            # Real sports betting accuracy should be 52-58%
-            leaking_features = [
-                # Score-related features (reveal actual outcomes)
-                'home_score', 'away_score', 'home_points', 'away_points',
-                'final_score_home', 'final_score_away', 'score_home', 'score_away',
-                'pts_home', 'pts_away', 'points_home', 'points_away',
-                
-                # Margin/total features (derived from final scores)
-                'score_margin', 'point_margin', 'margin', 'point_diff', 'score_diff',
-                'total_points', 'game_total', 'combined_score', 'total_score',
-                
-                # Direct outcome indicators (these ARE the targets)
-                'home_win', 'away_win', 'winner', 'winning_team',
-                'spread_result', 'over_result', 'under_result',
-                'cover', 'covered', 'ats_result', 'against_spread',
-                'over_under_result', 'ou_result',
-                
-                # Any column containing these patterns
-                'final_', '_final', 'actual_', '_actual',
-            ]
-            exclude_patterns.extend(leaking_features)
-            
             feature_columns = []
-            excluded_columns = []  # Track excluded columns for logging
-            leakage_excluded = []  # Specifically track leakage exclusions
-            
             for col in df.columns:
                 col_lower = col.lower()
                 # Skip if matches any exclude pattern
                 should_exclude = False
-                exclude_reason = None
-                
                 for pattern in exclude_patterns:
                     if pattern.lower() in col_lower or col_lower == pattern.lower():
                         should_exclude = True
-                        # Check if it's a leaking feature specifically
-                        if pattern in leaking_features:
-                            exclude_reason = f"DATA_LEAKAGE: {pattern}"
-                            leakage_excluded.append(col)
-                        else:
-                            exclude_reason = f"metadata: {pattern}"
                         break
                 
                 # Skip the target column
                 if col == target_column:
                     should_exclude = True
-                    exclude_reason = "target_column"
                 
                 # Skip non-numeric columns
                 if not should_exclude and df[col].dtype not in ['int64', 'float64', 'int32', 'float32']:
@@ -718,24 +682,13 @@ class TrainingService:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
                         if df[col].isna().all():
                             should_exclude = True
-                            exclude_reason = "non-numeric"
                     except:
                         should_exclude = True
-                        exclude_reason = "conversion_failed"
                 
-                if should_exclude:
-                    excluded_columns.append((col, exclude_reason))
-                else:
+                if not should_exclude:
                     feature_columns.append(col)
             
             logger.info(f"Found {len(feature_columns)} feature columns")
-            
-            # Log excluded leaking features (important for debugging)
-            if leakage_excluded:
-                logger.warning(f"⚠️  DATA LEAKAGE PREVENTION: Excluded {len(leakage_excluded)} features that reveal game outcomes:")
-                for feat in leakage_excluded:
-                    logger.warning(f"   - {feat}")
-                logger.info(f"Without leakage, expect realistic accuracy: 52-58% (not 97%)")
             
             # Clean data
             df = df.dropna(subset=[target_column])
@@ -752,50 +705,8 @@ class TrainingService:
                 }
                 df[target_column] = df[target_column].map(target_mapping).fillna(0).astype(int)
             
-            # CRITICAL FIX: Ensure target is binary (0 or 1) for all bet types
-            # This fixes NCAAF total where target was actual point totals (35, 42, 51...)
-            # instead of binary over/under classification
-            unique_values = df[target_column].nunique()
-            
-            if unique_values > 2:
-                logger.warning(f"Target column '{target_column}' has {unique_values} unique values - converting to binary")
-                
-                if bet_type.lower() == 'total':
-                    # For totals: need to convert actual point totals to over/under binary
-                    # Look for the betting line column to determine threshold
-                    line_columns = ['total_line', 'over_under_line', 'ou_line', 'game_line', 
-                                   'total', 'betting_line', 'line', 'ou']
-                    line_col = None
-                    for lc in line_columns:
-                        if lc in df.columns and lc != target_column:
-                            line_col = lc
-                            break
-                    
-                    if line_col:
-                        # Convert based on actual line: over = 1, under = 0
-                        logger.info(f"Converting total target using line column: {line_col}")
-                        df[target_column] = (df[target_column] > df[line_col]).astype(int)
-                    else:
-                        # Fallback: use median as threshold (not ideal but better than multi-class)
-                        median_total = df[target_column].median()
-                        logger.warning(f"No line column found, using median ({median_total}) as threshold")
-                        df[target_column] = (df[target_column] > median_total).astype(int)
-                else:
-                    # For spread/moneyline with multiple classes: convert to binary
-                    # Positive values = 1 (cover/win), zero or negative = 0 (no cover/loss)
-                    logger.info(f"Converting {bet_type} target to binary (positive=1, else=0)")
-                    df[target_column] = (df[target_column] > 0).astype(int)
-                    
-                logger.info(f"Target converted to binary: {df[target_column].value_counts().to_dict()}")
-            
-            # Ensure target is integer (0 or 1)
+            # Ensure target is binary (0 or 1)
             df[target_column] = df[target_column].astype(int)
-            
-            # Final validation: ensure only 0 and 1 values
-            valid_targets = df[target_column].isin([0, 1]).all()
-            if not valid_targets:
-                logger.warning(f"Target still has non-binary values, forcing to 0/1")
-                df[target_column] = df[target_column].clip(0, 1).astype(int)
             
             logger.info(f"CSV data ready: {len(df)} samples, {len(feature_columns)} features, target={target_column}")
             logger.info(f"Target distribution: {df[target_column].value_counts().to_dict()}")
@@ -810,47 +721,66 @@ class TrainingService:
         """
         Find the target column for the given bet type.
         
-        Searches for columns matching patterns like:
-        - spread_result, spread_target, spread_outcome
-        - moneyline_result, ml_result, moneyline_target
-        - total_result, ou_result, over_under_result
+        ROYALEY CSV Target Columns:
+        - home_win: Binary (0/1) for moneyline bets
+        - spread_result: Binary for spread/ATS bets (may be empty for some sports)
+        - over_result: Binary for totals/over-under (may be empty for some sports)
         """
         bet_type_lower = bet_type.lower()
         
-        # Define search patterns for each bet type
+        # Define exact column mappings for ROYALEY CSVs
         if bet_type_lower == 'spread':
-            patterns = ['spread_result', 'spread_target', 'spread_outcome', 'ats_result', 
-                       'against_spread', 'cover_result', 'spread_cover', 'spread']
-        elif bet_type_lower == 'moneyline':
-            patterns = ['moneyline_result', 'moneyline_target', 'ml_result', 'ml_target',
-                       'winner', 'win_result', 'game_result', 'moneyline', 'straight_up']
-        elif bet_type_lower == 'total':
-            patterns = ['total_result', 'total_target', 'ou_result', 'over_under_result',
-                       'over_under', 'totals_result', 'total']
+            primary_cols = ['spread_result']
+            fallback_cols = ['ats_result', 'cover_result', 'spread_target', 'spread_outcome']
+        elif bet_type_lower in ['moneyline', 'ml']:
+            primary_cols = ['home_win']
+            fallback_cols = ['moneyline_result', 'ml_result', 'winner', 'win_result', 'game_result']
+        elif bet_type_lower in ['total', 'totals', 'over_under', 'ou']:
+            primary_cols = ['over_result']
+            fallback_cols = ['total_result', 'ou_result', 'over_under_result', 'totals_result']
         else:
-            patterns = [f'{bet_type_lower}_result', f'{bet_type_lower}_target', bet_type_lower]
+            primary_cols = [f'{bet_type_lower}_result']
+            fallback_cols = [f'{bet_type_lower}_target', bet_type_lower]
         
-        # Also add generic patterns
-        patterns.extend(['target', 'label', 'result', 'outcome', 'y'])
+        # Try primary columns first
+        for col in primary_cols:
+            if col in df.columns:
+                non_null_count = df[col].notna().sum()
+                if non_null_count > 0:
+                    logger.info(f"Found primary target column '{col}' with {non_null_count} non-null values")
+                    return col
+                else:
+                    logger.warning(f"Target column '{col}' exists but is empty (0 non-null values)")
         
-        # Search for matching column
+        # Try fallback columns
+        for col in fallback_cols:
+            if col in df.columns:
+                non_null_count = df[col].notna().sum()
+                if non_null_count > 0:
+                    logger.info(f"Found fallback target column '{col}' with {non_null_count} non-null values")
+                    return col
+        
+        # Case-insensitive search
         df_columns_lower = {col.lower(): col for col in df.columns}
+        all_patterns = primary_cols + fallback_cols
         
-        for pattern in patterns:
+        for pattern in all_patterns:
             pattern_lower = pattern.lower()
-            # Exact match
             if pattern_lower in df_columns_lower:
-                return df_columns_lower[pattern_lower]
-            # Partial match
-            for col_lower, col_original in df_columns_lower.items():
-                if pattern_lower in col_lower:
-                    return col_original
+                col = df_columns_lower[pattern_lower]
+                non_null_count = df[col].notna().sum()
+                if non_null_count > 0:
+                    return col
         
-        # If still not found, look for any column with 'result' or 'target' in name
-        for col_lower, col_original in df_columns_lower.items():
-            if 'result' in col_lower or 'target' in col_lower:
-                logger.warning(f"Using fallback target column: {col_original}")
-                return col_original
+        # If spread/total not found, inform user about available targets
+        available_targets = []
+        for col in ['home_win', 'spread_result', 'over_result']:
+            if col in df.columns:
+                count = df[col].notna().sum()
+                available_targets.append(f"{col}={count}")
+        
+        logger.warning(f"Target column for bet_type='{bet_type}' not found or empty. "
+                      f"Available targets: {available_targets}")
         
         return None
     
@@ -863,17 +793,14 @@ class TrainingService:
         """
         Load training data from CSV files.
         
-        Handles the ROYALEY CSV structure:
-        - ml_csv/{SPORT}/ml_features_{SPORT}_*.csv (main features)
-        - ml_csv/{SPORT}/ml_features_{SPORT}_game_*.csv
-        - ml_csv/{SPORT}/ml_features_{SPORT}_odds_*.csv
-        - ml_csv/{SPORT}/ml_features_{SPORT}_player_*.csv
-        - ml_csv/{SPORT}/ml_features_{SPORT}_situation_*.csv
-        - ml_csv/{SPORT}/ml_features_{SPORT}_target_*.csv (contains target labels)
-        - ml_csv/{SPORT}/ml_features_{SPORT}_team_*.csv
-        - ml_csv/{SPORT}/ml_features_{SPORT}_weather_*.csv
+        ROYALEY CSV Structure:
+        - ml_csv/{SPORT}/ml_features_{SPORT}_YYYYMMDD_HHMMSS.csv (MAIN - contains all merged features)
+        - ml_csv/{SPORT}/ml_features_{SPORT}_game_*.csv (component - usually not needed)
+        - ml_csv/{SPORT}/ml_features_{SPORT}_odds_*.csv (component)
+        - etc.
         
-        Merges all files into a single training dataframe.
+        The MAIN file already contains merged data from all components.
+        Target columns: home_win, spread_result, over_result
         """
         csv_dir = Path(csv_dir)
         if not csv_dir.exists():
@@ -900,122 +827,59 @@ class TrainingService:
                     break
         
         if sport_dir is None:
-            logger.warning(f"No CSV directory found for sport {sport_code}")
-            return None
+            # Try finding CSV directly in csv_dir with sport code in name
+            direct_csvs = list(csv_dir.glob(f"*{sport_upper}*.csv")) + list(csv_dir.glob(f"*{sport_lower}*.csv"))
+            if direct_csvs:
+                sport_dir = csv_dir
+            else:
+                logger.warning(f"No CSV directory/files found for sport {sport_code}")
+                return None
         
         logger.info(f"Found sport directory: {sport_dir}")
         
-        # Find all CSV files for this sport
-        csv_files = list(sport_dir.glob(f"ml_features_{sport_upper}*.csv"))
+        # Find the MAIN features file (without component suffix like _game, _odds, _player, etc.)
+        # Pattern: ml_features_{SPORT}_YYYYMMDD_HHMMSS.csv
+        csv_files = list(sport_dir.glob(f"ml_features_{sport_upper}_[0-9]*.csv"))
         if not csv_files:
-            csv_files = list(sport_dir.glob(f"*{sport_upper}*.csv"))
+            csv_files = list(sport_dir.glob(f"ml_features_{sport_lower}_[0-9]*.csv"))
         if not csv_files:
-            csv_files = list(sport_dir.glob(f"*{sport_lower}*.csv"))
+            # Fallback: any CSV with sport code that doesn't have component suffix
+            component_suffixes = ['_game_', '_odds_', '_player_', '_situation_', '_target_', '_team_', '_weather_']
+            all_csvs = list(sport_dir.glob(f"*{sport_upper}*.csv")) + list(sport_dir.glob(f"*{sport_lower}*.csv"))
+            csv_files = [f for f in all_csvs if not any(suffix in f.name for suffix in component_suffixes)]
+        
+        if not csv_files:
+            # Last resort: use any CSV for this sport (prefer largest file)
+            csv_files = list(sport_dir.glob(f"*{sport_upper}*.csv")) + list(sport_dir.glob(f"*{sport_lower}*.csv"))
         
         if not csv_files:
             logger.warning(f"No CSV files found for {sport_code} in {sport_dir}")
             return None
         
-        logger.info(f"Found {len(csv_files)} CSV files for {sport_code}: {[f.name for f in csv_files]}")
+        # Use the most recent file (by filename timestamp) or largest file
+        if len(csv_files) > 1:
+            # Sort by modification time or filename (descending)
+            csv_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
         
-        # Categorize files by type
-        file_types = {
-            'main': None,      # ml_features_{SPORT}_YYYYMMDD_HHMMSS.csv (no suffix)
-            'game': None,
-            'odds': None,
-            'player': None,
-            'situation': None,
-            'target': None,
-            'team': None,
-            'weather': None,
-        }
+        main_csv = csv_files[0]
+        logger.info(f"Loading main CSV file: {main_csv.name}")
         
-        for csv_file in csv_files:
-            name = csv_file.name.lower()
-            if '_target_' in name or name.endswith('_target.csv'):
-                file_types['target'] = csv_file
-            elif '_game_' in name:
-                file_types['game'] = csv_file
-            elif '_odds_' in name:
-                file_types['odds'] = csv_file
-            elif '_player_' in name:
-                file_types['player'] = csv_file
-            elif '_situation_' in name:
-                file_types['situation'] = csv_file
-            elif '_team_' in name:
-                file_types['team'] = csv_file
-            elif '_weather_' in name:
-                file_types['weather'] = csv_file
-            else:
-                # Main features file (no type suffix, just sport and timestamp)
-                # e.g., ml_features_NFL_20260204_061141.csv
-                if file_types['main'] is None:
-                    file_types['main'] = csv_file
-        
-        logger.info(f"File types found: {[(k, v.name if v else None) for k, v in file_types.items()]}")
-        
-        # Load and merge dataframes
-        dfs = {}
-        for file_type, csv_file in file_types.items():
-            if csv_file and csv_file.exists():
-                try:
-                    df = pd.read_csv(csv_file)
-                    logger.info(f"Loaded {file_type}: {len(df)} rows, {len(df.columns)} columns")
-                    dfs[file_type] = df
-                except Exception as e:
-                    logger.error(f"Error loading {csv_file}: {e}")
-        
-        if not dfs:
-            logger.error("No CSV files could be loaded")
+        try:
+            df = pd.read_csv(main_csv)
+            logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns from {main_csv.name}")
+            
+            # Log available target columns
+            target_cols = ['home_win', 'spread_result', 'over_result']
+            for col in target_cols:
+                if col in df.columns:
+                    non_null = df[col].notna().sum()
+                    logger.info(f"  Target '{col}': {non_null}/{len(df)} non-null ({100*non_null/len(df):.1f}%)")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading {main_csv}: {e}")
             return None
-        
-        # Start with main features or largest dataframe
-        if 'main' in dfs and dfs['main'] is not None:
-            merged_df = dfs['main'].copy()
-            base_type = 'main'
-        else:
-            # Use the dataframe with most rows as base
-            base_type = max(dfs.keys(), key=lambda k: len(dfs[k]) if dfs.get(k) is not None else 0)
-            merged_df = dfs[base_type].copy()
-        
-        logger.info(f"Base dataframe ({base_type}): {len(merged_df)} rows, {len(merged_df.columns)} columns")
-        
-        # Find common key columns for merging
-        potential_keys = ['game_id', 'match_id', 'id', 'index', 'game_date', 'date']
-        merge_key = None
-        for key in potential_keys:
-            if key in merged_df.columns:
-                merge_key = key
-                break
-        
-        # Merge other dataframes
-        for file_type, df in dfs.items():
-            if file_type == base_type or df is None:
-                continue
-            
-            # Find common columns for merging
-            common_cols = set(merged_df.columns) & set(df.columns)
-            
-            if merge_key and merge_key in df.columns:
-                # Merge on key
-                new_cols = [c for c in df.columns if c not in merged_df.columns or c == merge_key]
-                if len(new_cols) > 1:  # More than just the key
-                    try:
-                        merged_df = merged_df.merge(df[new_cols], on=merge_key, how='left')
-                        logger.info(f"Merged {file_type} on {merge_key}: now {len(merged_df.columns)} columns")
-                    except Exception as e:
-                        logger.warning(f"Could not merge {file_type} on {merge_key}: {e}")
-            elif len(merged_df) == len(df):
-                # Same number of rows - concat horizontally
-                new_cols = [c for c in df.columns if c not in merged_df.columns]
-                if new_cols:
-                    merged_df = pd.concat([merged_df, df[new_cols]], axis=1)
-                    logger.info(f"Concatenated {file_type}: now {len(merged_df.columns)} columns")
-        
-        logger.info(f"Final merged dataframe: {len(merged_df)} rows, {len(merged_df.columns)} columns")
-        logger.info(f"Columns: {list(merged_df.columns)[:20]}...")  # Show first 20 columns
-        
-        return merged_df
     
     async def _prepare_training_data_from_db(
         self,

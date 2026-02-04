@@ -1,6 +1,6 @@
-# ROYALEY - Production Dockerfile (Fixed)
+# ROYALEY - Production Dockerfile
 # Enterprise-Grade Sports Prediction Platform
-# Multi-stage build with proper dependency resolution
+# Multi-stage build for optimal image size
 #
 # BUILD OPTIONS (use --build-arg):
 #   INSTALL_AUTOGLUON=true  - Install AutoGluon (+2GB)
@@ -13,7 +13,7 @@
 #   docker compose up -d --build --build-arg INSTALL_QUANTUM=true
 
 # =============================================================================
-# Stage 1: Builder - Create virtual environment with all dependencies
+# Stage 1: Builder
 # =============================================================================
 FROM python:3.11-slim AS builder
 
@@ -31,30 +31,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Upgrade pip for better dependency resolution
-RUN pip install --upgrade pip setuptools wheel
-
 # Copy all requirements files
 COPY requirements.txt .
 COPY requirements-autogluon.txt .
 COPY requirements-quantum.txt .
 COPY requirements-gpu.txt .
+COPY requirements-dev.txt .
 
-# =============================================================================
-# Install dependencies in proper order with conflict resolution
-# =============================================================================
+# Install base Python dependencies (always)
+RUN pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements.txt
 
-# Step 1: Install base requirements (always)
-RUN pip install --no-cache-dir -r requirements.txt
+# Install AutoGluon if requested (adds ~2GB to image)
+RUN if [ "$INSTALL_AUTOGLUON" = "true" ]; then \
+        echo "Installing AutoGluon dependencies..." && \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-autogluon.txt; \
+    fi
 
-# Step 2: Install GPU dependencies if requested (before other ML libs to set torch version)
+# Install Quantum ML if requested (adds ~500MB to image)
+RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
+        echo "Installing Quantum ML dependencies..." && \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-quantum.txt; \
+    fi
+
+# Install GPU support if requested - install packages DIRECTLY (not from file)
+# This avoids issues with cuml-cu12, cudf-cu12, tensorrt that can't be pip installed
 RUN if [ "$INSTALL_GPU" = "true" ]; then \
         echo "Installing GPU dependencies..." && \
-        pip install --no-cache-dir \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels \
             --extra-index-url https://download.pytorch.org/whl/cu121 \
             "torch==2.1.2+cu121" \
             "torchvision==0.16.2+cu121" \
@@ -63,30 +66,7 @@ RUN if [ "$INSTALL_GPU" = "true" ]; then \
             "nvidia-ml-py>=12.535.133" \
             "pynvml>=11.5.0" \
             "gpustat>=1.1.1" \
-            "onnxruntime-gpu>=1.16.0" \
         || echo "WARNING: Some GPU packages failed to install, continuing..."; \
-    fi
-
-# Step 3: Install AutoGluon if requested (handles its own numpy/pandas/scipy versions)
-RUN if [ "$INSTALL_AUTOGLUON" = "true" ]; then \
-        echo "Installing AutoGluon dependencies..." && \
-        pip install --no-cache-dir "autogluon.tabular>=1.0.0" \
-        || echo "WARNING: AutoGluon installation had issues, continuing..."; \
-    fi
-
-# Step 4: Install Quantum ML if requested (may update scipy)
-RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
-        echo "Installing Quantum ML dependencies..." && \
-        pip install --no-cache-dir \
-            "pennylane>=0.34.0" \
-            "pennylane-lightning>=0.34.0" \
-            "qiskit>=1.0.0" \
-            "qiskit-aer>=0.13.0" \
-            "qiskit-machine-learning>=0.7.0" \
-            "qiskit-algorithms>=0.3.0" \
-            "dwave-ocean-sdk>=6.5.0" \
-            "dimod>=0.12.0" \
-        || echo "WARNING: Some Quantum packages failed to install, continuing..."; \
     fi
 
 # =============================================================================
@@ -98,8 +78,7 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    APP_HOME=/app \
-    PATH="/opt/venv/bin:$PATH"
+    APP_HOME=/app
 
 WORKDIR $APP_HOME
 
@@ -141,8 +120,10 @@ ENV CHROME_BIN=/usr/bin/chromium \
 RUN groupadd --gid 1000 appgroup \
     && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
 
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
+# Copy wheels from builder and install
+COPY --from=builder /build/wheels /wheels
+RUN pip install --no-cache-dir /wheels/* \
+    && rm -rf /wheels
 
 # Copy application code
 COPY --chown=appuser:appgroup . .

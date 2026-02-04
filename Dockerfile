@@ -89,6 +89,10 @@ RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
         || echo "WARNING: Some Quantum packages failed to install, continuing..."; \
     fi
 
+# Step 5: CRITICAL - Ensure NumPy < 2.0 for pandas/pyarrow compatibility
+# Some packages (especially quantum) upgrade numpy to 2.x which breaks pandas
+RUN pip install --no-cache-dir "numpy>=1.26.4,<2.0.0" --force-reinstall
+
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================

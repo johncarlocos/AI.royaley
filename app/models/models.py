@@ -76,6 +76,9 @@ class MLFramework(str, PyEnum):
     AUTOGLUON = "autogluon"
     SKLEARN = "sklearn"
     META = "meta"
+    DEEP_LEARNING = "deep_learning"
+    QUANTUM = "quantum"
+    META_ENSEMBLE = "meta_ensemble"
 
 
 class TaskStatus(str, PyEnum):

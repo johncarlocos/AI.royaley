@@ -575,12 +575,12 @@ class MLFeatureService:
         is_tennis = sport_code in ('ATP', 'WTA')
         
         if is_tennis:
-            # For tennis: ALWAYS use source games.home_team_id / away_team_id
-            # These are the IDs that exist in the games table for rolling stats queries
-            # DO NOT use master_player_id - those IDs don't exist in games table!
+            # For tennis: ALWAYS use source games table data
+            # Use g.scheduled_at for date (consistent with rolling stats queries)
+            # Use g.home_team_id/away_team_id for player IDs
             result = await self.session.execute(text(f"""
-                SELECT mg.id, mg.sport_code, mg.scheduled_at, mg.season,
-                       mg.home_score, mg.away_score, mg.status,
+                SELECT mg.id, mg.sport_code, g.scheduled_at, mg.season,
+                       g.home_score, g.away_score, mg.status,
                        g.home_team_id::text as home_team_id,
                        g.away_team_id::text as away_team_id,
                        mg.is_playoff, mg.is_neutral_site,
@@ -589,14 +589,16 @@ class MLFeatureService:
                 FROM master_games mg
                 LEFT JOIN master_players hp ON mg.home_master_player_id = hp.id
                 LEFT JOIN master_players ap ON mg.away_master_player_id = ap.id
-                LEFT JOIN game_mappings gm ON mg.id = gm.master_game_id
-                LEFT JOIN games g ON gm.source_game_db_id = g.id
-                LEFT JOIN teams ht ON g.home_team_id = ht.id
+                JOIN game_mappings gm ON mg.id = gm.master_game_id
+                JOIN games g ON gm.source_game_db_id = g.id
+                JOIN teams ht ON g.home_team_id = ht.id
                 LEFT JOIN teams at_ ON g.away_team_id = at_.id
                 WHERE {where_clause}
                   AND g.home_team_id IS NOT NULL
-                  AND (ht.name IS NULL OR (ht.name NOT LIKE '%%(Games)' AND ht.name NOT LIKE '%%(Sets)'))
-                ORDER BY mg.scheduled_at DESC
+                  AND g.away_team_id IS NOT NULL
+                  AND g.home_score IS NOT NULL
+                  AND ht.name NOT LIKE '%%(Games)' AND ht.name NOT LIKE '%%(Sets)'
+                ORDER BY g.scheduled_at DESC
                 {limit_clause}
             """), params)
         else:

@@ -557,7 +557,7 @@ class TrainingService:
         training_run = TrainingRun(
             model_id=model.id,
             status=TaskStatus.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.utcnow(),
             hyperparameters={
                 "framework": framework,
                 "sport_code": sport_code,
@@ -580,18 +580,12 @@ class TrainingService:
     ):
         """Update training run status."""
         training_run.status = status
-        training_run.completed_at = datetime.now(timezone.utc)
+        training_run.completed_at = datetime.utcnow()
         
-        # Handle timezone-naive started_at from database
-        started_at = training_run.started_at
-        if started_at:
-            if started_at.tzinfo is None:
-                started_at = started_at.replace(tzinfo=timezone.utc)
-            completed_at = training_run.completed_at
-            if completed_at.tzinfo is None:
-                completed_at = completed_at.replace(tzinfo=timezone.utc)
+        # Calculate duration (both are naive UTC datetimes)
+        if training_run.started_at:
             training_run.training_duration_seconds = int(
-                (completed_at - started_at).total_seconds()
+                (training_run.completed_at - training_run.started_at).total_seconds()
             )
         
         if status == TaskStatus.FAILED and isinstance(error_or_metrics, str):

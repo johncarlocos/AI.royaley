@@ -753,16 +753,16 @@ class MLFeatureService:
                         g.scheduled_at,
                         g.home_score,
                         g.away_score,
-                        CASE WHEN g.home_team_id = :tid::uuid THEN 'home' ELSE 'away' END as side,
-                        CASE WHEN g.home_team_id = :tid::uuid 
+                        CASE WHEN g.home_team_id = CAST(:tid AS uuid) THEN 'home' ELSE 'away' END as side,
+                        CASE WHEN g.home_team_id = CAST(:tid AS uuid) 
                              THEN g.home_score ELSE g.away_score END as team_pts,
-                        CASE WHEN g.home_team_id = :tid::uuid 
+                        CASE WHEN g.home_team_id = CAST(:tid AS uuid) 
                              THEN g.away_score ELSE g.home_score END as opp_pts,
-                        CASE WHEN (g.home_team_id = :tid::uuid AND g.home_score > g.away_score)
-                               OR (g.away_team_id = :tid::uuid AND g.away_score > g.home_score)
+                        CASE WHEN (g.home_team_id = CAST(:tid AS uuid) AND g.home_score > g.away_score)
+                               OR (g.away_team_id = CAST(:tid AS uuid) AND g.away_score > g.home_score)
                              THEN 1 ELSE 0 END as win
                     FROM games g
-                    WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                    WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                       AND g.scheduled_at < :before
                       AND g.home_score IS NOT NULL
                       AND g.away_score IS NOT NULL
@@ -857,19 +857,19 @@ class MLFeatureService:
             # For tennis: use source games table - NO sport filter needed
             result = await self.session.execute(text("""
                 SELECT 
-                    SUM(CASE WHEN g.home_team_id = :home_tid::uuid 
+                    SUM(CASE WHEN g.home_team_id = CAST(:home_tid AS uuid) 
                              AND g.home_score > g.away_score THEN 1
-                             WHEN g.away_team_id = :home_tid::uuid 
+                             WHEN g.away_team_id = CAST(:home_tid AS uuid) 
                              AND g.away_score > g.home_score THEN 1
                              ELSE 0 END) as home_team_wins,
-                    AVG(CASE WHEN g.home_team_id = :home_tid::uuid 
+                    AVG(CASE WHEN g.home_team_id = CAST(:home_tid AS uuid) 
                              THEN g.home_score - g.away_score
                              ELSE g.away_score - g.home_score END) as home_avg_margin,
                     AVG(g.home_score + g.away_score) as total_avg,
                     COUNT(*) as games
                 FROM games g
-                WHERE ((g.home_team_id = :home_tid::uuid AND g.away_team_id = :away_tid::uuid)
-                    OR (g.home_team_id = :away_tid::uuid AND g.away_team_id = :home_tid::uuid))
+                WHERE ((g.home_team_id = CAST(:home_tid AS uuid) AND g.away_team_id = CAST(:away_tid AS uuid))
+                    OR (g.home_team_id = CAST(:away_tid AS uuid) AND g.away_team_id = CAST(:home_tid AS uuid)))
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
@@ -965,7 +965,7 @@ class MLFeatureService:
             result = await self.session.execute(text("""
                 SELECT g.scheduled_at
                 FROM games g
-                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                   AND g.scheduled_at < :game_date
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
@@ -1006,7 +1006,7 @@ class MLFeatureService:
             result2 = await self.session.execute(text("""
                 SELECT COUNT(*)
                 FROM games g
-                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                   AND g.scheduled_at >= :start_date
                   AND g.scheduled_at < :game_date
                   AND g.home_score IS NOT NULL
@@ -1377,12 +1377,12 @@ class MLFeatureService:
         if is_tennis:
             result = await self.session.execute(text("""
                 SELECT 
-                    CASE WHEN g.home_team_id = :tid::uuid 
+                    CASE WHEN g.home_team_id = CAST(:tid AS uuid) 
                          THEN CASE WHEN g.home_score > g.away_score THEN 1 ELSE -1 END
                          ELSE CASE WHEN g.away_score > g.home_score THEN 1 ELSE -1 END
                     END as result
                 FROM games g
-                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
@@ -1446,7 +1446,7 @@ class MLFeatureService:
             result = await self.session.execute(text("""
                 SELECT COUNT(*) + 1
                 FROM games g
-                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                   AND g.scheduled_at < :game_date
                   AND g.scheduled_at >= :season_start
                   AND g.home_score IS NOT NULL
@@ -1490,8 +1490,8 @@ class MLFeatureService:
                     g.home_score,
                     g.away_score
                 FROM games g
-                WHERE ((g.home_team_id = :home::uuid AND g.away_team_id = :away::uuid)
-                    OR (g.home_team_id = :away::uuid AND g.away_team_id = :home::uuid))
+                WHERE ((g.home_team_id = CAST(:home AS uuid) AND g.away_team_id = CAST(:away AS uuid))
+                    OR (g.home_team_id = CAST(:away AS uuid) AND g.away_team_id = CAST(:home AS uuid)))
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
@@ -1565,11 +1565,11 @@ class MLFeatureService:
         if is_tennis:
             result = await self.session.execute(text("""
                 SELECT 
-                    CASE WHEN g.home_team_id = :tid::uuid 
+                    CASE WHEN g.home_team_id = CAST(:tid AS uuid) 
                          THEN g.home_score - g.away_score
                          ELSE g.away_score - g.home_score END as margin
                 FROM games g
-                WHERE (g.home_team_id = :tid::uuid OR g.away_team_id = :tid::uuid)
+                WHERE (g.home_team_id = CAST(:tid AS uuid) OR g.away_team_id = CAST(:tid AS uuid))
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL

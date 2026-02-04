@@ -5,18 +5,17 @@
 # BUILD OPTIONS (use --build-arg):
 #   INSTALL_AUTOGLUON=true  - Install AutoGluon (+2GB)
 #   INSTALL_QUANTUM=true    - Install Quantum ML libraries (+500MB)
-#   INSTALL_GPU=true        - Install GPU support (requires NVIDIA runtime)
+#   INSTALL_GPU=true        - Install GPU support (PyTorch CUDA)
 #
 # Examples:
-#   docker compose up -d --build                    # Base only
+#   docker compose up -d --build                    # Base only (recommended)
 #   docker compose up -d --build --build-arg INSTALL_AUTOGLUON=true
 #   docker compose up -d --build --build-arg INSTALL_QUANTUM=true
-#   docker compose up -d --build --build-arg INSTALL_AUTOGLUON=true --build-arg INSTALL_QUANTUM=true
 
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # Build arguments for optional dependencies
 ARG INSTALL_AUTOGLUON=false
@@ -37,6 +36,7 @@ COPY requirements.txt .
 COPY requirements-autogluon.txt .
 COPY requirements-quantum.txt .
 COPY requirements-gpu.txt .
+COPY requirements-dev.txt .
 
 # Install base Python dependencies (always)
 RUN pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements.txt
@@ -53,16 +53,26 @@ RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
         pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-quantum.txt; \
     fi
 
-# Install GPU support if requested
+# Install GPU support if requested - install packages DIRECTLY (not from file)
+# This avoids issues with cuml-cu12, cudf-cu12, tensorrt that can't be pip installed
 RUN if [ "$INSTALL_GPU" = "true" ]; then \
         echo "Installing GPU dependencies..." && \
-        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-gpu.txt; \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels \
+            --extra-index-url https://download.pytorch.org/whl/cu121 \
+            "torch==2.1.2+cu121" \
+            "torchvision==0.16.2+cu121" \
+            "torchaudio==2.1.2+cu121" \
+            "cupy-cuda12x>=13.0.0" \
+            "nvidia-ml-py>=12.535.133" \
+            "pynvml>=11.5.0" \
+            "gpustat>=1.1.1" \
+        || echo "WARNING: Some GPU packages failed to install, continuing..."; \
     fi
 
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM python:3.11-slim as runtime
+FROM python:3.11-slim AS runtime
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \

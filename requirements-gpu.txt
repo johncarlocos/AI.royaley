@@ -1,56 +1,58 @@
-# ROYALEY - GPU Dependencies
-# Version: 2.0.0
-# For Enterprise Multi-GPU (4x RTX A6000)  with NVIDIA RTX PRO 6000 (96GB VRAM)
+# ROYALEY - GPU Dependencies (Fixed)
+# Version: 2.0.1
+# For Enterprise Multi-GPU (4x RTX A6000)
+#
+# NOTE: This file should be installed AFTER requirements.txt
+# Do NOT use -r requirements.txt here (causes duplicate installs)
 
-# Include core requirements
--r requirements.txt
-
+# ============================================================================
 # PyTorch with CUDA 12.1
+# ============================================================================
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.1.2+cu121
 torchvision==0.16.2+cu121
 torchaudio==2.1.2+cu121
 
-# TensorFlow with GPU
-tensorflow[and-cuda]==2.15.0
+# ============================================================================
+# CUDA-accelerated libraries (pip-compatible only)
+# ============================================================================
+cupy-cuda12x>=13.0.0
 
-# CUDA-accelerated libraries
-cupy-cuda12x==13.0.0
-cuml-cu12==24.02.00
-cudf-cu12==24.02.00
-
-# AutoGluon with GPU support
-autogluon.tabular[all]==1.0.0
-autogluon.core==1.0.0
-
-# XGBoost with GPU
-xgboost==2.0.3
-
-# LightGBM with GPU
-lightgbm==4.2.0
-
-# CatBoost with GPU
-catboost==1.2.2
-
-# RAPIDS for GPU-accelerated ML
-# Note: Install via conda for best compatibility
-# conda install -c rapidsai -c conda-forge -c nvidia rapids=24.02
-
+# ============================================================================
 # GPU Monitoring
-nvidia-ml-py==12.535.133
-pynvml==11.5.0
-gpustat==1.1.1
+# ============================================================================
+nvidia-ml-py>=12.535.133
+pynvml>=11.5.0
+gpustat>=1.1.1
 
-# Distributed Training
-horovod==0.28.1
-ray[default]==2.9.1
+# ============================================================================
+# ONNX Runtime with GPU
+# ============================================================================
+onnxruntime-gpu>=1.16.0
 
-# Model Optimization
-onnxruntime-gpu==1.16.3
-tensorrt==8.6.1.post1
+# ============================================================================
+# RAPIDS (cuML, cuDF) - CANNOT be installed via pip
+# ============================================================================
+# RAPIDS libraries require conda installation:
+#   conda install -c rapidsai -c conda-forge -c nvidia \
+#       cuml=24.02 cudf=24.02 python=3.11 cuda-version=12.0
+#
+# Or use NVIDIA NGC container:
+#   docker pull nvcr.io/nvidia/rapidsai/rapidsai:24.02-cuda12.0-runtime-ubuntu22.04-py3.11
 
-# Memory Management
-pytorch-memlab==0.3.0
+# ============================================================================
+# TensorRT - Requires special NVIDIA setup (commented out)
+# ============================================================================
+# TensorRT needs to be installed from NVIDIA directly:
+#   pip install tensorrt --extra-index-url https://pypi.nvidia.com
 
-# CUDA Utilities
-numba==0.59.0
+# ============================================================================
+# Horovod - Complex build, optional (commented out)
+# ============================================================================
+# Horovod requires MPI and special build flags:
+#   HOROVOD_WITH_PYTORCH=1 HOROVOD_WITH_TENSORFLOW=1 pip install horovod
+
+# ============================================================================
+# Ray for Distributed Training (optional, commented out)
+# ============================================================================
+# ray[default]>=2.9.0

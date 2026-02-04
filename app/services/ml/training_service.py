@@ -1,20 +1,37 @@
 """
 ROYALEY - Training Service
-Phase 2: ML Training Orchestrator
+Phase 2: ML Training Orchestrator (FULL 19-COMPONENT INTEGRATION)
 
 This service orchestrates the entire ML training pipeline:
 1. Load and prepare features from database
 2. Run walk-forward validation
-3. Train models using H2O/Sklearn/AutoGluon
-4. Calibrate probabilities
-5. Save to model registry
-6. Update database
+3. Train models using ALL available frameworks:
+   - H2O AutoML (50+ algorithms)
+   - Sklearn Ensemble (XGBoost, LightGBM, CatBoost, Random Forest)
+   - AutoGluon (Multi-layer stacking)
+   - Deep Learning (TensorFlow/LSTM)
+   - Quantum ML (PennyLane, Qiskit, D-Wave, sQUlearn)
+   - Meta Ensemble (combines all above)
+4. Generate SHAP explanations for feature importance
+5. Calibrate probabilities (Isotonic, Platt, Temperature Scaling)
+6. Save to model registry
+7. Update database
 
 Usage:
     from app.services.ml.training_service import TrainingService
     
     service = TrainingService()
+    
+    # Train with specific framework
     result = await service.train_model("NFL", "spread", "h2o")
+    result = await service.train_model("NFL", "spread", "sklearn")
+    result = await service.train_model("NFL", "spread", "autogluon")
+    result = await service.train_model("NFL", "spread", "deep_learning")
+    result = await service.train_model("NFL", "spread", "quantum")
+    result = await service.train_model("NFL", "spread", "meta_ensemble")
+    
+    # Get available frameworks
+    frameworks = service.get_available_frameworks()
 """
 
 import asyncio
@@ -47,6 +64,38 @@ from .walk_forward_validator import WalkForwardValidator, WalkForwardResult
 from .probability_calibration import ProbabilityCalibrator
 from .elo_rating import MultiSportELOManager
 from .feature_engineering import FeatureEngineer
+
+# NEW: Deep Learning (TensorFlow/LSTM)
+from .deep_learning_trainer import (
+    get_deep_learning_trainer, 
+    DeepLearningModelResult,
+)
+
+# NEW: Quantum ML (PennyLane, Qiskit, D-Wave, sQUlearn)
+from .quantum_ml import (
+    get_quantum_trainer,
+    QuantumModelResult,
+    get_available_quantum_frameworks,
+)
+
+# NEW: SHAP Explainer
+from .shap_explainer import (
+    get_shap_explainer,
+    SHAPExplainer,
+)
+
+# NEW: Meta Ensemble
+from .meta_ensemble import (
+    MetaEnsemble,
+    EnsemblePredictor,
+    EnsembleWeights,
+)
+
+# NEW: Model Registry
+from .model_registry import (
+    ModelRegistry,
+    ModelVersion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +131,19 @@ class TrainingResult:
     
     # Feature importance
     top_features: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # NEW: SHAP explanations
+    shap_values: Optional[Dict[str, float]] = None
+    shap_summary_path: str = ""
+    
+    # NEW: Ensemble weights (for meta_ensemble)
+    ensemble_weights: Optional[Dict[str, float]] = None
+    base_model_results: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # NEW: Quantum metrics
+    quantum_framework: str = ""
+    n_qubits: int = 0
+    quantum_advantage_score: float = 0.0
     
     # Error info
     error_message: str = ""
@@ -120,6 +182,13 @@ class TrainingService:
         self._sklearn_trainer = None
         self._autogluon_trainer = None
         
+        # NEW: Additional trainers
+        self._deep_learning_trainer = None
+        self._quantum_trainer = None
+        self._shap_explainer = None
+        self._meta_ensemble = None
+        self._model_registry = None
+        
         # Initialize feature engineer
         self._feature_engineer = FeatureEngineer()
         
@@ -127,6 +196,7 @@ class TrainingService:
         self._elo_manager = MultiSportELOManager()
         
         logger.info(f"TrainingService initialized with model_dir={self.model_dir}")
+        logger.info(f"Available frameworks: h2o, sklearn, autogluon, deep_learning, quantum, meta_ensemble")
     
     @property
     def h2o_trainer(self):
@@ -145,6 +215,53 @@ class TrainingService:
         if self._autogluon_trainer is None:
             self._autogluon_trainer = get_autogluon_trainer(self.config, use_mock=self.use_mock)
         return self._autogluon_trainer
+    
+    # NEW: Deep Learning Trainer (TensorFlow/LSTM)
+    @property
+    def deep_learning_trainer(self):
+        if self._deep_learning_trainer is None:
+            self._deep_learning_trainer = get_deep_learning_trainer(self.config, use_mock=self.use_mock)
+        return self._deep_learning_trainer
+    
+    # NEW: Quantum ML Trainer (PennyLane, Qiskit, D-Wave, sQUlearn)
+    @property
+    def quantum_trainer(self):
+        if self._quantum_trainer is None:
+            self._quantum_trainer = get_quantum_trainer(self.config, use_mock=self.use_mock)
+        return self._quantum_trainer
+    
+    # NEW: SHAP Explainer
+    @property
+    def shap_explainer(self):
+        if self._shap_explainer is None:
+            self._shap_explainer = get_shap_explainer(use_mock=self.use_mock)
+        return self._shap_explainer
+    
+    # NEW: Meta Ensemble
+    @property
+    def meta_ensemble(self):
+        if self._meta_ensemble is None:
+            self._meta_ensemble = MetaEnsemble(config=self.config)
+        return self._meta_ensemble
+    
+    # NEW: Model Registry
+    @property
+    def model_registry(self):
+        if self._model_registry is None:
+            self._model_registry = ModelRegistry(base_dir=str(self.model_dir))
+        return self._model_registry
+    
+    def get_available_frameworks(self) -> List[str]:
+        """Return list of available training frameworks."""
+        frameworks = ["h2o", "sklearn", "autogluon", "deep_learning", "meta_ensemble"]
+        
+        # Check quantum frameworks
+        quantum_frameworks = get_available_quantum_frameworks()
+        if quantum_frameworks:
+            frameworks.append("quantum")
+            frameworks.extend([f"quantum_{qf}" for qf in quantum_frameworks])
+        
+        return frameworks
     
     async def train_model(
         self,
@@ -480,9 +597,346 @@ class TrainingService:
         sport_code: str,
         bet_type: str,
         min_samples: int,
+        csv_dir: str = None,
     ) -> Tuple[Optional[pd.DataFrame], List[str], str]:
         """
-        Prepare training data from database.
+        Prepare training data from CSV files or database.
+        
+        Priority:
+        1. First tries to load from CSV files in ml_csv directory
+        2. Falls back to database if no CSV found
+        
+        CSV Structure Expected:
+        - ml_csv/{SPORT}/ml_features_{SPORT}_*.csv (main features)
+        - ml_csv/{SPORT}/ml_features_{SPORT}_target_*.csv (target labels)
+        - ... (game, odds, player, situation, team, weather)
+        
+        Returns:
+            Tuple of (dataframe, feature_columns, target_column)
+        """
+        # Default CSV paths to try (in order)
+        if csv_dir:
+            csv_paths = [Path(csv_dir)]
+        else:
+            csv_paths = [
+                Path(__file__).parent.parent / "ml_csv",           # app/services/ml_csv
+                Path(__file__).parent.parent.parent / "ml_csv",    # app/ml_csv
+                Path(__file__).parent.parent.parent.parent / "ml_csv",  # project_root/ml_csv
+            ]
+        
+        df = None
+        for csv_path in csv_paths:
+            if csv_path.exists():
+                logger.info(f"Trying CSV path: {csv_path}")
+                df = self._load_from_csv(sport_code, bet_type, csv_path)
+                if df is not None and len(df) >= min_samples:
+                    break
+        
+        if df is not None and len(df) >= min_samples:
+            logger.info(f"Loaded {len(df)} samples from CSV for {sport_code} {bet_type}")
+            
+            # Find target column based on bet_type
+            target_column = self._find_target_column(df, bet_type)
+            
+            if target_column is None:
+                logger.error(f"No target column found for bet_type={bet_type}. Available columns: {list(df.columns)}")
+                return None, [], ""
+            
+            logger.info(f"Using target column: {target_column}")
+            
+            # Get feature columns (exclude non-feature columns)
+            exclude_patterns = [
+                'game_id', 'match_id', 'id', 'index', 
+                'game_date', 'date', 'datetime', 'scheduled_at',
+                'home_team', 'away_team', 'team_home', 'team_away',
+                'season', 'week', 'round',
+                'unnamed', 'Unnamed',
+            ]
+            
+            # Also exclude target columns
+            exclude_patterns.extend([
+                'spread_result', 'moneyline_result', 'total_result',
+                'spread_target', 'moneyline_target', 'total_target',
+                'target', 'label', 'result', 'outcome', 'y',
+                '_result', '_target', '_outcome',
+            ])
+            
+            feature_columns = []
+            for col in df.columns:
+                col_lower = col.lower()
+                # Skip if matches any exclude pattern
+                should_exclude = False
+                for pattern in exclude_patterns:
+                    if pattern.lower() in col_lower or col_lower == pattern.lower():
+                        should_exclude = True
+                        break
+                
+                # Skip the target column
+                if col == target_column:
+                    should_exclude = True
+                
+                # Skip non-numeric columns
+                if not should_exclude and df[col].dtype not in ['int64', 'float64', 'int32', 'float32']:
+                    # Try to convert to numeric
+                    try:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                        if df[col].isna().all():
+                            should_exclude = True
+                    except:
+                        should_exclude = True
+                
+                if not should_exclude:
+                    feature_columns.append(col)
+            
+            logger.info(f"Found {len(feature_columns)} feature columns")
+            
+            # Clean data
+            df = df.dropna(subset=[target_column])
+            df[feature_columns] = df[feature_columns].fillna(0)
+            
+            # Convert target to numeric if needed
+            if df[target_column].dtype == object:
+                target_mapping = {
+                    'W': 1, 'L': 0, 'win': 1, 'loss': 0, 
+                    'cover': 1, 'no_cover': 0, 'over': 1, 'under': 0,
+                    'home': 1, 'away': 0, '1': 1, '0': 0,
+                    'True': 1, 'False': 0, True: 1, False: 0,
+                    'yes': 1, 'no': 0, 'Y': 1, 'N': 0,
+                }
+                df[target_column] = df[target_column].map(target_mapping).fillna(0).astype(int)
+            
+            # Ensure target is binary (0 or 1)
+            df[target_column] = df[target_column].astype(int)
+            
+            logger.info(f"CSV data ready: {len(df)} samples, {len(feature_columns)} features, target={target_column}")
+            logger.info(f"Target distribution: {df[target_column].value_counts().to_dict()}")
+            
+            return df, feature_columns, target_column
+        
+        # Fall back to database
+        logger.info(f"No CSV found for {sport_code} {bet_type}, trying database...")
+        return await self._prepare_training_data_from_db(session, sport_code, bet_type, min_samples)
+    
+    def _find_target_column(self, df: pd.DataFrame, bet_type: str) -> Optional[str]:
+        """
+        Find the target column for the given bet type.
+        
+        Searches for columns matching patterns like:
+        - spread_result, spread_target, spread_outcome
+        - moneyline_result, ml_result, moneyline_target
+        - total_result, ou_result, over_under_result
+        """
+        bet_type_lower = bet_type.lower()
+        
+        # Define search patterns for each bet type
+        if bet_type_lower == 'spread':
+            patterns = ['spread_result', 'spread_target', 'spread_outcome', 'ats_result', 
+                       'against_spread', 'cover_result', 'spread_cover', 'spread']
+        elif bet_type_lower == 'moneyline':
+            patterns = ['moneyline_result', 'moneyline_target', 'ml_result', 'ml_target',
+                       'winner', 'win_result', 'game_result', 'moneyline', 'straight_up']
+        elif bet_type_lower == 'total':
+            patterns = ['total_result', 'total_target', 'ou_result', 'over_under_result',
+                       'over_under', 'totals_result', 'total']
+        else:
+            patterns = [f'{bet_type_lower}_result', f'{bet_type_lower}_target', bet_type_lower]
+        
+        # Also add generic patterns
+        patterns.extend(['target', 'label', 'result', 'outcome', 'y'])
+        
+        # Search for matching column
+        df_columns_lower = {col.lower(): col for col in df.columns}
+        
+        for pattern in patterns:
+            pattern_lower = pattern.lower()
+            # Exact match
+            if pattern_lower in df_columns_lower:
+                return df_columns_lower[pattern_lower]
+            # Partial match
+            for col_lower, col_original in df_columns_lower.items():
+                if pattern_lower in col_lower:
+                    return col_original
+        
+        # If still not found, look for any column with 'result' or 'target' in name
+        for col_lower, col_original in df_columns_lower.items():
+            if 'result' in col_lower or 'target' in col_lower:
+                logger.warning(f"Using fallback target column: {col_original}")
+                return col_original
+        
+        return None
+    
+    def _load_from_csv(
+        self, 
+        sport_code: str, 
+        bet_type: str, 
+        csv_dir: Path
+    ) -> Optional[pd.DataFrame]:
+        """
+        Load training data from CSV files.
+        
+        Handles the ROYALEY CSV structure:
+        - ml_csv/{SPORT}/ml_features_{SPORT}_*.csv (main features)
+        - ml_csv/{SPORT}/ml_features_{SPORT}_game_*.csv
+        - ml_csv/{SPORT}/ml_features_{SPORT}_odds_*.csv
+        - ml_csv/{SPORT}/ml_features_{SPORT}_player_*.csv
+        - ml_csv/{SPORT}/ml_features_{SPORT}_situation_*.csv
+        - ml_csv/{SPORT}/ml_features_{SPORT}_target_*.csv (contains target labels)
+        - ml_csv/{SPORT}/ml_features_{SPORT}_team_*.csv
+        - ml_csv/{SPORT}/ml_features_{SPORT}_weather_*.csv
+        
+        Merges all files into a single training dataframe.
+        """
+        csv_dir = Path(csv_dir)
+        if not csv_dir.exists():
+            logger.warning(f"CSV directory not found: {csv_dir}")
+            return None
+        
+        sport_upper = sport_code.upper()
+        sport_lower = sport_code.lower()
+        
+        # Check for sport subdirectory
+        sport_dirs = [
+            csv_dir / sport_upper,
+            csv_dir / sport_lower,
+            csv_dir,
+        ]
+        
+        sport_dir = None
+        for sd in sport_dirs:
+            if sd.exists() and sd.is_dir():
+                # Check if this directory has CSV files for this sport
+                csvs = list(sd.glob(f"*{sport_upper}*.csv")) + list(sd.glob(f"*{sport_lower}*.csv"))
+                if csvs:
+                    sport_dir = sd
+                    break
+        
+        if sport_dir is None:
+            logger.warning(f"No CSV directory found for sport {sport_code}")
+            return None
+        
+        logger.info(f"Found sport directory: {sport_dir}")
+        
+        # Find all CSV files for this sport
+        csv_files = list(sport_dir.glob(f"ml_features_{sport_upper}*.csv"))
+        if not csv_files:
+            csv_files = list(sport_dir.glob(f"*{sport_upper}*.csv"))
+        if not csv_files:
+            csv_files = list(sport_dir.glob(f"*{sport_lower}*.csv"))
+        
+        if not csv_files:
+            logger.warning(f"No CSV files found for {sport_code} in {sport_dir}")
+            return None
+        
+        logger.info(f"Found {len(csv_files)} CSV files for {sport_code}: {[f.name for f in csv_files]}")
+        
+        # Categorize files by type
+        file_types = {
+            'main': None,      # ml_features_{SPORT}_YYYYMMDD_HHMMSS.csv (no suffix)
+            'game': None,
+            'odds': None,
+            'player': None,
+            'situation': None,
+            'target': None,
+            'team': None,
+            'weather': None,
+        }
+        
+        for csv_file in csv_files:
+            name = csv_file.name.lower()
+            if '_target_' in name or name.endswith('_target.csv'):
+                file_types['target'] = csv_file
+            elif '_game_' in name:
+                file_types['game'] = csv_file
+            elif '_odds_' in name:
+                file_types['odds'] = csv_file
+            elif '_player_' in name:
+                file_types['player'] = csv_file
+            elif '_situation_' in name:
+                file_types['situation'] = csv_file
+            elif '_team_' in name:
+                file_types['team'] = csv_file
+            elif '_weather_' in name:
+                file_types['weather'] = csv_file
+            else:
+                # Main features file (no type suffix, just sport and timestamp)
+                # e.g., ml_features_NFL_20260204_061141.csv
+                if file_types['main'] is None:
+                    file_types['main'] = csv_file
+        
+        logger.info(f"File types found: {[(k, v.name if v else None) for k, v in file_types.items()]}")
+        
+        # Load and merge dataframes
+        dfs = {}
+        for file_type, csv_file in file_types.items():
+            if csv_file and csv_file.exists():
+                try:
+                    df = pd.read_csv(csv_file)
+                    logger.info(f"Loaded {file_type}: {len(df)} rows, {len(df.columns)} columns")
+                    dfs[file_type] = df
+                except Exception as e:
+                    logger.error(f"Error loading {csv_file}: {e}")
+        
+        if not dfs:
+            logger.error("No CSV files could be loaded")
+            return None
+        
+        # Start with main features or largest dataframe
+        if 'main' in dfs and dfs['main'] is not None:
+            merged_df = dfs['main'].copy()
+            base_type = 'main'
+        else:
+            # Use the dataframe with most rows as base
+            base_type = max(dfs.keys(), key=lambda k: len(dfs[k]) if dfs.get(k) is not None else 0)
+            merged_df = dfs[base_type].copy()
+        
+        logger.info(f"Base dataframe ({base_type}): {len(merged_df)} rows, {len(merged_df.columns)} columns")
+        
+        # Find common key columns for merging
+        potential_keys = ['game_id', 'match_id', 'id', 'index', 'game_date', 'date']
+        merge_key = None
+        for key in potential_keys:
+            if key in merged_df.columns:
+                merge_key = key
+                break
+        
+        # Merge other dataframes
+        for file_type, df in dfs.items():
+            if file_type == base_type or df is None:
+                continue
+            
+            # Find common columns for merging
+            common_cols = set(merged_df.columns) & set(df.columns)
+            
+            if merge_key and merge_key in df.columns:
+                # Merge on key
+                new_cols = [c for c in df.columns if c not in merged_df.columns or c == merge_key]
+                if len(new_cols) > 1:  # More than just the key
+                    try:
+                        merged_df = merged_df.merge(df[new_cols], on=merge_key, how='left')
+                        logger.info(f"Merged {file_type} on {merge_key}: now {len(merged_df.columns)} columns")
+                    except Exception as e:
+                        logger.warning(f"Could not merge {file_type} on {merge_key}: {e}")
+            elif len(merged_df) == len(df):
+                # Same number of rows - concat horizontally
+                new_cols = [c for c in df.columns if c not in merged_df.columns]
+                if new_cols:
+                    merged_df = pd.concat([merged_df, df[new_cols]], axis=1)
+                    logger.info(f"Concatenated {file_type}: now {len(merged_df.columns)} columns")
+        
+        logger.info(f"Final merged dataframe: {len(merged_df)} rows, {len(merged_df.columns)} columns")
+        logger.info(f"Columns: {list(merged_df.columns)[:20]}...")  # Show first 20 columns
+        
+        return merged_df
+    
+    async def _prepare_training_data_from_db(
+        self,
+        session: AsyncSession,
+        sport_code: str,
+        bet_type: str,
+        min_samples: int,
+    ) -> Tuple[Optional[pd.DataFrame], List[str], str]:
+        """
+        Prepare training data from database (fallback method).
         
         Returns:
             Tuple of (dataframe, feature_columns, target_column)
@@ -826,6 +1280,12 @@ class TrainingService:
         """Train model using specified framework."""
         max_runtime_secs = max_runtime_secs or settings.H2O_MAX_RUNTIME_SECS
         
+        # Prepare numpy arrays for certain frameworks
+        X_train = train_df[feature_columns].values
+        y_train = train_df[target_column].values
+        X_valid = valid_df[feature_columns].values if valid_df is not None else None
+        y_valid = valid_df[target_column].values if valid_df is not None else None
+        
         if framework == "h2o":
             return self.h2o_trainer.train(
                 train_df=train_df,
@@ -855,8 +1315,193 @@ class TrainingService:
                 validation_df=valid_df,
                 time_limit=max_runtime_secs,
             )
+        
+        # NEW: Deep Learning (TensorFlow/LSTM)
+        elif framework in ["deep_learning", "tensorflow", "lstm"]:
+            logger.info(f"Training Deep Learning model for {sport_code} {bet_type}")
+            return self.deep_learning_trainer.train(
+                train_df=train_df,
+                target_column=target_column,
+                feature_columns=feature_columns,
+                sport_code=sport_code,
+                bet_type=bet_type,
+                validation_df=valid_df,
+                max_epochs=100,
+                early_stopping_patience=10,
+            )
+        
+        # NEW: Quantum ML
+        elif framework.startswith("quantum"):
+            logger.info(f"Training Quantum ML model for {sport_code} {bet_type}")
+            # Parse quantum framework type (quantum, quantum_pennylane, quantum_qiskit, etc.)
+            quantum_type = framework.replace("quantum_", "") if "_" in framework else "pennylane"
+            return self.quantum_trainer.train(
+                X_train=X_train,
+                y_train=y_train,
+                X_valid=X_valid,
+                y_valid=y_valid,
+                sport_code=sport_code,
+                bet_type=bet_type,
+                framework=quantum_type,
+                n_qubits=min(len(feature_columns), 8),  # Limit qubits for performance
+                n_iterations=50,
+            )
+        
+        # NEW: Meta Ensemble (combines all base models)
+        elif framework in ["meta_ensemble", "ensemble"]:
+            logger.info(f"Training Meta Ensemble for {sport_code} {bet_type}")
+            return await self._train_meta_ensemble(
+                train_df=train_df,
+                valid_df=valid_df,
+                target_column=target_column,
+                feature_columns=feature_columns,
+                sport_code=sport_code,
+                bet_type=bet_type,
+                max_runtime_secs=max_runtime_secs,
+            )
+        
         else:
-            raise ValueError(f"Unknown framework: {framework}")
+            raise ValueError(f"Unknown framework: {framework}. Available: {self.get_available_frameworks()}")
+    
+    async def _train_meta_ensemble(
+        self,
+        train_df: pd.DataFrame,
+        valid_df: pd.DataFrame,
+        target_column: str,
+        feature_columns: List[str],
+        sport_code: str,
+        bet_type: str,
+        max_runtime_secs: int = None,
+    ) -> Dict[str, Any]:
+        """
+        Train meta-ensemble combining all base models.
+        
+        This trains H2O, Sklearn, AutoGluon, and Deep Learning models,
+        then combines their predictions using an optimized weighting scheme.
+        """
+        logger.info("Training Meta Ensemble - training all base models...")
+        
+        base_results = {}
+        base_predictions = {}
+        
+        # Train each base framework
+        base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning"]
+        
+        for base_fw in base_frameworks:
+            try:
+                logger.info(f"  Training base model: {base_fw}")
+                result = await self._train_framework(
+                    framework=base_fw,
+                    train_df=train_df,
+                    valid_df=valid_df,
+                    target_column=target_column,
+                    feature_columns=feature_columns,
+                    sport_code=sport_code,
+                    bet_type=bet_type,
+                    max_runtime_secs=max_runtime_secs // 4 if max_runtime_secs else None,
+                )
+                base_results[base_fw] = result
+                
+                # Get predictions on validation set
+                if hasattr(result, 'model_path') and result.model_path:
+                    # Each trainer has a predict method
+                    trainer = getattr(self, f"{base_fw}_trainer", None)
+                    if trainer and hasattr(trainer, 'predict'):
+                        preds = trainer.predict(result.model_path, valid_df, feature_columns)
+                        base_predictions[base_fw] = preds
+                        
+            except Exception as e:
+                logger.warning(f"  Failed to train {base_fw}: {e}")
+                continue
+        
+        if not base_predictions:
+            raise ValueError("No base models could be trained for meta-ensemble")
+        
+        # Combine predictions using meta-ensemble
+        y_valid = valid_df[target_column].values
+        
+        # Optimize weights using validation performance
+        ensemble_result = self.meta_ensemble.fit(
+            predictions=base_predictions,
+            y_true=y_valid,
+            sport_code=sport_code,
+            bet_type=bet_type,
+        )
+        
+        # Save ensemble weights
+        ensemble_path = self.model_dir / sport_code / bet_type / "meta_ensemble.pkl"
+        ensemble_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(ensemble_path, 'wb') as f:
+            pickle.dump({
+                'weights': ensemble_result.weights,
+                'base_model_paths': {fw: r.model_path for fw, r in base_results.items() if hasattr(r, 'model_path')},
+                'frameworks': list(base_predictions.keys()),
+            }, f)
+        
+        # Return combined result
+        return type('MetaEnsembleResult', (), {
+            'model_path': str(ensemble_path),
+            'auc': ensemble_result.auc if hasattr(ensemble_result, 'auc') else 0.0,
+            'accuracy': ensemble_result.accuracy if hasattr(ensemble_result, 'accuracy') else 0.0,
+            'log_loss': ensemble_result.log_loss if hasattr(ensemble_result, 'log_loss') else 0.0,
+            'training_time_secs': sum(getattr(r, 'training_time_secs', 0) for r in base_results.values()),
+            'n_training_samples': len(train_df),
+            'ensemble_weights': ensemble_result.weights if hasattr(ensemble_result, 'weights') else {},
+            'base_model_results': [
+                {'framework': fw, 'auc': getattr(r, 'auc', 0), 'accuracy': getattr(r, 'accuracy', 0)}
+                for fw, r in base_results.items()
+            ],
+            'hyperparameters': {'base_frameworks': list(base_results.keys())},
+        })()
+    
+    async def generate_shap_explanations(
+        self,
+        model_result: Any,
+        train_df: pd.DataFrame,
+        feature_columns: List[str],
+        sport_code: str,
+        bet_type: str,
+        n_samples: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        Generate SHAP explanations for a trained model.
+        
+        Returns feature importance rankings and SHAP summary.
+        """
+        logger.info(f"Generating SHAP explanations for {sport_code} {bet_type}")
+        
+        try:
+            # Get model for SHAP
+            model_path = getattr(model_result, 'model_path', '')
+            
+            # Use background samples for SHAP
+            background_data = train_df[feature_columns].sample(min(n_samples, len(train_df)))
+            
+            # Generate SHAP values
+            shap_result = self.shap_explainer.explain(
+                model_path=model_path,
+                X=background_data.values,
+                feature_names=feature_columns,
+            )
+            
+            # Save SHAP summary plot
+            summary_path = self.model_dir / sport_code / bet_type / "shap_summary.png"
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if hasattr(shap_result, 'save_summary_plot'):
+                shap_result.save_summary_plot(str(summary_path))
+            
+            return {
+                'feature_importance': shap_result.feature_importance if hasattr(shap_result, 'feature_importance') else {},
+                'top_features': shap_result.top_features if hasattr(shap_result, 'top_features') else [],
+                'summary_path': str(summary_path),
+            }
+            
+        except Exception as e:
+            logger.warning(f"SHAP explanation failed: {e}")
+            return {'error': str(e)}
+    
     
     async def _calibrate_model(
         self,
@@ -978,9 +1623,19 @@ class TrainingService:
         await session.commit()
     
     def cleanup(self):
-        """Cleanup resources."""
+        """Cleanup resources for all trainers."""
         if self._h2o_trainer:
             self._h2o_trainer.cleanup()
+        if self._sklearn_trainer and hasattr(self._sklearn_trainer, 'cleanup'):
+            self._sklearn_trainer.cleanup()
+        if self._autogluon_trainer and hasattr(self._autogluon_trainer, 'cleanup'):
+            self._autogluon_trainer.cleanup()
+        if self._deep_learning_trainer and hasattr(self._deep_learning_trainer, 'cleanup'):
+            self._deep_learning_trainer.cleanup()
+        if self._quantum_trainer and hasattr(self._quantum_trainer, 'cleanup'):
+            self._quantum_trainer.cleanup()
+        
+        logger.info("TrainingService cleanup complete")
 
 
 # Singleton instance

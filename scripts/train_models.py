@@ -50,7 +50,14 @@ logging.basicConfig(
 
 
 BET_TYPES = ["spread", "moneyline", "total"]
-FRAMEWORKS = ["h2o", "sklearn", "autogluon"]
+FRAMEWORKS = [
+    "h2o",           # H2O AutoML (50+ algorithms)
+    "sklearn",       # XGBoost, LightGBM, CatBoost, Random Forest
+    "autogluon",     # Multi-layer stacking
+    "deep_learning", # TensorFlow/LSTM
+    "quantum",       # PennyLane, Qiskit, D-Wave
+    "meta_ensemble", # Combines all models
+]
 
 
 async def train_single(
@@ -180,21 +187,54 @@ def print_results(results: List[TrainingResult]):
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="ROYALEY Model Training",
+        description="ROYALEY Model Training - 19-Component ML System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python train_models.py --sport NFL --bet-type spread
+  # Train single model
+  python train_models.py --sport NFL --bet-type spread --framework sklearn
+  
+  # Train with specific framework
+  python train_models.py --sport NFL --bet-type spread --framework deep_learning
+  python train_models.py --sport NFL --bet-type spread --framework quantum
+  python train_models.py --sport NFL --bet-type spread --framework meta_ensemble
+  
+  # Train all bet types for a sport
   python train_models.py --sport NBA --all-bet-types
+  
+  # Train all sports
   python train_models.py --all --framework sklearn
+  
+  # Use CSV files from specific directory
+  python train_models.py --sport NFL --bet-type spread --csv-dir ./app/services/ml_csv
+  
+  # Test with mock trainers
   python train_models.py --sport NFL --bet-type spread --mock
+
+Available Frameworks:
+  h2o           - H2O AutoML (50+ algorithms, MOJO export)
+  sklearn       - XGBoost + LightGBM + CatBoost + Random Forest
+  autogluon     - Multi-layer stack ensembling
+  deep_learning - TensorFlow + LSTM neural networks
+  quantum       - PennyLane, Qiskit, D-Wave quantum ML
+  meta_ensemble - Combines ALL above models (recommended)
+
+CSV File Naming Convention:
+  Place CSV files in app/services/ml_csv/ with names like:
+  - nfl_spread.csv
+  - nfl_moneyline.csv  
+  - nba_total.csv
+  
+  Required columns:
+  - Features (numeric columns for training)
+  - Target: spread_result, moneyline_result, or total_result (1=win, 0=loss)
         """
     )
     
     parser.add_argument(
         "--sport", "-s",
         type=str,
-        help="Sport code (NFL, NBA, NHL, etc.)"
+        help="Sport code (NFL, NBA, NHL, MLB, NCAAF, NCAAB, etc.)"
     )
     parser.add_argument(
         "--bet-type", "-b",
@@ -206,8 +246,14 @@ Examples:
         "--framework", "-f",
         type=str,
         choices=FRAMEWORKS,
-        default="h2o",
-        help="ML framework (default: h2o)"
+        default="sklearn",
+        help="ML framework (default: sklearn). Use 'meta_ensemble' for best results."
+    )
+    parser.add_argument(
+        "--csv-dir",
+        type=str,
+        default=None,
+        help="Directory containing CSV training files (default: app/services/ml_csv)"
     )
     parser.add_argument(
         "--all-bet-types",
@@ -279,14 +325,53 @@ Examples:
         console.print("\n[yellow]Specify --bet-type or --all-bet-types[/yellow]")
         return
     
+    # Determine CSV directory (check multiple possible locations)
+    if args.csv_dir:
+        csv_dir = args.csv_dir
+    else:
+        # Try multiple paths in order
+        possible_paths = [
+            Path(__file__).parent.parent / "ml_csv",           # /royaley/ml_csv
+            Path(__file__).parent.parent / "app" / "services" / "ml_csv",  # /royaley/app/services/ml_csv
+            Path(__file__).parent.parent / "app" / "ml_csv",   # /royaley/app/ml_csv
+            Path("/nvme0n1-disk/royaley/ml_csv"),              # Absolute path
+        ]
+        csv_dir = None
+        for p in possible_paths:
+            if p.exists() and list(p.glob("**/*.csv")):
+                csv_dir = str(p)
+                break
+        
+        if csv_dir is None:
+            csv_dir = str(Path(__file__).parent.parent / "ml_csv")
+    
     # Print header
     console.print(Panel(
-        f"[bold green]ROYALEY Model Training[/bold green]\n"
+        f"[bold green]ROYALEY Model Training - 19 Component ML System[/bold green]\n"
         f"Framework: {args.framework}\n"
         f"Max Runtime: {args.max_runtime}s\n"
+        f"Min Samples: {args.min_samples}\n"
+        f"CSV Directory: {csv_dir}\n"
         f"Mock Mode: {'Yes' if args.mock else 'No'}",
         title="Training Configuration"
     ))
+    
+    # Check if CSV files exist
+    csv_path = Path(csv_dir)
+    if csv_path.exists():
+        csv_files = list(csv_path.glob("**/*.csv"))
+        if csv_files:
+            console.print(f"[green]Found {len(csv_files)} CSV files in {csv_dir}[/green]")
+            for f in csv_files[:5]:
+                console.print(f"  - {f.name}")
+            if len(csv_files) > 5:
+                console.print(f"  ... and {len(csv_files) - 5} more")
+        else:
+            console.print(f"[yellow]Warning: No CSV files found in {csv_dir}[/yellow]")
+            console.print("[yellow]Training will attempt to load from database instead[/yellow]")
+    else:
+        console.print(f"[yellow]Warning: CSV directory not found: {csv_dir}[/yellow]")
+        console.print("[yellow]Training will attempt to load from database instead[/yellow]")
     
     # Training options
     train_kwargs = {

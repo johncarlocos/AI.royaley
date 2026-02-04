@@ -203,9 +203,16 @@ class SklearnEnsembleTrainer:
             val_probs = self._model.predict_proba(X_val_scaled)[:, 1]
             val_preds = self._model.predict(X_val_scaled)
             
-            val_auc = roc_auc_score(y_val, val_probs)
+            try:
+                val_auc = roc_auc_score(y_val, val_probs)
+            except ValueError:
+                logger.warning("Only one class in validation set, using training AUC")
+                val_auc = train_auc
             val_acc = accuracy_score(y_val, val_preds)
-            val_logloss = log_loss(y_val, val_probs)
+            try:
+                val_logloss = log_loss(y_val, val_probs)
+            except ValueError:
+                val_logloss = train_logloss
             val_brier = brier_score_loss(y_val, val_probs)
         else:
             val_auc = train_auc

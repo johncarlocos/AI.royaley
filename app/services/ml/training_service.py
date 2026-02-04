@@ -353,7 +353,7 @@ class TrainingService:
                     result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0) if wfv_result else 0.0
                 
                 # Split train/validation
-                train_data, valid_data = self._split_data(train_df, test_size=0.2)
+                train_data, valid_data = self._split_data(train_df, test_size=0.2, target_column=target_column)
                 
                 # Train model
                 logger.info(f"Training {framework} model...")
@@ -1325,14 +1325,35 @@ class TrainingService:
         self,
         df: pd.DataFrame,
         test_size: float = 0.2,
+        target_column: str = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Split data into train/validation chronologically."""
+        """Split data into train/validation chronologically, ensuring both classes present."""
         if "game_date" in df.columns:
             df = df.sort_values("game_date")
+        elif "scheduled_at" in df.columns:
+            df = df.sort_values("scheduled_at")
         
         split_idx = int(len(df) * (1 - test_size))
         train_df = df.iloc[:split_idx].copy()
         valid_df = df.iloc[split_idx:].copy()
+        
+        # Ensure validation set has both classes (required for AUC)
+        if target_column and target_column in valid_df.columns:
+            n_classes = valid_df[target_column].nunique()
+            if n_classes < 2:
+                logger.warning(
+                    f"Validation set has only {n_classes} class(es). "
+                    f"Switching to stratified split."
+                )
+                from sklearn.model_selection import train_test_split
+                train_df, valid_df = train_test_split(
+                    df, test_size=test_size, random_state=42,
+                    stratify=df[target_column]
+                )
+                logger.info(
+                    f"Stratified split: train={len(train_df)}, valid={len(valid_df)}, "
+                    f"valid classes={valid_df[target_column].nunique()}"
+                )
         
         return train_df, valid_df
     

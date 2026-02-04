@@ -1,11 +1,27 @@
 # ROYALEY - Production Dockerfile
 # Enterprise-Grade Sports Prediction Platform
 # Multi-stage build for optimal image size
+#
+# BUILD OPTIONS (use --build-arg):
+#   INSTALL_AUTOGLUON=true  - Install AutoGluon (+2GB)
+#   INSTALL_QUANTUM=true    - Install Quantum ML libraries (+500MB)
+#   INSTALL_GPU=true        - Install GPU support (requires NVIDIA runtime)
+#
+# Examples:
+#   docker compose up -d --build                    # Base only
+#   docker compose up -d --build --build-arg INSTALL_AUTOGLUON=true
+#   docker compose up -d --build --build-arg INSTALL_QUANTUM=true
+#   docker compose up -d --build --build-arg INSTALL_AUTOGLUON=true --build-arg INSTALL_QUANTUM=true
 
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
 FROM python:3.11-slim as builder
+
+# Build arguments for optional dependencies
+ARG INSTALL_AUTOGLUON=false
+ARG INSTALL_QUANTUM=false
+ARG INSTALL_GPU=false
 
 WORKDIR /build
 
@@ -13,11 +29,35 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy all requirements files
 COPY requirements.txt .
+COPY requirements-autogluon.txt .
+COPY requirements-quantum.txt .
+COPY requirements-gpu.txt .
+
+# Install base Python dependencies (always)
 RUN pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements.txt
+
+# Install AutoGluon if requested (adds ~2GB to image)
+RUN if [ "$INSTALL_AUTOGLUON" = "true" ]; then \
+        echo "Installing AutoGluon dependencies..." && \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-autogluon.txt; \
+    fi
+
+# Install Quantum ML if requested (adds ~500MB to image)
+RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
+        echo "Installing Quantum ML dependencies..." && \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-quantum.txt; \
+    fi
+
+# Install GPU support if requested
+RUN if [ "$INSTALL_GPU" = "true" ]; then \
+        echo "Installing GPU dependencies..." && \
+        pip wheel --no-cache-dir --wheel-dir=/build/wheels -r requirements-gpu.txt; \
+    fi
 
 # =============================================================================
 # Stage 2: Runtime
@@ -58,6 +98,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    # Additional libs for ML
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chrome environment variables for Selenium
@@ -77,7 +119,7 @@ RUN pip install --no-cache-dir /wheels/* \
 COPY --chown=appuser:appgroup . .
 
 # Create necessary directories (including kaggle config)
-RUN mkdir -p /app/models /app/logs /app/data /home/appuser/.config/kaggle \
+RUN mkdir -p /app/models /app/logs /app/data /app/ml_csv /home/appuser/.config/kaggle \
     && chown -R appuser:appgroup /app /home/appuser/.config
 
 # Switch to non-root user

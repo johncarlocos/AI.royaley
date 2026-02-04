@@ -8,6 +8,17 @@
 #   /nvme1n1-disk (1.7TB) - ML Training, Features, Datasets (FAST)
 #   /sda-disk (16.4TB)    - Backups, Archives, Raw Data (LARGE)
 # ============================================================================
+# ML REQUIREMENTS BUILD OPTIONS:
+#   Set these in .env file or command line:
+#   INSTALL_AUTOGLUON=true  - AutoGluon multi-layer stacking (+2GB)
+#   INSTALL_QUANTUM=true    - Quantum ML: PennyLane, Qiskit (+500MB)
+#   INSTALL_GPU=true        - GPU/CUDA support for TensorFlow
+#
+# Usage:
+#   docker compose up -d --build                           # Base only
+#   INSTALL_AUTOGLUON=true docker compose up -d --build    # With AutoGluon
+#   INSTALL_QUANTUM=true docker compose up -d --build      # With Quantum
+# ============================================================================
 
 services:
   # =============================================================================
@@ -17,6 +28,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-false}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-false}
+        INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_api
     restart: unless-stopped
     ports:
@@ -86,6 +101,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-false}
+        INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_worker
     restart: unless-stopped
     command: python -m app.cli.admin worker
@@ -145,6 +164,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-true}
+        INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_ml_worker
     restart: unless-stopped
     command: python -m app.cli.admin worker --no-scheduler
@@ -198,6 +221,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-false}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-true}
+        INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_ensemble_worker
     restart: unless-stopped
     command: python -m app.cli.admin worker --no-scheduler

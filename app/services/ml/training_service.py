@@ -661,19 +661,55 @@ class TrainingService:
                 '_result', '_target', '_outcome',
             ])
             
+            # CRITICAL: Exclude features that leak game outcomes (DATA LEAKAGE FIX)
+            # These reveal actual game results and cause artificially high accuracy (97%+)
+            # Real sports betting accuracy should be 52-58%
+            leaking_features = [
+                # Score-related features (reveal actual outcomes)
+                'home_score', 'away_score', 'home_points', 'away_points',
+                'final_score_home', 'final_score_away', 'score_home', 'score_away',
+                'pts_home', 'pts_away', 'points_home', 'points_away',
+                
+                # Margin/total features (derived from final scores)
+                'score_margin', 'point_margin', 'margin', 'point_diff', 'score_diff',
+                'total_points', 'game_total', 'combined_score', 'total_score',
+                
+                # Direct outcome indicators (these ARE the targets)
+                'home_win', 'away_win', 'winner', 'winning_team',
+                'spread_result', 'over_result', 'under_result',
+                'cover', 'covered', 'ats_result', 'against_spread',
+                'over_under_result', 'ou_result',
+                
+                # Any column containing these patterns
+                'final_', '_final', 'actual_', '_actual',
+            ]
+            exclude_patterns.extend(leaking_features)
+            
             feature_columns = []
+            excluded_columns = []  # Track excluded columns for logging
+            leakage_excluded = []  # Specifically track leakage exclusions
+            
             for col in df.columns:
                 col_lower = col.lower()
                 # Skip if matches any exclude pattern
                 should_exclude = False
+                exclude_reason = None
+                
                 for pattern in exclude_patterns:
                     if pattern.lower() in col_lower or col_lower == pattern.lower():
                         should_exclude = True
+                        # Check if it's a leaking feature specifically
+                        if pattern in leaking_features:
+                            exclude_reason = f"DATA_LEAKAGE: {pattern}"
+                            leakage_excluded.append(col)
+                        else:
+                            exclude_reason = f"metadata: {pattern}"
                         break
                 
                 # Skip the target column
                 if col == target_column:
                     should_exclude = True
+                    exclude_reason = "target_column"
                 
                 # Skip non-numeric columns
                 if not should_exclude and df[col].dtype not in ['int64', 'float64', 'int32', 'float32']:
@@ -682,13 +718,24 @@ class TrainingService:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
                         if df[col].isna().all():
                             should_exclude = True
+                            exclude_reason = "non-numeric"
                     except:
                         should_exclude = True
+                        exclude_reason = "conversion_failed"
                 
-                if not should_exclude:
+                if should_exclude:
+                    excluded_columns.append((col, exclude_reason))
+                else:
                     feature_columns.append(col)
             
             logger.info(f"Found {len(feature_columns)} feature columns")
+            
+            # Log excluded leaking features (important for debugging)
+            if leakage_excluded:
+                logger.warning(f"⚠️  DATA LEAKAGE PREVENTION: Excluded {len(leakage_excluded)} features that reveal game outcomes:")
+                for feat in leakage_excluded:
+                    logger.warning(f"   - {feat}")
+                logger.info(f"Without leakage, expect realistic accuracy: 52-58% (not 97%)")
             
             # Clean data
             df = df.dropna(subset=[target_column])
@@ -705,8 +752,50 @@ class TrainingService:
                 }
                 df[target_column] = df[target_column].map(target_mapping).fillna(0).astype(int)
             
-            # Ensure target is binary (0 or 1)
+            # CRITICAL FIX: Ensure target is binary (0 or 1) for all bet types
+            # This fixes NCAAF total where target was actual point totals (35, 42, 51...)
+            # instead of binary over/under classification
+            unique_values = df[target_column].nunique()
+            
+            if unique_values > 2:
+                logger.warning(f"Target column '{target_column}' has {unique_values} unique values - converting to binary")
+                
+                if bet_type.lower() == 'total':
+                    # For totals: need to convert actual point totals to over/under binary
+                    # Look for the betting line column to determine threshold
+                    line_columns = ['total_line', 'over_under_line', 'ou_line', 'game_line', 
+                                   'total', 'betting_line', 'line', 'ou']
+                    line_col = None
+                    for lc in line_columns:
+                        if lc in df.columns and lc != target_column:
+                            line_col = lc
+                            break
+                    
+                    if line_col:
+                        # Convert based on actual line: over = 1, under = 0
+                        logger.info(f"Converting total target using line column: {line_col}")
+                        df[target_column] = (df[target_column] > df[line_col]).astype(int)
+                    else:
+                        # Fallback: use median as threshold (not ideal but better than multi-class)
+                        median_total = df[target_column].median()
+                        logger.warning(f"No line column found, using median ({median_total}) as threshold")
+                        df[target_column] = (df[target_column] > median_total).astype(int)
+                else:
+                    # For spread/moneyline with multiple classes: convert to binary
+                    # Positive values = 1 (cover/win), zero or negative = 0 (no cover/loss)
+                    logger.info(f"Converting {bet_type} target to binary (positive=1, else=0)")
+                    df[target_column] = (df[target_column] > 0).astype(int)
+                    
+                logger.info(f"Target converted to binary: {df[target_column].value_counts().to_dict()}")
+            
+            # Ensure target is integer (0 or 1)
             df[target_column] = df[target_column].astype(int)
+            
+            # Final validation: ensure only 0 and 1 values
+            valid_targets = df[target_column].isin([0, 1]).all()
+            if not valid_targets:
+                logger.warning(f"Target still has non-binary values, forcing to 0/1")
+                df[target_column] = df[target_column].clip(0, 1).astype(int)
             
             logger.info(f"CSV data ready: {len(df)} samples, {len(feature_columns)} features, target={target_column}")
             logger.info(f"Target distribution: {df[target_column].value_counts().to_dict()}")

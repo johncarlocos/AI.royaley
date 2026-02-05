@@ -183,7 +183,7 @@ class WalkForwardValidator:
         # Convert date column if needed
         if not pd.api.types.is_datetime64_any_dtype(data[date_column]):
             data = data.copy()
-            data[date_column] = pd.to_datetime(data[date_column])
+            data[date_column] = pd.to_datetime(data[date_column], format='mixed')
         
         # Sort by date
         data = data.sort_values(date_column).reset_index(drop=True)

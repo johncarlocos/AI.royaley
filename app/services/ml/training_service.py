@@ -693,69 +693,83 @@ class TrainingService:
                     logger.info(f"After 0-0 filter: {len(df)} rows remain")
             
             # ================================================================
-            # FIX 2b: TARGET RECONSTRUCTION
-            # If spread_result/over_result are missing or all NaN, reconstruct
-            # from home_score, away_score, and available betting lines
+            # FIX 2b: TARGET RECONSTRUCTION (SAFE - NaN-aware)
+            # Only fill NaN target values where betting lines exist.
+            # NEVER overwrite existing valid target values.
+            # Rows without betting lines stay NaN (dropped later).
             # ================================================================
             if 'home_score' in df.columns and 'away_score' in df.columns:
                 margin = df['home_score'] - df['away_score']
                 total_pts = df['home_score'] + df['away_score']
                 
-                # Reconstruct home_win if missing or mostly NaN
-                if 'home_win' not in df.columns or df['home_win'].isna().mean() > 0.5:
-                    df['home_win'] = (margin > 0).astype(int)
-                    logger.info(f"🔧 Reconstructed home_win from scores: {df['home_win'].value_counts().to_dict()}")
+                # Reconstruct home_win: only fill NaN rows
+                if 'home_win' not in df.columns:
+                    df['home_win'] = np.nan
+                fill_mask = df['home_win'].isna()
+                if fill_mask.any():
+                    df.loc[fill_mask, 'home_win'] = (margin[fill_mask] > 0).astype(int)
+                    logger.info(
+                        f"🔧 Filled {fill_mask.sum()} NaN home_win values. "
+                        f"Distribution: {df['home_win'].value_counts(dropna=False).to_dict()}"
+                    )
                 
-                # Reconstruct spread_result if missing
-                if 'spread_result' not in df.columns or df['spread_result'].isna().mean() > 0.5:
-                    # Find spread line column
-                    spread_line_cols = ['spread_close', 'spread_line', 'spread', 'home_spread',
-                                       'spread_home_close', 'home_line']
-                    spread_line_col = None
-                    for slc in spread_line_cols:
-                        if slc in df.columns and df[slc].notna().mean() > 0.3:
-                            spread_line_col = slc
-                            break
-                    
-                    if spread_line_col:
-                        # spread_result = 1 if home team covers (margin > -spread_line)
-                        df['spread_result'] = (margin > -df[spread_line_col]).astype(float)
+                # Reconstruct spread_result: only fill NaN rows WHERE spread line exists
+                if 'spread_result' not in df.columns:
+                    df['spread_result'] = np.nan
+                
+                spread_line_cols = ['spread_close', 'spread_line', 'spread', 'home_spread',
+                                   'spread_home_close', 'home_line']
+                spread_line_col = None
+                for slc in spread_line_cols:
+                    if slc in df.columns and df[slc].notna().sum() > 0:
+                        spread_line_col = slc
+                        break
+                
+                if spread_line_col:
+                    # Only fill where target is NaN AND spread line exists
+                    fill_mask = df['spread_result'].isna() & df[spread_line_col].notna()
+                    if fill_mask.any():
+                        df.loc[fill_mask, 'spread_result'] = (
+                            margin[fill_mask] > -df.loc[fill_mask, spread_line_col]
+                        ).astype(float)
                         # Mark pushes as NaN
-                        push_mask = (margin == -df[spread_line_col])
+                        push_mask = fill_mask & (margin == -df[spread_line_col])
                         df.loc[push_mask, 'spread_result'] = np.nan
                         logger.info(
-                            f"🔧 Reconstructed spread_result from {spread_line_col}: "
-                            f"{df['spread_result'].value_counts(dropna=False).to_dict()}"
+                            f"🔧 Filled {fill_mask.sum()} NaN spread_result from {spread_line_col}. "
+                            f"Distribution: {df['spread_result'].value_counts(dropna=False).to_dict()}"
                         )
-                    else:
-                        # No line available - use straight margin (home wins = 1)
-                        df['spread_result'] = (margin > 0).astype(int)
-                        logger.warning(f"🔧 No spread line found, using straight margin for spread_result")
+                else:
+                    logger.warning(f"🔧 No spread line column found - spread_result NaN rows will be dropped")
                 
-                # Reconstruct over_result if missing
-                if 'over_result' not in df.columns or df.get('over_result', pd.Series(dtype=float)).isna().mean() > 0.5:
-                    total_line_cols = ['total_close', 'total_line', 'over_under_line', 'ou_line',
-                                      'total', 'totals_close']
-                    total_line_col = None
-                    for tlc in total_line_cols:
-                        if tlc in df.columns and df[tlc].notna().mean() > 0.3:
-                            total_line_col = tlc
-                            break
-                    
-                    if total_line_col:
-                        df['over_result'] = (total_pts > df[total_line_col]).astype(float)
-                        push_mask = (total_pts == df[total_line_col])
+                # Reconstruct over_result: only fill NaN rows WHERE total line exists
+                if 'over_result' not in df.columns:
+                    df['over_result'] = np.nan
+                
+                total_line_cols = ['total_close', 'total_line', 'over_under_line', 'ou_line',
+                                  'total', 'totals_close']
+                total_line_col = None
+                for tlc in total_line_cols:
+                    if tlc in df.columns and df[tlc].notna().sum() > 0:
+                        total_line_col = tlc
+                        break
+                
+                if total_line_col:
+                    # Only fill where target is NaN AND total line exists
+                    fill_mask = df['over_result'].isna() & df[total_line_col].notna()
+                    if fill_mask.any():
+                        df.loc[fill_mask, 'over_result'] = (
+                            total_pts[fill_mask] > df.loc[fill_mask, total_line_col]
+                        ).astype(float)
+                        # Mark pushes as NaN
+                        push_mask = fill_mask & (total_pts == df[total_line_col])
                         df.loc[push_mask, 'over_result'] = np.nan
                         logger.info(
-                            f"🔧 Reconstructed over_result from {total_line_col}: "
-                            f"{df['over_result'].value_counts(dropna=False).to_dict()}"
+                            f"🔧 Filled {fill_mask.sum()} NaN over_result from {total_line_col}. "
+                            f"Distribution: {df['over_result'].value_counts(dropna=False).to_dict()}"
                         )
-                    else:
-                        # No line - use median total as threshold
-                        median_total = total_pts.median()
-                        if pd.notna(median_total) and median_total > 0:
-                            df['over_result'] = (total_pts > median_total).astype(int)
-                            logger.warning(f"🔧 No total line found, using median ({median_total:.0f}) for over_result")
+                else:
+                    logger.warning(f"🔧 No total line column found - over_result NaN rows will be dropped")
             
             # ================================================================
             # FIX 2c: SPORT-AWARE MIN_SAMPLES

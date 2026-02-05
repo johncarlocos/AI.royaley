@@ -32,6 +32,7 @@ from app.api.routes import admin
 from app.api.routes import health
 from app.api.routes import analytics
 from app.api.routes import monitoring
+from app.api.routes import archive
 
 # Create main API router
 api_router = APIRouter()
@@ -109,6 +110,12 @@ api_router.include_router(
     tags=["System Monitoring"]
 )
 
+api_router.include_router(
+    archive.router,
+    prefix="/archive",
+    tags=["Raw Data Archive"]
+)
+
 # Export individual routers for direct imports
 auth_router = auth.router
 predictions_router = predictions.router
@@ -122,6 +129,7 @@ admin_router = admin.router
 health_router = health.router
 analytics_router = analytics.router
 monitoring_router = monitoring.router
+archive_router = archive.router
 
 __all__ = [
     # Main router
@@ -140,6 +148,7 @@ __all__ = [
     "health_router",
     "analytics_router",
     "monitoring_router",
+    "archive_router",
     
     # Modules
     "auth",
@@ -154,4 +163,5 @@ __all__ = [
     "health",
     "analytics",
     "monitoring",
+    "archive",
 ]

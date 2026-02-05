@@ -3,6 +3,7 @@ ROYALEY - Base Collector Framework
 Phase 1: Data Collection Services
 
 Abstract base class for all data collectors with rate limiting and retry logic.
+Every API response is automatically archived to HDD (16TB) via RawDataArchiver.
 """
 
 import asyncio
@@ -134,6 +135,7 @@ class BaseCollector(ABC):
     ) -> Any:
         """
         Make HTTP request with rate limiting and retry logic.
+        Every successful response is automatically archived to HDD.
         
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -187,10 +189,39 @@ class BaseCollector(ABC):
                     continue
                 
                 response.raise_for_status()
-                json_data = response.json()
-                logger.info(f"[{self.name}] ✅ Successfully fetched data: {len(json_data) if isinstance(json_data, list) else 'object'} items")
+                response_data = response.json()
+                logger.info(f"[{self.name}] ✅ Successfully fetched data: {len(response_data) if isinstance(response_data, list) else 'object'} items")
                 print(f"[{self.name}] ✅ HTTP {response.status_code} - Received data")
-                return json_data
+                
+                # ============================================================
+                # AUTO-ARCHIVE: Save raw response to HDD (non-blocking)
+                # ============================================================
+                try:
+                    from app.services.data.raw_data_archiver import get_archiver
+                    archiver = get_archiver()
+                    if archiver.enabled:
+                        # Detect sport_code from params or endpoint
+                        sport_code = self._detect_sport_code(endpoint, params)
+                        # Detect data_type from endpoint
+                        data_type = self._detect_data_type(endpoint)
+                        
+                        # Archive in background (fire-and-forget, don't slow down collection)
+                        asyncio.create_task(
+                            archiver.archive_api_response(
+                                source=self.name,
+                                sport_code=sport_code,
+                                data=response_data,
+                                data_type=data_type,
+                                endpoint=endpoint,
+                                params=params,
+                                response_status=response.status_code,
+                            )
+                        )
+                except Exception as archive_err:
+                    # Never let archive failure break data collection
+                    logger.debug(f"[{self.name}] Archive skipped: {archive_err}")
+                
+                return response_data
                 
             except httpx.HTTPStatusError as e:
                 last_error = e
@@ -250,6 +281,68 @@ class BaseCollector(ABC):
         Must be implemented by subclasses.
         """
         pass
+    
+    def _detect_sport_code(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Auto-detect sport code from the API endpoint or params.
+        Used by the auto-archive system to organize files by sport.
+        """
+        # Check params first
+        if params:
+            for key in ["sport", "sport_code", "league", "sportKey", "sport_key"]:
+                if key in params and params[key]:
+                    return str(params[key]).upper()
+        
+        # Check endpoint path for known sport identifiers
+        endpoint_lower = endpoint.lower()
+        sport_keywords = {
+            "nfl": "NFL", "football/nfl": "NFL",
+            "nba": "NBA", "basketball/nba": "NBA",
+            "mlb": "MLB", "baseball/mlb": "MLB",
+            "nhl": "NHL", "hockey/nhl": "NHL",
+            "ncaaf": "NCAAF", "college-football": "NCAAF",
+            "ncaab": "NCAAB", "mens-college-basketball": "NCAAB",
+            "wnba": "WNBA",
+            "cfl": "CFL",
+            "atp": "ATP", "wta": "WTA", "tennis": "TENNIS",
+        }
+        
+        for keyword, code in sport_keywords.items():
+            if keyword in endpoint_lower:
+                return code
+        
+        return None
+    
+    def _detect_data_type(self, endpoint: str) -> str:
+        """
+        Auto-detect data type from the API endpoint.
+        Used by the auto-archive system for file naming.
+        """
+        endpoint_lower = endpoint.lower()
+        
+        type_keywords = [
+            "scoreboard", "scores", "schedule", "standings",
+            "teams", "roster", "players", "injuries",
+            "odds", "lines", "spreads", "totals",
+            "stats", "boxscore", "play-by-play", "pbp",
+            "rankings", "ratings", "weather", "forecast",
+            "news", "transactions", "trades",
+        ]
+        
+        for keyword in type_keywords:
+            if keyword in endpoint_lower:
+                return keyword
+        
+        # Extract last meaningful path segment
+        parts = [p for p in endpoint.strip("/").split("/") if p]
+        if parts:
+            return parts[-1][:50]
+        
+        return "response"
     
     async def cache_result(
         self,

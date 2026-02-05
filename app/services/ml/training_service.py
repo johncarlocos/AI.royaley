@@ -347,7 +347,8 @@ class TrainingService:
                 if use_walk_forward and len(train_df) > 1000:
                     logger.info("Running walk-forward validation...")
                     wfv_result = await self._run_walk_forward_validation(
-                        train_df, feature_columns, target_column, framework
+                        train_df, feature_columns, target_column, framework,
+                        sport_code=sport_code, bet_type=bet_type
                     )
                     result.wfv_accuracy = wfv_result.overall_metrics.get("accuracy", 0.0) if wfv_result else 0.0
                     result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0) if wfv_result else 0.0
@@ -1464,12 +1465,14 @@ class TrainingService:
         feature_columns: List[str],
         target_column: str,
         framework: str,
+        sport_code: str = "UNKNOWN",
+        bet_type: str = "unknown",
     ) -> Optional[WalkForwardResult]:
         """Run walk-forward validation."""
         try:
             validator = WalkForwardValidator(
                 training_window_days=settings.WFV_TRAINING_WINDOW_DAYS,
-                test_window_days=settings.WFV_TEST_WINDOW_DAYS,
+                validation_window_days=settings.WFV_TEST_WINDOW_DAYS,
                 step_size_days=settings.WFV_STEP_SIZE_DAYS,
                 min_training_days=settings.WFV_MIN_TRAINING_DAYS,
             )
@@ -1482,12 +1485,22 @@ class TrainingService:
             else:
                 trainer = self.autogluon_trainer
             
-            result = await validator.validate(
-                df=df,
+            # Detect date column - CSV uses scheduled_at, DB uses game_date
+            date_column = "game_date"
+            if "scheduled_at" in df.columns and "game_date" not in df.columns:
+                date_column = "scheduled_at"
+            elif "date" in df.columns and "game_date" not in df.columns:
+                date_column = "date"
+            
+            # validate() is synchronous - do not await
+            result = validator.validate(
+                data=df,
                 feature_columns=feature_columns,
                 target_column=target_column,
                 trainer=trainer,
-                date_column="game_date",
+                date_column=date_column,
+                sport_code=sport_code,
+                bet_type=bet_type,
             )
             
             return result

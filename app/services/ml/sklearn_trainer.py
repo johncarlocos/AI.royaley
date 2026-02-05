@@ -528,19 +528,41 @@ class SklearnEnsembleTrainer:
         importance = {}
         
         try:
-            # Try to get from stacking estimators
-            if hasattr(self._model, 'estimators_'):
-                for name, estimator in self._model.estimators_:
+            # StackingClassifier: use named_estimators_ (dict of name → fitted estimator)
+            # NOT estimators_ (list of fitted estimators without names)
+            if hasattr(self._model, 'named_estimators_'):
+                n_models = 0
+                for name, estimator in self._model.named_estimators_.items():
                     if hasattr(estimator, 'feature_importances_'):
                         imp = estimator.feature_importances_
-                        for i, col in enumerate(feature_columns):
-                            if col not in importance:
-                                importance[col] = 0.0
-                            importance[col] += imp[i]
+                        if len(imp) == len(feature_columns):
+                            for i, col in enumerate(feature_columns):
+                                if col not in importance:
+                                    importance[col] = 0.0
+                                importance[col] += imp[i]
+                            n_models += 1
                 
-                # Average importance
-                n_models = len(self._model.estimators_)
-                importance = {k: v / n_models for k, v in importance.items()}
+                # Average importance across models
+                if n_models > 0:
+                    importance = {k: v / n_models for k, v in importance.items()}
+            
+            # Fallback: VotingClassifier uses estimators_ as list of (name, estimator)
+            elif hasattr(self._model, 'estimators_') and self._model.estimators_:
+                first = self._model.estimators_[0]
+                if isinstance(first, tuple):
+                    # (name, estimator) tuples
+                    n_models = 0
+                    for name, estimator in self._model.estimators_:
+                        if hasattr(estimator, 'feature_importances_'):
+                            imp = estimator.feature_importances_
+                            if len(imp) == len(feature_columns):
+                                for i, col in enumerate(feature_columns):
+                                    if col not in importance:
+                                        importance[col] = 0.0
+                                    importance[col] += imp[i]
+                                n_models += 1
+                    if n_models > 0:
+                        importance = {k: v / n_models for k, v in importance.items()}
             
             # Sort by importance
             importance = dict(sorted(
@@ -548,6 +570,10 @@ class SklearnEnsembleTrainer:
                 key=lambda x: x[1],
                 reverse=True
             ))
+            
+            if importance:
+                top_5 = list(importance.items())[:5]
+                logger.info(f"Top 5 features: {', '.join(f'{k}={v:.4f}' for k, v in top_5)}")
             
         except Exception as e:
             logger.warning(f"Failed to get feature importance: {e}")

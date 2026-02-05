@@ -639,6 +639,85 @@ class TrainingService:
         if df is not None and len(df) >= min_samples:
             logger.info(f"Loaded {len(df)} samples from CSV for {sport_code} {bet_type}")
             
+            # ================================================================
+            # TENNIS DEBIASING: Fix winner-always-listed-as-home bias
+            # In tennis data, Player 1 (home) is the winner ~91% of the time.
+            # This creates fake predictive signal. Fix by randomly swapping
+            # home/away for 50% of rows so model learns from actual features.
+            # Also removes exact duplicate rows.
+            # ================================================================
+            if sport_code in ('ATP', 'WTA'):
+                # Remove exact duplicates
+                before_dedup = len(df)
+                df = df.drop_duplicates()
+                if len(df) < before_dedup:
+                    logger.info(f"🎾 Removed {before_dedup - len(df)} duplicate rows")
+                
+                # Check home_win bias
+                if 'home_win' in df.columns:
+                    home_win_pct = df['home_win'].mean()
+                    if home_win_pct > 0.70:
+                        logger.warning(
+                            f"🎾 TENNIS BIAS DETECTED: home_win={home_win_pct:.1%}. "
+                            f"Randomly swapping home/away for 50% of rows."
+                        )
+                        
+                        # Find all home_/away_ paired feature columns
+                        home_cols = [c for c in df.columns if c.startswith('home_') 
+                                     and c not in ('home_win', 'home_team_name', 'home_team_id')]
+                        
+                        # Build swap pairs: home_X <-> away_X
+                        swap_pairs = []
+                        for hc in home_cols:
+                            ac = hc.replace('home_', 'away_', 1)
+                            if ac in df.columns:
+                                swap_pairs.append((hc, ac))
+                        
+                        # Special pairs that don't follow home_/away_ pattern
+                        # home_home_win_pct <-> away_away_win_pct
+                        if 'home_home_win_pct' in df.columns and 'away_away_win_pct' in df.columns:
+                            swap_pairs.append(('home_home_win_pct', 'away_away_win_pct'))
+                        
+                        # Randomly select ~50% of rows to swap
+                        np.random.seed(42)
+                        n_swap = len(df) // 2
+                        swap_mask = np.zeros(len(df), dtype=bool)
+                        swap_idx = np.random.choice(len(df), size=n_swap, replace=False)
+                        swap_mask[swap_idx] = True
+                        
+                        # Perform swaps on selected rows
+                        for home_col, away_col in swap_pairs:
+                            temp = df.loc[swap_mask, home_col].copy()
+                            df.loc[swap_mask, home_col] = df.loc[swap_mask, away_col].values
+                            df.loc[swap_mask, away_col] = temp.values
+                        
+                        # Swap scores
+                        if 'home_score' in df.columns and 'away_score' in df.columns:
+                            temp = df.loc[swap_mask, 'home_score'].copy()
+                            df.loc[swap_mask, 'home_score'] = df.loc[swap_mask, 'away_score'].values
+                            df.loc[swap_mask, 'away_score'] = temp.values
+                        
+                        # Flip home_win
+                        if 'home_win' in df.columns:
+                            df.loc[swap_mask, 'home_win'] = 1 - df.loc[swap_mask, 'home_win']
+                        
+                        # Flip signed features
+                        for signed_col in ['score_margin', 'power_rating_diff', 'rest_advantage',
+                                           'h2h_home_avg_margin']:
+                            if signed_col in df.columns:
+                                df.loc[swap_mask, signed_col] = -df.loc[swap_mask, signed_col]
+                        
+                        # Flip spread_result and over_result if they exist
+                        if 'spread_result' in df.columns:
+                            df.loc[swap_mask, 'spread_result'] = 1 - df.loc[swap_mask, 'spread_result']
+                        
+                        new_home_win_pct = df['home_win'].mean()
+                        logger.info(
+                            f"🎾 After debiasing: home_win={new_home_win_pct:.1%} "
+                            f"(was {home_win_pct:.1%}), swapped {n_swap} rows, "
+                            f"{len(swap_pairs)} feature pairs"
+                        )
+            
             # Find target column based on bet_type
             target_column = self._find_target_column(df, bet_type)
             

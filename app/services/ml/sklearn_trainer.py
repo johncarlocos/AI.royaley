@@ -151,6 +151,60 @@ class SklearnEnsembleTrainer:
         # Handle missing values
         X_train = X_train.fillna(0)
         
+        # ============================================================
+        # CLASS IMBALANCE HANDLING
+        # If one class is >80% of data, downsample majority class
+        # This prevents CatBoost "only one unique value" errors
+        # and improves model calibration
+        # ============================================================
+        class_counts = pd.Series(y_train).value_counts()
+        majority_pct = class_counts.max() / len(y_train)
+        
+        if majority_pct > 0.80:
+            majority_class = class_counts.idxmax()
+            minority_class = class_counts.idxmin()
+            minority_count = class_counts.min()
+            
+            # Downsample majority to 2x minority (keeps some natural imbalance)
+            target_majority = min(minority_count * 2, class_counts.max())
+            
+            logger.warning(
+                f"⚠️  CLASS IMBALANCE: {majority_pct:.1%} class {majority_class}. "
+                f"Downsampling {class_counts.max()} → {target_majority} "
+                f"(minority: {minority_count})"
+            )
+            
+            # Split by class
+            majority_mask = y_train == majority_class
+            minority_mask = y_train == minority_class
+            
+            X_majority = X_train[majority_mask]
+            X_minority = X_train[minority_mask]
+            y_majority = y_train[majority_mask]
+            y_minority = y_train[minority_mask]
+            
+            # Random downsample majority
+            np.random.seed(42)
+            downsample_idx = np.random.choice(
+                len(X_majority), size=target_majority, replace=False
+            )
+            X_majority = X_majority.iloc[downsample_idx]
+            y_majority = y_majority[downsample_idx]
+            
+            # Recombine
+            X_train = pd.concat([X_majority, X_minority], ignore_index=True)
+            y_train = np.concatenate([y_majority, y_minority])
+            
+            # Shuffle
+            shuffle_idx = np.random.permutation(len(y_train))
+            X_train = X_train.iloc[shuffle_idx].reset_index(drop=True)
+            y_train = y_train[shuffle_idx]
+            
+            logger.info(
+                f"After balancing: {len(y_train)} samples, "
+                f"distribution: {dict(zip(*np.unique(y_train, return_counts=True)))}"
+            )
+        
         # Scale features
         self._scaler = StandardScaler()
         X_train_scaled = self._scaler.fit_transform(X_train)
@@ -161,9 +215,9 @@ class SklearnEnsembleTrainer:
         # Create base models
         base_models = self._create_base_models()
         
-        # Create ensemble
+        # Create ensemble (use StratifiedKFold to ensure both classes in every fold)
         if use_stacking:
-            self._model = self._create_stacking_ensemble(base_models)
+            self._model = self._create_stacking_ensemble(base_models, cv_folds)
             ensemble_type = "stacking"
         else:
             self._model = self._create_voting_ensemble(base_models)
@@ -420,9 +474,14 @@ class SklearnEnsembleTrainer:
     def _create_stacking_ensemble(
         self,
         base_models: Dict[str, Any],
+        cv_folds: int = 5,
     ) -> StackingClassifier:
         """Create stacking ensemble with logistic regression meta-learner"""
         estimators = [(name, model) for name, model in base_models.items()]
+        
+        # Use StratifiedKFold to ensure both classes present in every fold
+        # This prevents CatBoost "only one unique value" errors
+        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
         
         return StackingClassifier(
             estimators=estimators,
@@ -431,7 +490,7 @@ class SklearnEnsembleTrainer:
                 max_iter=1000,
                 random_state=42,
             ),
-            cv=5,
+            cv=cv,
             stack_method='predict_proba',
             n_jobs=-1,
         )

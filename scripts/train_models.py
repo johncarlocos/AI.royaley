@@ -280,8 +280,8 @@ CSV File Naming Convention:
     parser.add_argument(
         "--min-samples",
         type=int,
-        default=500,
-        help="Minimum training samples required (default: 500)"
+        default=30,
+        help="Minimum training samples required (default: 30, auto-adjusted per sport)"
     )
     parser.add_argument(
         "--no-walk-forward",

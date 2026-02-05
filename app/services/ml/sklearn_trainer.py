@@ -227,6 +227,20 @@ class SklearnEnsembleTrainer:
         # Create base models
         base_models = self._create_base_models()
         
+        # ============================================================
+        # DYNAMIC CV FOLDS for small datasets
+        # Default 5-fold needs at least 10 samples per class per fold
+        # CFL (62 rows), WNBA (114 rows) may need fewer folds
+        # ============================================================
+        min_class_count = min(pd.Series(y_train).value_counts())
+        if min_class_count < cv_folds * 2:
+            # Need at least 2 samples per class per fold
+            cv_folds = max(2, min_class_count // 2)
+            logger.warning(
+                f"⚠️  Small dataset: reducing CV folds from 5 to {cv_folds} "
+                f"(min class count: {min_class_count})"
+            )
+        
         # Create ensemble (use StratifiedKFold to ensure both classes in every fold)
         if use_stacking:
             self._model = self._create_stacking_ensemble(base_models, cv_folds)
@@ -239,17 +253,25 @@ class SklearnEnsembleTrainer:
         logger.info("Training ensemble model...")
         self._model.fit(X_train_scaled, y_train)
         
-        # Cross-validation
-        logger.info("Running cross-validation...")
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-        cv_auc_scores = cross_val_score(
-            self._model, X_train_scaled, y_train,
-            cv=cv, scoring='roc_auc'
-        )
-        cv_acc_scores = cross_val_score(
-            self._model, X_train_scaled, y_train,
-            cv=cv, scoring='accuracy'
-        )
+        # Cross-validation (skip for very small datasets)
+        if len(y_train) >= cv_folds * 4:
+            logger.info(f"Running {cv_folds}-fold cross-validation...")
+            cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+            cv_auc_scores = cross_val_score(
+                self._model, X_train_scaled, y_train,
+                cv=cv, scoring='roc_auc'
+            )
+            cv_acc_scores = cross_val_score(
+                self._model, X_train_scaled, y_train,
+                cv=cv, scoring='accuracy'
+            )
+        else:
+            logger.warning(
+                f"⚠️  Dataset too small for CV ({len(y_train)} samples). "
+                f"Using training metrics only."
+            )
+            cv_auc_scores = np.array([0.0])
+            cv_acc_scores = np.array([0.0])
         
         # Evaluate on training data
         train_probs = self._model.predict_proba(X_train_scaled)[:, 1]

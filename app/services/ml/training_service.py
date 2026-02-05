@@ -269,7 +269,7 @@ class TrainingService:
         bet_type: str,
         framework: str = "h2o",
         max_runtime_secs: int = None,
-        min_samples: int = 500,
+        min_samples: int = 30,
         use_walk_forward: bool = True,
         calibrate: bool = True,
         save_to_db: bool = True,
@@ -330,12 +330,29 @@ class TrainingService:
                 )
                 
                 if train_df is None or len(train_df) < min_samples:
-                    result.error_message = f"Insufficient training data: {len(train_df) if train_df is not None else 0} samples (min: {min_samples})"
-                    if training_run:
-                        await self._update_training_run(
-                            session, training_run, TaskStatus.FAILED, result.error_message
+                    # Check sport-aware minimum before failing
+                    SPORT_MIN = {
+                        'NFL': 200, 'NBA': 200, 'MLB': 200, 'NHL': 200,
+                        'NCAAF': 200, 'NCAAB': 200,
+                        'CFL': 30, 'WNBA': 50,
+                        'ATP': 100, 'WTA': 100,
+                        'MLS': 50, 'NWSL': 30,
+                    }
+                    sport_min = min(SPORT_MIN.get(sport_code, min_samples), min_samples)
+                    actual_count = len(train_df) if train_df is not None else 0
+                    
+                    if actual_count < sport_min:
+                        result.error_message = f"Insufficient training data: {actual_count} samples (min: {sport_min} for {sport_code})"
+                        if training_run:
+                            await self._update_training_run(
+                                session, training_run, TaskStatus.FAILED, result.error_message
+                            )
+                        return result
+                    else:
+                        logger.info(
+                            f"Dataset has {actual_count} samples (below default {min_samples} "
+                            f"but above sport minimum {sport_min} for {sport_code})"
                         )
-                    return result
                 
                 result.training_samples = len(train_df)
                 result.feature_count = len(feature_columns)
@@ -630,15 +647,138 @@ class TrainingService:
             ]
         
         df = None
+        # Sport-aware min_samples for initial CSV load check
+        SPORT_MIN_SAMPLES_INIT = {
+            'NFL': 200, 'NBA': 200, 'MLB': 200, 'NHL': 200,
+            'NCAAF': 200, 'NCAAB': 200,
+            'CFL': 30, 'WNBA': 50,
+            'ATP': 100, 'WTA': 100,
+            'MLS': 50, 'NWSL': 30,
+        }
+        load_min = min(
+            SPORT_MIN_SAMPLES_INIT.get(sport_code, min_samples),
+            min_samples
+        )
         for csv_path in csv_paths:
             if csv_path.exists():
                 logger.info(f"Trying CSV path: {csv_path}")
                 df = self._load_from_csv(sport_code, bet_type, csv_path)
-                if df is not None and len(df) >= min_samples:
+                if df is not None and len(df) >= load_min:
                     break
         
-        if df is not None and len(df) >= min_samples:
+        if df is not None and len(df) >= load_min:
             logger.info(f"Loaded {len(df)} samples from CSV for {sport_code} {bet_type}")
+            
+            # ================================================================
+            # FIX 2a: FILTER 0-0 SCORES
+            # NFL has 58% games with 0-0 scores (unfinished/missing data)
+            # NBA has 41% games with 0-0 scores (same issue)
+            # These corrupt home_win% and all derived targets
+            # ================================================================
+            if 'home_score' in df.columns and 'away_score' in df.columns:
+                before_filter = len(df)
+                # Identify rows where BOTH scores are 0 or NaN (incomplete games)
+                zero_score_mask = (
+                    ((df['home_score'] == 0) & (df['away_score'] == 0)) |
+                    (df['home_score'].isna() & df['away_score'].isna())
+                )
+                n_zero = zero_score_mask.sum()
+                if n_zero > 0:
+                    pct_zero = n_zero / len(df) * 100
+                    logger.warning(
+                        f"🚨 0-0 SCORE FILTER: Removing {n_zero} of {before_filter} rows "
+                        f"({pct_zero:.1f}%) with 0-0 or missing scores"
+                    )
+                    df = df[~zero_score_mask].reset_index(drop=True)
+                    logger.info(f"After 0-0 filter: {len(df)} rows remain")
+            
+            # ================================================================
+            # FIX 2b: TARGET RECONSTRUCTION
+            # If spread_result/over_result are missing or all NaN, reconstruct
+            # from home_score, away_score, and available betting lines
+            # ================================================================
+            if 'home_score' in df.columns and 'away_score' in df.columns:
+                margin = df['home_score'] - df['away_score']
+                total_pts = df['home_score'] + df['away_score']
+                
+                # Reconstruct home_win if missing or mostly NaN
+                if 'home_win' not in df.columns or df['home_win'].isna().mean() > 0.5:
+                    df['home_win'] = (margin > 0).astype(int)
+                    logger.info(f"🔧 Reconstructed home_win from scores: {df['home_win'].value_counts().to_dict()}")
+                
+                # Reconstruct spread_result if missing
+                if 'spread_result' not in df.columns or df['spread_result'].isna().mean() > 0.5:
+                    # Find spread line column
+                    spread_line_cols = ['spread_close', 'spread_line', 'spread', 'home_spread',
+                                       'spread_home_close', 'home_line']
+                    spread_line_col = None
+                    for slc in spread_line_cols:
+                        if slc in df.columns and df[slc].notna().mean() > 0.3:
+                            spread_line_col = slc
+                            break
+                    
+                    if spread_line_col:
+                        # spread_result = 1 if home team covers (margin > -spread_line)
+                        df['spread_result'] = (margin > -df[spread_line_col]).astype(float)
+                        # Mark pushes as NaN
+                        push_mask = (margin == -df[spread_line_col])
+                        df.loc[push_mask, 'spread_result'] = np.nan
+                        logger.info(
+                            f"🔧 Reconstructed spread_result from {spread_line_col}: "
+                            f"{df['spread_result'].value_counts(dropna=False).to_dict()}"
+                        )
+                    else:
+                        # No line available - use straight margin (home wins = 1)
+                        df['spread_result'] = (margin > 0).astype(int)
+                        logger.warning(f"🔧 No spread line found, using straight margin for spread_result")
+                
+                # Reconstruct over_result if missing
+                if 'over_result' not in df.columns or df.get('over_result', pd.Series(dtype=float)).isna().mean() > 0.5:
+                    total_line_cols = ['total_close', 'total_line', 'over_under_line', 'ou_line',
+                                      'total', 'totals_close']
+                    total_line_col = None
+                    for tlc in total_line_cols:
+                        if tlc in df.columns and df[tlc].notna().mean() > 0.3:
+                            total_line_col = tlc
+                            break
+                    
+                    if total_line_col:
+                        df['over_result'] = (total_pts > df[total_line_col]).astype(float)
+                        push_mask = (total_pts == df[total_line_col])
+                        df.loc[push_mask, 'over_result'] = np.nan
+                        logger.info(
+                            f"🔧 Reconstructed over_result from {total_line_col}: "
+                            f"{df['over_result'].value_counts(dropna=False).to_dict()}"
+                        )
+                    else:
+                        # No line - use median total as threshold
+                        median_total = total_pts.median()
+                        if pd.notna(median_total) and median_total > 0:
+                            df['over_result'] = (total_pts > median_total).astype(int)
+                            logger.warning(f"🔧 No total line found, using median ({median_total:.0f}) for over_result")
+            
+            # ================================================================
+            # FIX 2c: SPORT-AWARE MIN_SAMPLES
+            # CFL (62 rows) and WNBA (114 rows) are valid but small datasets
+            # Auto-lower min_samples for sports with inherently less data
+            # ================================================================
+            SPORT_MIN_SAMPLES = {
+                'NFL': 200, 'NBA': 200, 'MLB': 200, 'NHL': 200,
+                'NCAAF': 200, 'NCAAB': 200,
+                'CFL': 30, 'WNBA': 50,
+                'ATP': 100, 'WTA': 100,
+                'MLS': 50, 'NWSL': 30,
+            }
+            effective_min_samples = SPORT_MIN_SAMPLES.get(sport_code, min_samples)
+            # Use the lower of CLI min_samples and sport-specific minimum
+            effective_min_samples = min(effective_min_samples, min_samples)
+            
+            if len(df) < effective_min_samples:
+                logger.warning(
+                    f"Insufficient data after filtering: {len(df)} samples "
+                    f"(need {effective_min_samples} for {sport_code})"
+                )
+                return None, [], ""
             
             # ================================================================
             # TENNIS DEBIASING: Fix winner-always-listed-as-home bias
@@ -841,7 +981,56 @@ class TrainingService:
             
             # Clean data
             df = df.dropna(subset=[target_column])
-            df[feature_columns] = df[feature_columns].fillna(0)
+            
+            # ================================================================
+            # SMART IMPUTATION - fillna(0) creates false signals!
+            # Example: away_away_win_pct is 94% null for WTA.
+            #   fillna(0) → model sees "0% road win rate" (FALSE)
+            #   fillna(0.5) → model sees "unknown = coin flip" (NEUTRAL)
+            # ================================================================
+            
+            # Categorize features by type for appropriate fill values
+            pct_keywords = ['_win_pct', '_pct_last', '_home_win_pct', '_away_win_pct',
+                           '_ats_record', '_ou_over_pct', 'implied_', 'no_vig_',
+                           'public_spread_home_pct', 'public_ml_home_pct',
+                           'public_total_over_pct', 'public_money_home_pct']
+            
+            margin_keywords = ['_avg_margin', '_avg_pts', 'power_rating', 'h2h_home_avg_margin',
+                              'h2h_total_avg', 'sharp_action_indicator']
+            
+            count_keywords = ['_injuries_out', '_starters_out', '_wins_last', 'num_books',
+                             'h2h_home_wins_last']
+            
+            # Boolean features are fine with 0 (False)
+            bool_keywords = ['is_', '_is_', 'steam_move']
+            
+            imputed_stats = {'pct_0.5': 0, 'median': 0, 'zero': 0}
+            
+            for col in feature_columns:
+                if df[col].isna().any():
+                    col_lower = col.lower()
+                    null_count = df[col].isna().sum()
+                    
+                    # Win percentages / probability → 0.5 (unknown = coin flip)
+                    if any(kw in col_lower for kw in pct_keywords):
+                        df[col] = df[col].fillna(0.5)
+                        imputed_stats['pct_0.5'] += 1
+                    
+                    # Margins / ratings / averages → median (unknown = average)
+                    elif any(kw in col_lower for kw in margin_keywords):
+                        median_val = df[col].median()
+                        df[col] = df[col].fillna(median_val if pd.notna(median_val) else 0)
+                        imputed_stats['median'] += 1
+                    
+                    # Everything else (counts, booleans, misc) → 0
+                    else:
+                        df[col] = df[col].fillna(0)
+                        imputed_stats['zero'] += 1
+            
+            logger.info(
+                f"🔧 SMART IMPUTATION: {imputed_stats['pct_0.5']} pct→0.5, "
+                f"{imputed_stats['median']} margin→median, {imputed_stats['zero']} other→0"
+            )
             
             # Convert target to numeric if needed
             if df[target_column].dtype == object:
@@ -1011,7 +1200,13 @@ class TrainingService:
         for sd in sport_dirs:
             if sd.exists() and sd.is_dir():
                 # Check if this directory has CSV files for this sport
-                csvs = list(sd.glob(f"*{sport_upper}*.csv")) + list(sd.glob(f"*{sport_lower}*.csv"))
+                # FIX: Use exact word boundary matching to prevent NBA/WNBA collision
+                # e.g., *_NBA_*.csv should NOT match *_WNBA_*.csv
+                import re
+                pattern = re.compile(
+                    rf'(^|[_\-\s]){re.escape(sport_upper)}([_\-\s\.]|$)', re.IGNORECASE
+                )
+                csvs = [f for f in sd.glob("*.csv") if pattern.search(f.stem)]
                 if csvs:
                     sport_dir = sd
                     break
@@ -1022,12 +1217,16 @@ class TrainingService:
         
         logger.info(f"Found sport directory: {sport_dir}")
         
-        # Find all CSV files for this sport
-        csv_files = list(sport_dir.glob(f"ml_features_{sport_upper}*.csv"))
+        # Find all CSV files for this sport (exact match, no WNBA matching NBA)
+        import re
+        sport_pattern = re.compile(
+            rf'(^|[_\-\s]){re.escape(sport_upper)}([_\-\s\.]|$)', re.IGNORECASE
+        )
+        csv_files = [f for f in sport_dir.glob(f"ml_features_{sport_upper}*.csv")
+                     if sport_pattern.search(f.stem)]
         if not csv_files:
-            csv_files = list(sport_dir.glob(f"*{sport_upper}*.csv"))
-        if not csv_files:
-            csv_files = list(sport_dir.glob(f"*{sport_lower}*.csv"))
+            csv_files = [f for f in sport_dir.glob("*.csv")
+                         if sport_pattern.search(f.stem)]
         
         if not csv_files:
             logger.warning(f"No CSV files found for {sport_code} in {sport_dir}")

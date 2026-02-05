@@ -648,98 +648,116 @@ class TrainingService:
             
             logger.info(f"Using target column: {target_column}")
             
-            # Get feature columns (exclude non-feature columns)
-            exclude_patterns = [
-                'game_id', 'match_id', 'id', 'index', 
+            # ================================================================
+            # FEATURE SELECTION - Explicit, precise, no pattern-matching bugs
+            # ================================================================
+            
+            # STEP 1: Metadata columns to always exclude (not features)
+            metadata_columns = {
+                'master_game_id', 'game_id', 'match_id', 'id', 'index',
                 'game_date', 'date', 'datetime', 'scheduled_at',
-                'home_team', 'away_team', 'team_home', 'team_away',
-                'season', 'week', 'round',
-                'unnamed', 'Unnamed',
-            ]
+                'home_team_name', 'away_team_name', 'home_team', 'away_team',
+                'team_home', 'team_away', 'home_team_id', 'away_team_id',
+                'season', 'week', 'round', 'sport_code', 'sport',
+            }
             
-            # Also exclude target columns
-            exclude_patterns.extend([
-                'spread_result', 'moneyline_result', 'total_result',
-                'spread_target', 'moneyline_target', 'total_target',
-                'target', 'label', 'result', 'outcome', 'y',
-                '_result', '_target', '_outcome',
-            ])
-            
-            # CRITICAL: Exclude features that leak game outcomes (DATA LEAKAGE FIX)
-            # These reveal actual game results and cause artificially high accuracy (97%+)
-            # Real sports betting accuracy should be 52-58%
-            leaking_features = [
-                # Score-related features (reveal actual outcomes)
+            # STEP 2: TRUE leakage columns - these reveal actual game outcomes
+            # Only EXACT column names, no pattern matching
+            true_leakage_columns = {
+                # Actual scores (know game result)
                 'home_score', 'away_score', 'home_points', 'away_points',
-                'final_score_home', 'final_score_away', 'score_home', 'score_away',
-                'pts_home', 'pts_away', 'points_home', 'points_away',
+                'final_score_home', 'final_score_away',
                 
-                # Margin/total features (derived from final scores)
-                'score_margin', 'point_margin', 'margin', 'point_diff', 'score_diff',
-                'total_points', 'game_total', 'combined_score', 'total_score',
+                # Derived from final scores
+                'score_margin', 'point_margin', 'total_points', 'game_total',
+                'combined_score', 'total_score', 'point_diff', 'score_diff',
                 
-                # Direct outcome indicators (these ARE the targets)
+                # Direct outcome indicators (these ARE the prediction targets)
                 'home_win', 'away_win', 'winner', 'winning_team',
                 'spread_result', 'over_result', 'under_result',
                 'cover', 'covered', 'ats_result', 'against_spread',
                 'over_under_result', 'ou_result',
-                
-                # Any column containing these patterns
-                'final_', '_final', 'actual_', '_actual',
-            ]
-            exclude_patterns.extend(leaking_features)
+                'moneyline_result', 'total_result',
+            }
+            
+            # STEP 3: Historical team stats that are NOT leakage
+            # These are known BEFORE the game and should be KEPT as features:
+            # home_wins_last5, home_wins_last10, home_win_pct_last10,
+            # home_avg_margin_last10, home_home_win_pct, 
+            # h2h_home_wins_last5, h2h_home_avg_margin
+            # (These were previously wrongly excluded by pattern matching "home_win")
             
             feature_columns = []
-            excluded_columns = []  # Track excluded columns for logging
-            leakage_excluded = []  # Specifically track leakage exclusions
+            leakage_excluded = []
+            dead_excluded = []
             
             for col in df.columns:
                 col_lower = col.lower()
-                # Skip if matches any exclude pattern
-                should_exclude = False
-                exclude_reason = None
                 
-                for pattern in exclude_patterns:
-                    if pattern.lower() in col_lower or col_lower == pattern.lower():
-                        should_exclude = True
-                        # Check if it's a leaking feature specifically
-                        if pattern in leaking_features:
-                            exclude_reason = f"DATA_LEAKAGE: {pattern}"
-                            leakage_excluded.append(col)
-                        else:
-                            exclude_reason = f"metadata: {pattern}"
-                        break
-                
-                # Skip the target column
+                # Skip target column
                 if col == target_column:
-                    should_exclude = True
-                    exclude_reason = "target_column"
+                    continue
+                
+                # Skip metadata
+                if col_lower in metadata_columns or col in metadata_columns:
+                    continue
+                
+                # Skip columns starting with 'unnamed'
+                if col_lower.startswith('unnamed'):
+                    continue
+                
+                # Skip TRUE leakage (exact match only, not substring)
+                if col_lower in true_leakage_columns or col in true_leakage_columns:
+                    leakage_excluded.append(col)
+                    continue
                 
                 # Skip non-numeric columns
-                if not should_exclude and df[col].dtype not in ['int64', 'float64', 'int32', 'float32']:
-                    # Try to convert to numeric
+                if df[col].dtype not in ['int64', 'float64', 'int32', 'float32', 'bool']:
                     try:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
                         if df[col].isna().all():
-                            should_exclude = True
-                            exclude_reason = "non-numeric"
+                            continue
                     except:
-                        should_exclude = True
-                        exclude_reason = "conversion_failed"
+                        continue
                 
-                if should_exclude:
-                    excluded_columns.append((col, exclude_reason))
-                else:
-                    feature_columns.append(col)
+                feature_columns.append(col)
             
-            logger.info(f"Found {len(feature_columns)} feature columns")
+            # STEP 4: Remove dead features (100% null or constant value)
+            # These add noise and waste model capacity
+            clean_features = []
+            for col in feature_columns:
+                null_pct = df[col].isna().mean()
+                n_unique = df[col].nunique()
+                
+                if null_pct >= 0.95:  # 95%+ null = dead
+                    dead_excluded.append((col, f"{null_pct*100:.0f}% null"))
+                    continue
+                if n_unique <= 1:  # constant = no information
+                    dead_excluded.append((col, f"constant (1 value)"))
+                    continue
+                
+                clean_features.append(col)
             
-            # Log excluded leaking features (important for debugging)
+            feature_columns = clean_features
+            
+            logger.info(f"Found {len(feature_columns)} usable feature columns")
+            
+            # Log leakage exclusions
             if leakage_excluded:
-                logger.warning(f"⚠️  DATA LEAKAGE PREVENTION: Excluded {len(leakage_excluded)} features that reveal game outcomes:")
+                logger.warning(f"⚠️  DATA LEAKAGE PREVENTION: Excluded {len(leakage_excluded)} outcome-revealing features:")
                 for feat in leakage_excluded:
                     logger.warning(f"   - {feat}")
-                logger.info(f"Without leakage, expect realistic accuracy: 52-58% (not 97%)")
+            
+            # Log dead feature exclusions
+            if dead_excluded:
+                logger.info(f"🧹 DEAD FEATURE CLEANUP: Removed {len(dead_excluded)} useless features:")
+                for feat, reason in dead_excluded[:10]:
+                    logger.info(f"   - {feat} ({reason})")
+                if len(dead_excluded) > 10:
+                    logger.info(f"   ... and {len(dead_excluded) - 10} more")
+            
+            logger.info(f"Features retained: {feature_columns[:10]}...")
+            logger.info(f"Without leakage, expect realistic accuracy: 52-58%")
             
             # Clean data
             df = df.dropna(subset=[target_column])

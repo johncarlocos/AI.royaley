@@ -1355,12 +1355,15 @@ class TrainingService:
         train_df = df.iloc[:split_idx].copy()
         valid_df = df.iloc[split_idx:].copy()
         
-        # Ensure validation set has both classes (required for AUC)
-        if target_column and target_column in valid_df.columns:
-            n_classes = valid_df[target_column].nunique()
-            if n_classes < 2:
+        # Ensure BOTH train and validation have both classes (required for training + AUC)
+        if target_column and target_column in df.columns:
+            train_classes = train_df[target_column].nunique()
+            valid_classes = valid_df[target_column].nunique()
+            
+            if train_classes < 2 or valid_classes < 2:
                 logger.warning(
-                    f"Validation set has only {n_classes} class(es). "
+                    f"Chronological split failed: train has {train_classes} class(es), "
+                    f"validation has {valid_classes} class(es). "
                     f"Switching to stratified split."
                 )
                 from sklearn.model_selection import train_test_split
@@ -1370,6 +1373,7 @@ class TrainingService:
                 )
                 logger.info(
                     f"Stratified split: train={len(train_df)}, valid={len(valid_df)}, "
+                    f"train classes={train_df[target_column].nunique()}, "
                     f"valid classes={valid_df[target_column].nunique()}"
                 )
         

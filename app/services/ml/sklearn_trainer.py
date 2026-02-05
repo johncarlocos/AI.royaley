@@ -160,6 +160,18 @@ class SklearnEnsembleTrainer:
         class_counts = pd.Series(y_train).value_counts()
         majority_pct = class_counts.max() / len(y_train)
         
+        if len(class_counts) < 2:
+            # Only one class in training data - this shouldn't happen after split fix
+            # but handle gracefully
+            logger.error(
+                f"❌ Training data has only 1 class: {dict(class_counts)}. "
+                f"Cannot train a classifier. Check data split."
+            )
+            raise ValueError(
+                f"Training data contains only class {class_counts.index[0]}. "
+                f"Need both classes (0 and 1) to train."
+            )
+        
         if majority_pct > 0.80:
             majority_class = class_counts.idxmax()
             minority_class = class_counts.idxmin()

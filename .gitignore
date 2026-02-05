@@ -79,7 +79,7 @@ postgres_data/
 redis_data/
 grafana_data/
 prometheus_data/
-data/
+# data/
 logs/
 
 # ============================================

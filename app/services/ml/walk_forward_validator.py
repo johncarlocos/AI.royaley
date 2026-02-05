@@ -341,11 +341,20 @@ class WalkForwardValidator:
                 y_true = test_df[target_column].values
                 y_pred = (probs >= 0.5).astype(int)
                 
+                # Check if test set has both classes (required for some metrics)
+                has_both_classes = len(np.unique(y_true)) > 1
+                
+                if not has_both_classes:
+                    logger.warning(
+                        f"Fold {fold.fold_number}: Test set has only class {y_true[0]} "
+                        f"({len(y_true)} samples). Using default AUC=0.5, LogLoss=0.693."
+                    )
+                
                 metrics = ValidationMetrics(
                     fold_number=fold.fold_number,
                     accuracy=accuracy_score(y_true, y_pred),
-                    auc=roc_auc_score(y_true, probs) if len(np.unique(y_true)) > 1 else 0.5,
-                    log_loss=log_loss(y_true, probs),
+                    auc=roc_auc_score(y_true, probs) if has_both_classes else 0.5,
+                    log_loss=log_loss(y_true, probs, labels=[0, 1]) if has_both_classes else 0.693,
                     brier_score=brier_score_loss(y_true, probs),
                     f1_score=f1_score(y_true, y_pred, zero_division=0),
                     expected_calibration_error=self._calculate_ece(y_true, probs),

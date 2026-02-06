@@ -88,24 +88,34 @@ class H2OTrainer:
         self._h2o = None
         self._last_model = None
         self._last_feature_columns = None
+        self._target_mem_size = None  # Set before _init_h2o for adaptive memory
         
-    def _init_h2o(self) -> None:
-        """Initialize H2O cluster"""
+    def _init_h2o(self, max_mem_size: str = None) -> None:
+        """Initialize H2O cluster with adaptive memory sizing."""
         if self._h2o_initialized:
-            return
+            # If already running but we need different memory, restart
+            if max_mem_size and max_mem_size != self._target_mem_size:
+                logger.info(f"Restarting H2O with new memory: {max_mem_size}")
+                self._shutdown_h2o()
+            else:
+                return
         
         try:
             import h2o
             self._h2o = h2o
             
-            # Initialize H2O with configured memory
+            # Use adaptive memory or configured default
+            mem_size = max_mem_size or self.config.h2o_max_mem_size
+            self._target_mem_size = mem_size
+            
             h2o.init(
-                max_mem_size=self.config.h2o_max_mem_size,
+                max_mem_size=mem_size,
                 nthreads=-1,  # Use all available cores
+                min_mem_size="2g",
             )
             
             self._h2o_initialized = True
-            logger.info(f"H2O initialized with {self.config.h2o_max_mem_size} memory")
+            logger.info(f"H2O initialized with {mem_size} memory")
             
         except ImportError:
             logger.error("H2O not installed. Install with: pip install h2o")
@@ -113,6 +123,42 @@ class H2OTrainer:
         except Exception as e:
             logger.error(f"Failed to initialize H2O: {e}")
             raise
+    
+    def _get_adaptive_mem_size(self, n_samples: int, n_features: int) -> str:
+        """Calculate appropriate H2O memory based on dataset size."""
+        # Estimate: each sample * feature * 8 bytes * overhead factor
+        estimated_mb = (n_samples * n_features * 8 * 10) / (1024 * 1024)
+        
+        if n_samples < 500:
+            return "4g"
+        elif n_samples < 2000:
+            return "8g"
+        elif n_samples < 10000:
+            return "16g"
+        else:
+            return self.config.h2o_max_mem_size  # Use configured max
+    
+    def _get_adaptive_min_rows(self, n_samples: int) -> int:
+        """Calculate appropriate min_rows based on training set size."""
+        if n_samples < 200:
+            return max(5, int(n_samples * 0.05))
+        elif n_samples < 500:
+            return max(10, int(n_samples * 0.05))
+        elif n_samples < 1000:
+            return max(20, int(n_samples * 0.03))
+        else:
+            return 100  # H2O default
+    
+    def _shutdown_h2o(self) -> None:
+        """Shutdown H2O cluster safely."""
+        if self._h2o_initialized and self._h2o:
+            try:
+                self._h2o.remove_all()
+                self._h2o.cluster().shutdown()
+            except:
+                pass
+            self._h2o_initialized = False
+            self._last_model = None
     
     def train(
         self,
@@ -145,7 +191,13 @@ class H2OTrainer:
         Returns:
             H2OModelResult with trained model info
         """
-        self._init_h2o()
+        # Calculate adaptive memory based on dataset size
+        adaptive_mem = self._get_adaptive_mem_size(len(train_df), len(feature_columns))
+        self._init_h2o(max_mem_size=adaptive_mem)
+        
+        # Calculate adaptive min_rows to prevent GBM failures on small data
+        n_train = len(train_df)
+        adaptive_min_rows = self._get_adaptive_min_rows(n_train)
         
         # Fast mode for walk-forward validation folds - prioritize speed
         if fast_mode:
@@ -165,21 +217,40 @@ class H2OTrainer:
             stopping_rounds = 5
             # Full mode: Include StackedEnsemble for best performance
             include_algos = ["GBM", "XGBoost", "GLM", "DRF", "StackedEnsemble"]
+        
+        # Adapt nfolds to dataset size to prevent CV splits with too few samples
+        if n_train < 100:
+            nfolds = 2
+        elif n_train < 300:
+            nfolds = min(nfolds, 3)
             
         seed = seed or self.config.h2o_seed
         
         logger.info(
             f"Starting H2O AutoML training for {sport_code} {bet_type} "
-            f"with {len(train_df)} samples (fast_mode={fast_mode})"
+            f"with {n_train} samples, min_rows={adaptive_min_rows}, "
+            f"nfolds={nfolds}, mem={adaptive_mem} (fast_mode={fast_mode})"
         )
         
         start_time = datetime.now(timezone.utc)
         
+        # Track H2O frames for cleanup
+        frames_to_cleanup = []
+        
         try:
             from h2o.automl import H2OAutoML
             
+            # Filter low-variance features BEFORE training
+            feature_columns = self._filter_low_variance_features(
+                train_df, feature_columns
+            )
+            
+            if len(feature_columns) == 0:
+                raise ValueError("No features remaining after variance filtering")
+            
             # Convert to H2O frames
             train_h2o = self._h2o.H2OFrame(train_df)
+            frames_to_cleanup.append(train_h2o)
             
             # Set target as categorical for classification
             train_h2o[target_column] = train_h2o[target_column].asfactor()
@@ -188,6 +259,7 @@ class H2OTrainer:
             valid_h2o = None
             if validation_df is not None:
                 valid_h2o = self._h2o.H2OFrame(validation_df)
+                frames_to_cleanup.append(valid_h2o)
                 valid_h2o[target_column] = valid_h2o[target_column].asfactor()
             
             # Configure AutoML with dynamic settings
@@ -207,6 +279,7 @@ class H2OTrainer:
                 stopping_rounds=stopping_rounds,
                 include_algos=include_algos,
                 project_name=unique_project,
+                exploitation_ratio=0.1 if n_train < 500 else 0.0,  # More exploration for small datasets
             )
             
             # Train
@@ -318,6 +391,13 @@ class H2OTrainer:
         except Exception as e:
             logger.error(f"H2O training failed: {e}")
             raise
+        finally:
+            # CRITICAL: Clean up H2O frames to prevent memory leaks
+            for frame in frames_to_cleanup:
+                try:
+                    self._h2o.remove(frame)
+                except:
+                    pass
     
     def predict(
         self,
@@ -430,6 +510,64 @@ class H2OTrainer:
             logger.error(f"MOJO prediction failed: {e}")
             raise
     
+    def _filter_low_variance_features(
+        self,
+        df: pd.DataFrame,
+        feature_columns: List[str],
+        variance_threshold: float = 0.001,
+    ) -> List[str]:
+        """
+        Remove features with near-zero variance that H2O would drop anyway.
+        Pre-filtering prevents H2O 'bad and constant' warnings and improves stability.
+        
+        Args:
+            df: Training dataframe
+            feature_columns: List of feature column names
+            variance_threshold: Minimum variance to keep a feature
+            
+        Returns:
+            Filtered list of feature columns
+        """
+        try:
+            # Calculate variance for each feature
+            variances = df[feature_columns].var()
+            
+            # Also check for constant columns (all same value)
+            nunique = df[feature_columns].nunique()
+            
+            selected = []
+            dropped = []
+            
+            for col in feature_columns:
+                col_var = variances.get(col, 0)
+                col_unique = nunique.get(col, 0)
+                
+                # Drop if: zero/near-zero variance OR only 1 unique value
+                if col_unique <= 1 or col_var < variance_threshold:
+                    dropped.append(col)
+                else:
+                    selected.append(col)
+            
+            if dropped:
+                logger.info(
+                    f"Pre-filtered {len(dropped)} low-variance features: "
+                    f"{dropped[:10]}{'...' if len(dropped) > 10 else ''}"
+                )
+            
+            if not selected:
+                logger.warning(
+                    "All features have low variance! Keeping top features by variance."
+                )
+                # Fallback: keep top 10 features by variance
+                top_features = variances.nlargest(min(10, len(feature_columns)))
+                selected = top_features.index.tolist()
+            
+            return selected
+            
+        except Exception as e:
+            logger.warning(f"Feature variance filtering failed: {e}. Using all features.")
+            return feature_columns
+
     def _save_model(
         self,
         model,
@@ -509,14 +647,31 @@ class H2OTrainer:
         return None
     
     def cleanup(self) -> None:
-        """Cleanup H2O cluster"""
+        """Cleanup H2O cluster with proper resource deallocation."""
         if self._h2o_initialized and self._h2o:
             try:
+                # Remove last model reference
+                if self._last_model:
+                    try:
+                        self._h2o.remove(self._last_model.model_id)
+                    except:
+                        pass
+                    self._last_model = None
+                
+                # Remove all remaining frames and models
+                try:
+                    self._h2o.remove_all()
+                except:
+                    pass
+                
+                # Shutdown cluster
                 self._h2o.cluster().shutdown()
                 self._h2o_initialized = False
-                logger.info("H2O cluster shutdown")
-            except:
-                pass
+                self._target_mem_size = None
+                logger.info("H2O cluster shutdown complete")
+            except Exception as e:
+                logger.warning(f"H2O cleanup error: {e}")
+                self._h2o_initialized = False
 
 
 class H2OTrainerMock:

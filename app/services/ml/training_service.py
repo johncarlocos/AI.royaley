@@ -379,15 +379,24 @@ class TrainingService:
                     )
                 
                 # Walk-forward validation (optional)
+                # FIXED: Require 2000+ samples (was 1000) for stable walk-forward folds
+                # Small datasets produce folds with ~150 samples causing GBM min_rows crashes
                 wfv_result = None
-                if use_walk_forward and len(train_df) > 1000:
+                if use_walk_forward and len(train_df) > 2000:
                     logger.info("Running walk-forward validation...")
                     wfv_result = await self._run_walk_forward_validation(
                         train_df, feature_columns, target_column, framework,
                         sport_code=sport_code, bet_type=bet_type
                     )
-                    # Safely access overall_metrics - may not exist if all folds failed
-                    if wfv_result and hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
+                elif use_walk_forward:
+                    logger.warning(
+                        f"Skipping walk-forward validation: {len(train_df)} samples < 2000 required. "
+                        f"Using cross-validation only for model evaluation."
+                    )
+                
+                # Safely access overall_metrics from WFV result
+                if wfv_result:
+                    if hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
                         result.wfv_accuracy = wfv_result.overall_metrics.get("accuracy", 0.0)
                         result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0)
                     else:

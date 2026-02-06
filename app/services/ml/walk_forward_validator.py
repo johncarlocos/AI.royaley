@@ -246,8 +246,22 @@ class WalkForwardValidator:
             train_df = data[train_mask].copy()
             test_df = data[test_mask].copy()
             
-            # Skip if no test data
-            if len(test_df) == 0:
+            # Skip if no test data or too few samples for reliable metrics
+            if len(test_df) < 5:
+                if len(test_df) > 0:
+                    logger.warning(
+                        f"Fold {fold_number}: Skipping - only {len(test_df)} test samples "
+                        f"(minimum 5 required for reliable metrics)"
+                    )
+                current_test_start += timedelta(days=self.step_size_days)
+                continue
+            
+            # Skip if training set is too small for H2O
+            if len(train_df) < 50:
+                logger.warning(
+                    f"Fold {fold_number}: Skipping - only {len(train_df)} training samples "
+                    f"(minimum 50 required)"
+                )
                 current_test_start += timedelta(days=self.step_size_days)
                 continue
             
@@ -388,6 +402,18 @@ class WalkForwardValidator:
             except Exception as e:
                 logger.error(f"Fold {fold.fold_number} failed: {e}")
                 continue
+            finally:
+                # CRITICAL: Clean up H2O models/frames between folds to prevent OOM
+                if hasattr(trainer, '_last_model') and trainer._last_model is not None:
+                    try:
+                        if hasattr(trainer, '_h2o') and trainer._h2o:
+                            trainer._h2o.remove(trainer._last_model.model_id)
+                            trainer._last_model = None
+                    except:
+                        pass
+                # Force garbage collection between folds
+                import gc
+                gc.collect()
         
         if not fold_metrics:
             logger.error("No successful folds in walk-forward validation")

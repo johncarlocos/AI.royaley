@@ -361,8 +361,73 @@ class H2OTrainer:
                 validation_frame=valid_h2o,
             )
             
-            # Get best model
+            # Helper: Extract scalar from H2O's deeply nested lists like [[0.5]]
+            def extract_scalar(value, default=0.0):
+                """Recursively extract scalar from any nested structure."""
+                if value is None:
+                    return default
+                depth = 0
+                while isinstance(value, (list, tuple)) and depth < 10:
+                    if len(value) == 0:
+                        return default
+                    value = value[0]
+                    depth += 1
+                try:
+                    result = float(value)
+                    if result != result:  # NaN check
+                        return default
+                    return result
+                except (TypeError, ValueError):
+                    return default
+            
+            # Get best model — with degenerate model guard
             best_model = aml.leader
+            leader_auc = 0.0
+            try:
+                leader_auc = extract_scalar(best_model.model_performance().auc(), 0.0)
+            except:
+                pass
+            
+            # GUARD: If leader AUC < 0.52, it's degenerate (worse than coin flip).
+            # Walk down leaderboard to find a model with real signal.
+            if leader_auc < 0.52:
+                logger.warning(
+                    f"⚠️ Leader model {best_model.model_id} has degenerate AUC={leader_auc:.4f} "
+                    f"(below 0.52). Searching leaderboard for better model..."
+                )
+                lb = aml.leaderboard.as_data_frame()
+                fallback_found = False
+                for idx, row in lb.iterrows():
+                    if idx == 0:  # Skip leader, already checked
+                        continue
+                    try:
+                        candidate = self._h2o.get_model(row['model_id'])
+                        candidate_auc = extract_scalar(
+                            candidate.model_performance().auc(), 0.0
+                        )
+                        if candidate_auc >= 0.52:
+                            logger.info(
+                                f"✅ Fallback to model #{idx+1}: {row['model_id']} "
+                                f"AUC={candidate_auc:.4f} (was {leader_auc:.4f})"
+                            )
+                            best_model = candidate
+                            leader_auc = candidate_auc
+                            fallback_found = True
+                            break
+                        else:
+                            logger.debug(
+                                f"  Skipping #{idx+1} {row['model_id']}: AUC={candidate_auc:.4f}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"  Could not load #{idx+1}: {e}")
+                        continue
+                
+                if not fallback_found:
+                    logger.warning(
+                        f"⚠️ No model on leaderboard has AUC >= 0.52. "
+                        f"Using leader anyway but flagging as unreliable."
+                    )
+            
             model_id = best_model.model_id
             
             # Store model in memory for predict_with_loaded
@@ -392,26 +457,6 @@ class H2OTrainer:
             
             training_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             
-            # Extract metrics safely - H2O returns deeply nested lists like [[0.5]]
-            def extract_scalar(value, default=0.0):
-                """Recursively extract scalar from any nested structure."""
-                if value is None:
-                    return default
-                # Unwrap nested lists/tuples
-                depth = 0
-                while isinstance(value, (list, tuple)) and depth < 10:
-                    if len(value) == 0:
-                        return default
-                    value = value[0]
-                    depth += 1
-                try:
-                    result = float(value)
-                    if result != result:  # NaN check
-                        return default
-                    return result
-                except (TypeError, ValueError):
-                    return default
-            
             # Extract each metric with try/except
             try:
                 auc_val = extract_scalar(val_perf.auc(), 0.0)
@@ -428,7 +473,25 @@ class H2OTrainer:
             except:
                 logloss_val = 0.0
             
-            accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))
+            # FIX: Use actual confusion matrix accuracy instead of 1-MPCE
+            # MPCE averages per-class error rates which masks degenerate predictions
+            try:
+                cm = val_perf.confusion_matrix()
+                cm_df = cm.to_list()
+                # H2O confusion matrix: last row/col are totals
+                # For binary: [[TN, FP, total], [FN, TP, total], [total, total, grand_total]]
+                correct = 0
+                total = 0
+                for i in range(len(cm_df) - 1):  # Skip totals row
+                    for j in range(len(cm_df[i]) - 1):  # Skip totals col
+                        if i == j:
+                            correct += cm_df[i][j]
+                        total += cm_df[i][j]
+                accuracy_val = correct / total if total > 0 else 0.0
+                logger.info(f"Confusion matrix accuracy: {accuracy_val:.4f} (correct={correct}/{total})")
+            except Exception as e:
+                logger.warning(f"Could not extract CM accuracy ({e}), falling back to 1-MPCE")
+                accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))
             
             # Create result
             result = H2OModelResult(

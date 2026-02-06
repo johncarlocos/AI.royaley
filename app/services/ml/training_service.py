@@ -808,6 +808,216 @@ class TrainingService:
                     logger.warning(f"🔧 No total line column found - over_result NaN rows will be dropped")
             
             # ================================================================
+            # FIX 2d: ADVANCED FEATURE ENGINEERING
+            # Create features that identify VALUE - when the line is wrong
+            # Focus on: ATS trends, situational spots, line value indicators
+            # ================================================================
+            derived_features_created = []
+            
+            # ============================================================
+            # TIER 1: BASIC DIFFERENTIAL FEATURES
+            # ============================================================
+            
+            # 1. Power rating differential
+            if 'power_rating_diff' not in df.columns:
+                if 'home_power_rating' in df.columns and 'away_power_rating' in df.columns:
+                    df['power_rating_diff'] = df['home_power_rating'] - df['away_power_rating']
+                    derived_features_created.append('power_rating_diff')
+            
+            # 2. Momentum differential (streak difference)
+            if 'momentum_diff' not in df.columns:
+                if 'home_streak' in df.columns and 'away_streak' in df.columns:
+                    df['momentum_diff'] = df['home_streak'] - df['away_streak']
+                    derived_features_created.append('momentum_diff')
+            
+            # 3. Recent form differentials
+            if 'recent_form_diff' not in df.columns:
+                if 'home_wins_last10' in df.columns and 'away_wins_last10' in df.columns:
+                    df['recent_form_diff'] = df['home_wins_last10'] - df['away_wins_last10']
+                    derived_features_created.append('recent_form_diff')
+            
+            if 'recent_form5_diff' not in df.columns:
+                if 'home_wins_last5' in df.columns and 'away_wins_last5' in df.columns:
+                    df['recent_form5_diff'] = df['home_wins_last5'] - df['away_wins_last5']
+                    derived_features_created.append('recent_form5_diff')
+            
+            # 4. Scoring and defense differentials
+            if 'scoring_diff' not in df.columns:
+                if 'home_avg_pts_last10' in df.columns and 'away_avg_pts_last10' in df.columns:
+                    df['scoring_diff'] = df['home_avg_pts_last10'] - df['away_avg_pts_last10']
+                    derived_features_created.append('scoring_diff')
+            
+            if 'defense_diff' not in df.columns:
+                if 'home_avg_pts_allowed_last10' in df.columns and 'away_avg_pts_allowed_last10' in df.columns:
+                    df['defense_diff'] = df['away_avg_pts_allowed_last10'] - df['home_avg_pts_allowed_last10']
+                    derived_features_created.append('defense_diff')
+            
+            # 5. Margin differential
+            if 'margin_diff' not in df.columns:
+                if 'home_avg_margin_last10' in df.columns and 'away_avg_margin_last10' in df.columns:
+                    df['margin_diff'] = df['home_avg_margin_last10'] - df['away_avg_margin_last10']
+                    derived_features_created.append('margin_diff')
+            
+            # 6. Venue strength differential
+            if 'venue_strength_diff' not in df.columns:
+                if 'home_home_win_pct' in df.columns and 'away_away_win_pct' in df.columns:
+                    df['venue_strength_diff'] = df['home_home_win_pct'] - df['away_away_win_pct']
+                    derived_features_created.append('venue_strength_diff')
+            
+            # ============================================================
+            # TIER 2: LINE VALUE FEATURES (Key for ATS predictions)
+            # These compare team strength to the betting line
+            # ============================================================
+            
+            # 7. Spread Value: Is the line too high/low based on power ratings?
+            # Positive = home team getting more points than deserved (value on home cover)
+            if 'spread_value' not in df.columns:
+                if 'power_rating_diff' in df.columns and 'spread_close' in df.columns:
+                    # power_rating_diff predicts margin, spread_close is the line
+                    # If PR says home wins by 5, but spread is -7, that's value on home cover
+                    df['spread_value'] = df['power_rating_diff'] + df['spread_close'].fillna(0)
+                    derived_features_created.append('spread_value')
+            
+            # 8. Margin Value: Compare expected margin to spread
+            if 'margin_value' not in df.columns:
+                if 'margin_diff' in df.columns and 'spread_close' in df.columns:
+                    df['margin_value'] = df['margin_diff'] + df['spread_close'].fillna(0)
+                    derived_features_created.append('margin_value')
+            
+            # 9. ATS Record differential (historical covering ability)
+            if 'ats_diff' not in df.columns:
+                if 'home_ats_record_last10' in df.columns and 'away_ats_record_last10' in df.columns:
+                    df['ats_diff'] = df['home_ats_record_last10'].fillna(0.5) - df['away_ats_record_last10'].fillna(0.5)
+                    derived_features_created.append('ats_diff')
+            
+            # ============================================================
+            # TIER 3: LINE MOVEMENT FEATURES
+            # Movement often indicates sharp action
+            # ============================================================
+            
+            # 10. Line movement indicators
+            if 'line_move_direction' not in df.columns:
+                if 'spread_close' in df.columns and 'spread_open' in df.columns:
+                    df['line_move_direction'] = np.sign(df['spread_close'] - df['spread_open'])
+                    derived_features_created.append('line_move_direction')
+            
+            if 'total_move_direction' not in df.columns:
+                if 'total_close' in df.columns and 'total_open' in df.columns:
+                    df['total_move_direction'] = np.sign(df['total_close'] - df['total_open'])
+                    derived_features_created.append('total_move_direction')
+            
+            # 11. Line movement magnitude (bigger moves = more significant)
+            if 'spread_move_magnitude' not in df.columns:
+                if 'spread_movement' in df.columns:
+                    df['spread_move_magnitude'] = df['spread_movement'].abs()
+                    derived_features_created.append('spread_move_magnitude')
+            
+            # ============================================================
+            # TIER 4: SITUATIONAL SPOT FEATURES
+            # ============================================================
+            
+            # 12. Revenge game indicator (already in data, but create combined)
+            if 'revenge_edge' not in df.columns:
+                if 'home_is_revenge' in df.columns and 'away_is_revenge' in df.columns:
+                    df['revenge_edge'] = df['home_is_revenge'].astype(int) - df['away_is_revenge'].astype(int)
+                    derived_features_created.append('revenge_edge')
+            
+            # 13. Rest advantage combined with power
+            if 'rest_power_combo' not in df.columns:
+                if 'rest_advantage' in df.columns and 'power_rating_diff' in df.columns:
+                    df['rest_power_combo'] = df['rest_advantage'] * df['power_rating_diff'].fillna(0) / 10
+                    derived_features_created.append('rest_power_combo')
+            
+            # 14. Letdown/Lookahead spot difference
+            if 'spot_danger' not in df.columns:
+                danger = np.zeros(len(df))
+                if 'home_letdown_spot' in df.columns:
+                    danger -= df['home_letdown_spot'].astype(int)
+                if 'home_lookahead_spot' in df.columns:
+                    danger -= df['home_lookahead_spot'].astype(int)
+                if 'away_letdown_spot' in df.columns:
+                    danger += df['away_letdown_spot'].astype(int)
+                if 'away_lookahead_spot' in df.columns:
+                    danger += df['away_lookahead_spot'].astype(int)
+                df['spot_danger'] = danger
+                derived_features_created.append('spot_danger')
+            
+            # ============================================================
+            # TIER 5: COMPOSITE FEATURES
+            # ============================================================
+            
+            # 15. Combined strength indicator
+            if 'combined_strength' not in df.columns:
+                components = []
+                if 'power_rating_diff' in df.columns:
+                    max_pr = df['power_rating_diff'].abs().max()
+                    if max_pr > 0:
+                        components.append(df['power_rating_diff'].fillna(0) / max_pr)
+                if 'momentum_diff' in df.columns:
+                    components.append(df['momentum_diff'].fillna(0) / 10)
+                if 'recent_form_diff' in df.columns:
+                    components.append(df['recent_form_diff'].fillna(0) / 10)
+                if components:
+                    df['combined_strength'] = sum(components) / len(components)
+                    derived_features_created.append('combined_strength')
+            
+            # 16. Combined value indicator (for spread bets)
+            if 'combined_value' not in df.columns:
+                value_components = []
+                if 'spread_value' in df.columns:
+                    max_sv = df['spread_value'].abs().max()
+                    if max_sv and max_sv > 0:
+                        value_components.append(df['spread_value'].fillna(0) / max_sv)
+                if 'margin_value' in df.columns:
+                    max_mv = df['margin_value'].abs().max()
+                    if max_mv and max_mv > 0:
+                        value_components.append(df['margin_value'].fillna(0) / max_mv)
+                if 'ats_diff' in df.columns:
+                    value_components.append(df['ats_diff'].fillna(0))
+                if value_components:
+                    df['combined_value'] = sum(value_components) / len(value_components)
+                    derived_features_created.append('combined_value')
+            
+            # 17. Momentum trend (are they getting better or worse?)
+            if 'home_momentum_trend' not in df.columns:
+                if 'home_wins_last5' in df.columns and 'home_wins_last10' in df.columns:
+                    # If last 5 > (last 10 / 2), they're improving
+                    df['home_momentum_trend'] = df['home_wins_last5'] - (df['home_wins_last10'] / 2)
+                    derived_features_created.append('home_momentum_trend')
+            
+            if 'away_momentum_trend' not in df.columns:
+                if 'away_wins_last5' in df.columns and 'away_wins_last10' in df.columns:
+                    df['away_momentum_trend'] = df['away_wins_last5'] - (df['away_wins_last10'] / 2)
+                    derived_features_created.append('away_momentum_trend')
+            
+            # 18. Momentum trend differential
+            if 'momentum_trend_diff' not in df.columns:
+                if 'home_momentum_trend' in df.columns and 'away_momentum_trend' in df.columns:
+                    df['momentum_trend_diff'] = df['home_momentum_trend'] - df['away_momentum_trend']
+                    derived_features_created.append('momentum_trend_diff')
+            
+            # 19. Win pct differential (normalized)
+            if 'win_pct_diff' not in df.columns:
+                if 'home_win_pct_last10' in df.columns and 'away_win_pct_last10' in df.columns:
+                    df['win_pct_diff'] = df['home_win_pct_last10'] - df['away_win_pct_last10']
+                    derived_features_created.append('win_pct_diff')
+            
+            # 20. Expected margin vs spread (key value indicator)
+            if 'expected_margin_vs_spread' not in df.columns:
+                if 'margin_diff' in df.columns and 'spread_close' in df.columns:
+                    # margin_diff = expected home margin
+                    # spread_close = line (negative = home favored)
+                    # If margin_diff=5 and spread=-7, expected to win by 5 but line says 7, value on home
+                    df['expected_margin_vs_spread'] = df['margin_diff'] + df['spread_close'].fillna(0)
+                    derived_features_created.append('expected_margin_vs_spread')
+            
+            if derived_features_created:
+                logger.info(
+                    f"📊 FEATURE ENGINEERING: Created {len(derived_features_created)} derived features: "
+                    f"{derived_features_created[:10]}{'...' if len(derived_features_created) > 10 else ''}"
+                )
+            
+            # ================================================================
             # FIX 2c: SPORT-AWARE MIN_SAMPLES
             # CFL (62 rows) and WNBA (114 rows) are valid but small datasets
             # Auto-lower min_samples for sports with inherently less data

@@ -156,13 +156,19 @@ class H2OTrainer:
             stopping_rounds = 2
             # Exclude StackedEnsemble in fast_mode - causes NullPointerException on small datasets
             exclude_algos = ["DeepLearning", "StackedEnsemble"]
+            # Focus on fast, effective algorithms
+            include_algos = ["GBM", "XGBoost", "GLM", "DRF"]
         else:
-            max_models = max_models or self.config.h2o_max_models
-            max_runtime_secs = max_runtime_secs or self.config.h2o_max_runtime_secs
-            nfolds = self.config.h2o_nfolds
+            # FULL training mode - optimize for best predictions
+            max_models = max_models or 20  # More models for better selection
+            max_runtime_secs = max_runtime_secs or 300  # 5 minutes for thorough search
+            nfolds = 5  # More folds for robust validation
             stopping_tolerance = 0.001
             stopping_rounds = 5
-            exclude_algos = ["DeepLearning"]  # Only exclude slow deep learning in full mode
+            # Include stacked ensemble for final model (best performance)
+            exclude_algos = ["DeepLearning"]  # Only exclude slow deep learning
+            # Use all good algorithms including StackedEnsemble
+            include_algos = ["GBM", "XGBoost", "GLM", "DRF", "StackedEnsemble"]
             
         seed = seed or self.config.h2o_seed
         
@@ -203,6 +209,7 @@ class H2OTrainer:
                 stopping_metric="AUC",
                 stopping_tolerance=stopping_tolerance,
                 stopping_rounds=stopping_rounds,
+                include_algos=include_algos,
                 exclude_algos=exclude_algos,
                 project_name=unique_project,
             )

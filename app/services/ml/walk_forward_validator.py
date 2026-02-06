@@ -318,14 +318,25 @@ class WalkForwardValidator:
                 # Train model on this fold
                 logger.info(f"Training fold {fold.fold_number}...")
                 
-                # Train
-                trainer.train(
-                    train_df=train_df,
-                    target_column=target_column,
-                    feature_columns=feature_columns,
-                    sport_code=sport_code,
-                    bet_type=bet_type,
-                )
+                # Train with fast_mode if supported (H2O trainer)
+                train_kwargs = {
+                    'train_df': train_df,
+                    'target_column': target_column,
+                    'feature_columns': feature_columns,
+                    'sport_code': sport_code,
+                    'bet_type': bet_type,
+                }
+                
+                # Check if trainer supports fast_mode
+                import inspect
+                try:
+                    sig = inspect.signature(trainer.train)
+                    if 'fast_mode' in sig.parameters:
+                        train_kwargs['fast_mode'] = True
+                except:
+                    pass
+                
+                trainer.train(**train_kwargs)
                 
                 # Predict on test set
                 if hasattr(trainer, 'predict_with_loaded'):

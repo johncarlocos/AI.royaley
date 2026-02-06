@@ -123,6 +123,7 @@ class H2OTrainer:
         max_models: int = None,
         max_runtime_secs: int = None,
         seed: int = None,
+        fast_mode: bool = False,
     ) -> H2OModelResult:
         """
         Train H2O AutoML model.
@@ -137,19 +138,32 @@ class H2OTrainer:
             max_models: Maximum models to train
             max_runtime_secs: Maximum training time
             seed: Random seed
+            fast_mode: Use fast settings for walk-forward validation
             
         Returns:
             H2OModelResult with trained model info
         """
         self._init_h2o()
         
-        max_models = max_models or self.config.h2o_max_models
-        max_runtime_secs = max_runtime_secs or self.config.h2o_max_runtime_secs
+        # Fast mode for walk-forward validation folds - prioritize speed
+        if fast_mode:
+            max_models = max_models or 5
+            max_runtime_secs = max_runtime_secs or 30
+            nfolds = 3
+            stopping_tolerance = 0.02
+            stopping_rounds = 2
+        else:
+            max_models = max_models or self.config.h2o_max_models
+            max_runtime_secs = max_runtime_secs or self.config.h2o_max_runtime_secs
+            nfolds = self.config.h2o_nfolds
+            stopping_tolerance = 0.001
+            stopping_rounds = 5
+            
         seed = seed or self.config.h2o_seed
         
         logger.info(
             f"Starting H2O AutoML training for {sport_code} {bet_type} "
-            f"with {len(train_df)} samples"
+            f"with {len(train_df)} samples (fast_mode={fast_mode})"
         )
         
         start_time = datetime.now(timezone.utc)
@@ -169,17 +183,17 @@ class H2OTrainer:
                 valid_h2o = self._h2o.H2OFrame(validation_df)
                 valid_h2o[target_column] = valid_h2o[target_column].asfactor()
             
-            # Configure AutoML
+            # Configure AutoML with dynamic settings
             aml = H2OAutoML(
                 max_models=max_models,
                 max_runtime_secs=max_runtime_secs,
                 seed=seed,
-                nfolds=self.config.h2o_nfolds,
+                nfolds=nfolds,
                 balance_classes=True,
                 sort_metric="AUC",
                 stopping_metric="AUC",
-                stopping_tolerance=0.001,
-                stopping_rounds=5,
+                stopping_tolerance=stopping_tolerance,
+                stopping_rounds=stopping_rounds,
                 exclude_algos=["DeepLearning"],  # Exclude slow deep learning
                 project_name=f"{sport_code}_{bet_type}",
             )
@@ -219,18 +233,43 @@ class H2OTrainer:
             
             training_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             
-            # Extract metrics safely (some H2O methods return lists for multiclass)
-            def safe_metric(value, default=0.0):
-                """Extract scalar from metric that might be a list."""
+            # Extract metrics safely - H2O returns deeply nested lists like [[0.5]]
+            def extract_scalar(value, default=0.0):
+                """Recursively extract scalar from any nested structure."""
                 if value is None:
                     return default
-                if isinstance(value, (list, tuple)):
-                    return float(value[0]) if value else default
-                return float(value)
+                # Unwrap nested lists/tuples
+                depth = 0
+                while isinstance(value, (list, tuple)) and depth < 10:
+                    if len(value) == 0:
+                        return default
+                    value = value[0]
+                    depth += 1
+                try:
+                    result = float(value)
+                    if result != result:  # NaN check
+                        return default
+                    return result
+                except (TypeError, ValueError):
+                    return default
             
-            auc_val = safe_metric(val_perf.auc() if hasattr(val_perf, 'auc') else 0.0)
-            mpce_val = safe_metric(val_perf.mean_per_class_error() if hasattr(val_perf, 'mean_per_class_error') else 0.0)
-            logloss_val = safe_metric(val_perf.logloss() if hasattr(val_perf, 'logloss') else 0.0)
+            # Extract each metric with try/except
+            try:
+                auc_val = extract_scalar(val_perf.auc(), 0.0)
+            except:
+                auc_val = 0.0
+            
+            try:
+                mpce_val = extract_scalar(val_perf.mean_per_class_error(), 0.5)
+            except:
+                mpce_val = 0.5
+            
+            try:
+                logloss_val = extract_scalar(val_perf.logloss(), 0.0)
+            except:
+                logloss_val = 0.0
+            
+            accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))
             
             # Create result
             result = H2OModelResult(
@@ -239,7 +278,7 @@ class H2OTrainer:
                 bet_type=bet_type,
                 algorithm=best_model.algo,
                 auc=auc_val,
-                accuracy=1.0 - mpce_val,
+                accuracy=accuracy_val,
                 log_loss=logloss_val,
                 mean_per_class_error=mpce_val,
                 training_time_secs=training_time,

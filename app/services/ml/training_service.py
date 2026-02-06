@@ -814,7 +814,7 @@ class TrainingService:
                     if home_win_pct > 0.70:
                         logger.warning(
                             f"🎾 TENNIS BIAS DETECTED: home_win={home_win_pct:.1%}. "
-                            f"Randomly swapping home/away for 50% of rows."
+                            f"Deterministically swapping home/away based on game_id hash."
                         )
                         
                         # Find all home_/away_ paired feature columns
@@ -833,12 +833,23 @@ class TrainingService:
                         if 'home_home_win_pct' in df.columns and 'away_away_win_pct' in df.columns:
                             swap_pairs.append(('home_home_win_pct', 'away_away_win_pct'))
                         
-                        # Randomly select ~50% of rows to swap
-                        np.random.seed(42)
-                        n_swap = len(df) // 2
-                        swap_mask = np.zeros(len(df), dtype=bool)
-                        swap_idx = np.random.choice(len(df), size=n_swap, replace=False)
-                        swap_mask[swap_idx] = True
+                        # DETERMINISTIC swap based on game_id hash (NOT random!)
+                        # This ensures same game is ALWAYS swapped or not, regardless of CV fold
+                        # Prevents information leakage from swap pattern
+                        if 'master_game_id' in df.columns:
+                            # Hash game_id to deterministically select ~50% of rows
+                            swap_mask = df['master_game_id'].apply(
+                                lambda x: hash(str(x)) % 2 == 0
+                            ).values
+                        else:
+                            # Fallback: alphabetical by player names
+                            if 'home_team_name' in df.columns and 'away_team_name' in df.columns:
+                                swap_mask = (df['home_team_name'] > df['away_team_name']).values
+                            else:
+                                # Last resort: every other row (by index)
+                                swap_mask = np.arange(len(df)) % 2 == 0
+                        
+                        n_swap = swap_mask.sum()
                         
                         # Perform swaps on selected rows
                         for home_col, away_col in swap_pairs:

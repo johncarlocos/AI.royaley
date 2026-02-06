@@ -86,6 +86,8 @@ class H2OTrainer:
         
         self._h2o_initialized = False
         self._h2o = None
+        self._last_model = None
+        self._last_feature_columns = None
         
     def _init_h2o(self) -> None:
         """Initialize H2O cluster"""
@@ -184,6 +186,10 @@ class H2OTrainer:
                 valid_h2o[target_column] = valid_h2o[target_column].asfactor()
             
             # Configure AutoML with dynamic settings
+            # Use unique project name per training run to avoid model conflicts across folds
+            import uuid
+            unique_project = f"{sport_code}_{bet_type}_{uuid.uuid4().hex[:8]}"
+            
             aml = H2OAutoML(
                 max_models=max_models,
                 max_runtime_secs=max_runtime_secs,
@@ -195,7 +201,7 @@ class H2OTrainer:
                 stopping_tolerance=stopping_tolerance,
                 stopping_rounds=stopping_rounds,
                 exclude_algos=["DeepLearning"],  # Exclude slow deep learning
-                project_name=f"{sport_code}_{bet_type}",
+                project_name=unique_project,
             )
             
             # Train
@@ -209,6 +215,10 @@ class H2OTrainer:
             # Get best model
             best_model = aml.leader
             model_id = best_model.model_id
+            
+            # Store model in memory for predict_with_loaded
+            self._last_model = best_model
+            self._last_feature_columns = feature_columns
             
             # Extract performance metrics
             perf = best_model.model_performance()
@@ -340,6 +350,41 @@ class H2OTrainer:
             
         except Exception as e:
             logger.error(f"H2O prediction failed: {e}")
+            raise
+    
+    def predict_with_loaded(
+        self,
+        data: pd.DataFrame,
+        feature_columns: List[str],
+    ) -> np.ndarray:
+        """
+        Make predictions using the last trained model (still in memory).
+        Used by walk-forward validation to avoid save/load overhead.
+        
+        Args:
+            data: Data to predict on
+            feature_columns: Feature columns
+            
+        Returns:
+            Array of predicted probabilities
+        """
+        if not hasattr(self, '_last_model') or self._last_model is None:
+            raise ValueError("No model in memory. Call train() first.")
+        
+        try:
+            # Convert to H2O frame
+            data_h2o = self._h2o.H2OFrame(data[feature_columns])
+            
+            # Predict using in-memory model
+            predictions = self._last_model.predict(data_h2o)
+            
+            # Get probability of positive class
+            probs = predictions['p1'].as_data_frame()['p1'].values
+            
+            return probs
+            
+        except Exception as e:
+            logger.error(f"H2O predict_with_loaded failed: {e}")
             raise
     
     def predict_mojo(

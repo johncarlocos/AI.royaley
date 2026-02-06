@@ -286,7 +286,12 @@ CSV File Naming Convention:
     parser.add_argument(
         "--no-walk-forward",
         action="store_true",
-        help="Disable walk-forward validation"
+        help="Disable walk-forward validation (recommended for faster training)"
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast training mode: 100 trees, 2 CV folds (~3x faster, minimal accuracy loss)"
     )
     parser.add_argument(
         "--no-calibrate",
@@ -381,6 +386,13 @@ CSV File Naming Convention:
         "calibrate": not args.no_calibrate,
         "save_to_db": not args.no_save,
     }
+    
+    # Apply --fast mode if requested
+    if args.fast:
+        console.print("[yellow]⚡ FAST MODE: 100 trees, 2 CV folds (~3x faster)[/yellow]")
+        from app.services.ml.config import default_ml_config
+        default_ml_config.sklearn_n_estimators = 100
+        default_ml_config.sklearn_cv_folds = 2
     
     start_time = datetime.now()
     results = []

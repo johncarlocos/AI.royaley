@@ -219,16 +219,29 @@ class H2OTrainer:
             
             training_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             
+            # Extract metrics safely (some H2O methods return lists for multiclass)
+            def safe_metric(value, default=0.0):
+                """Extract scalar from metric that might be a list."""
+                if value is None:
+                    return default
+                if isinstance(value, (list, tuple)):
+                    return float(value[0]) if value else default
+                return float(value)
+            
+            auc_val = safe_metric(val_perf.auc() if hasattr(val_perf, 'auc') else 0.0)
+            mpce_val = safe_metric(val_perf.mean_per_class_error() if hasattr(val_perf, 'mean_per_class_error') else 0.0)
+            logloss_val = safe_metric(val_perf.logloss() if hasattr(val_perf, 'logloss') else 0.0)
+            
             # Create result
             result = H2OModelResult(
                 model_id=model_id,
                 sport_code=sport_code,
                 bet_type=bet_type,
                 algorithm=best_model.algo,
-                auc=val_perf.auc() if hasattr(val_perf, 'auc') else 0.0,
-                accuracy=1 - val_perf.mean_per_class_error() if hasattr(val_perf, 'mean_per_class_error') else 0.0,
-                log_loss=val_perf.logloss() if hasattr(val_perf, 'logloss') else 0.0,
-                mean_per_class_error=val_perf.mean_per_class_error() if hasattr(val_perf, 'mean_per_class_error') else 0.0,
+                auc=auc_val,
+                accuracy=1.0 - mpce_val,
+                log_loss=logloss_val,
+                mean_per_class_error=mpce_val,
                 training_time_secs=training_time,
                 n_training_samples=len(train_df),
                 n_features=len(feature_columns),

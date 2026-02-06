@@ -919,7 +919,8 @@ class TrainingService:
             # 12. Revenge game indicator (already in data, but create combined)
             if 'revenge_edge' not in df.columns:
                 if 'home_is_revenge' in df.columns and 'away_is_revenge' in df.columns:
-                    df['revenge_edge'] = df['home_is_revenge'].astype(int) - df['away_is_revenge'].astype(int)
+                    # Fill NaN with 0 (no revenge) before converting to int
+                    df['revenge_edge'] = df['home_is_revenge'].fillna(0).astype(int) - df['away_is_revenge'].fillna(0).astype(int)
                     derived_features_created.append('revenge_edge')
             
             # 13. Rest advantage combined with power
@@ -932,13 +933,13 @@ class TrainingService:
             if 'spot_danger' not in df.columns:
                 danger = np.zeros(len(df))
                 if 'home_letdown_spot' in df.columns:
-                    danger -= df['home_letdown_spot'].astype(int)
+                    danger -= df['home_letdown_spot'].fillna(0).astype(int)
                 if 'home_lookahead_spot' in df.columns:
-                    danger -= df['home_lookahead_spot'].astype(int)
+                    danger -= df['home_lookahead_spot'].fillna(0).astype(int)
                 if 'away_letdown_spot' in df.columns:
-                    danger += df['away_letdown_spot'].astype(int)
+                    danger += df['away_letdown_spot'].fillna(0).astype(int)
                 if 'away_lookahead_spot' in df.columns:
-                    danger += df['away_lookahead_spot'].astype(int)
+                    danger += df['away_lookahead_spot'].fillna(0).astype(int)
                 df['spot_danger'] = danger
                 derived_features_created.append('spot_danger')
             

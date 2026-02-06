@@ -386,8 +386,14 @@ class TrainingService:
                         train_df, feature_columns, target_column, framework,
                         sport_code=sport_code, bet_type=bet_type
                     )
-                    result.wfv_accuracy = wfv_result.overall_metrics.get("accuracy", 0.0) if wfv_result else 0.0
-                    result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0) if wfv_result else 0.0
+                    # Safely access overall_metrics - may not exist if all folds failed
+                    if wfv_result and hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
+                        result.wfv_accuracy = wfv_result.overall_metrics.get("accuracy", 0.0)
+                        result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0)
+                    else:
+                        logger.warning("Walk-forward validation returned no metrics (all folds may have failed)")
+                        result.wfv_accuracy = 0.0
+                        result.wfv_roi = 0.0
                 
                 # Split train/validation
                 # For small datasets, skip validation split (use CV-only)
@@ -2087,7 +2093,7 @@ class TrainingService:
             "training_time_secs": getattr(model_result, 'training_time_secs', 0.0),
         }
         
-        if wfv_result:
+        if wfv_result and hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
             metrics["wfv_accuracy"] = wfv_result.overall_metrics.get("accuracy", 0.0)
             metrics["wfv_roi"] = wfv_result.overall_metrics.get("roi", 0.0)
         

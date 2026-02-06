@@ -107,10 +107,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR $APP_HOME
 
-# Install runtime dependencies
+# Install runtime dependencies including Java for H2O
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    # Java JDK for H2O AutoML
+    openjdk-17-jdk-headless \
     # Chromium for Selenium (Action Network scraper)
     chromium \
     chromium-driver \
@@ -140,6 +142,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set Chrome environment variables for Selenium
 ENV CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/bin/chromedriver
+
+# Set Java environment for H2O
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
 
 # Create non-root user
 RUN groupadd --gid 1000 appgroup \

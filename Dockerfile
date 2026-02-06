@@ -111,8 +111,8 @@ WORKDIR $APP_HOME
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
-    # Java JDK for H2O AutoML
-    openjdk-17-jdk-headless \
+    # Java JDK for H2O AutoML (default-jdk works across Debian versions)
+    default-jdk-headless \
     # Chromium for Selenium (Action Network scraper)
     chromium \
     chromium-driver \
@@ -143,9 +143,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
-# Set Java environment for H2O
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
-    PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
+# Set Java environment for H2O (default-jdk installs to this path)
+ENV JAVA_HOME=/usr/lib/jvm/default-java \
+    PATH="/usr/lib/jvm/default-java/bin:$PATH"
 
 # Create non-root user
 RUN groupadd --gid 1000 appgroup \

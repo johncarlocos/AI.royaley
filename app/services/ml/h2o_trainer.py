@@ -154,9 +154,7 @@ class H2OTrainer:
             nfolds = 3
             stopping_tolerance = 0.02
             stopping_rounds = 2
-            # Exclude StackedEnsemble in fast_mode - causes NullPointerException on small datasets
-            exclude_algos = ["DeepLearning", "StackedEnsemble"]
-            # Focus on fast, effective algorithms
+            # Fast mode: Only fast algorithms, NO StackedEnsemble (causes crashes on small data)
             include_algos = ["GBM", "XGBoost", "GLM", "DRF"]
         else:
             # FULL training mode - optimize for best predictions
@@ -165,9 +163,7 @@ class H2OTrainer:
             nfolds = 5  # More folds for robust validation
             stopping_tolerance = 0.001
             stopping_rounds = 5
-            # Include stacked ensemble for final model (best performance)
-            exclude_algos = ["DeepLearning"]  # Only exclude slow deep learning
-            # Use all good algorithms including StackedEnsemble
+            # Full mode: Include StackedEnsemble for best performance
             include_algos = ["GBM", "XGBoost", "GLM", "DRF", "StackedEnsemble"]
             
         seed = seed or self.config.h2o_seed
@@ -210,7 +206,6 @@ class H2OTrainer:
                 stopping_tolerance=stopping_tolerance,
                 stopping_rounds=stopping_rounds,
                 include_algos=include_algos,
-                exclude_algos=exclude_algos,
                 project_name=unique_project,
             )
             

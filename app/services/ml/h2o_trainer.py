@@ -91,14 +91,21 @@ class H2OTrainer:
         self._target_mem_size = None  # Set before _init_h2o for adaptive memory
         
     def _init_h2o(self, max_mem_size: str = None) -> None:
-        """Initialize H2O cluster with adaptive memory sizing."""
+        """Initialize H2O cluster with adaptive memory sizing and crash recovery."""
         if self._h2o_initialized:
-            # If already running but we need different memory, restart
-            if max_mem_size and max_mem_size != self._target_mem_size:
-                logger.info(f"Restarting H2O with new memory: {max_mem_size}")
-                self._shutdown_h2o()
+            # Check if H2O is actually alive (not just flagged as initialized)
+            if self._is_h2o_alive():
+                # If already running but we need different memory, restart
+                if max_mem_size and max_mem_size != self._target_mem_size:
+                    logger.info(f"Restarting H2O with new memory: {max_mem_size}")
+                    self._shutdown_h2o()
+                else:
+                    return
             else:
-                return
+                # H2O JVM died but flag is stale — force restart
+                logger.warning("H2O server is dead (stale flag). Restarting...")
+                self._h2o_initialized = False
+                self._last_model = None
         
         try:
             import h2o
@@ -117,12 +124,27 @@ class H2OTrainer:
             self._h2o_initialized = True
             logger.info(f"H2O initialized with {mem_size} memory")
             
+            # Brief pause to let JVM stabilize
+            import time
+            time.sleep(1)
+            
         except ImportError:
             logger.error("H2O not installed. Install with: pip install h2o")
             raise
         except Exception as e:
             logger.error(f"Failed to initialize H2O: {e}")
             raise
+    
+    def _is_h2o_alive(self) -> bool:
+        """Check if H2O JVM is still running."""
+        if not self._h2o:
+            return False
+        try:
+            # Quick cluster status check — throws if JVM is dead
+            self._h2o.cluster().is_running()
+            return True
+        except Exception:
+            return False
     
     def _get_adaptive_mem_size(self, n_samples: int, n_features: int) -> str:
         """Calculate appropriate H2O memory based on dataset size."""
@@ -150,15 +172,19 @@ class H2OTrainer:
             return 100  # H2O default
     
     def _shutdown_h2o(self) -> None:
-        """Shutdown H2O cluster safely."""
-        if self._h2o_initialized and self._h2o:
+        """Shutdown H2O cluster safely (handles already-dead JVM)."""
+        if self._h2o:
             try:
                 self._h2o.remove_all()
+            except:
+                pass
+            try:
                 self._h2o.cluster().shutdown()
             except:
                 pass
-            self._h2o_initialized = False
-            self._last_model = None
+        self._h2o_initialized = False
+        self._last_model = None
+        self._target_mem_size = None
     
     def train(
         self,
@@ -207,7 +233,13 @@ class H2OTrainer:
             stopping_tolerance = 0.02
             stopping_rounds = 2
             # Fast mode: Only fast algorithms, NO StackedEnsemble (causes crashes on small data)
-            include_algos = ["GBM", "XGBoost", "GLM", "DRF"]
+            # CRITICAL: Exclude GBM and XGBoost when dataset too small for default min_rows=100
+            # GBM needs min_rows*2 weighted rows per CV fold (~200+), so need ~600+ total
+            if n_train < 600:
+                include_algos = ["GLM", "DRF"]
+                logger.info(f"Small dataset ({n_train} < 600): using GLM + DRF only (GBM min_rows=100 incompatible)")
+            else:
+                include_algos = ["GBM", "XGBoost", "GLM", "DRF"]
         else:
             # FULL training mode - optimize for best predictions
             max_models = max_models or 20  # More models for better selection
@@ -215,8 +247,12 @@ class H2OTrainer:
             nfolds = 5  # More folds for robust validation
             stopping_tolerance = 0.001
             stopping_rounds = 5
-            # Full mode: Include StackedEnsemble for best performance
-            include_algos = ["GBM", "XGBoost", "GLM", "DRF", "StackedEnsemble"]
+            # Full mode: Exclude GBM for small data, include StackedEnsemble for large data
+            if n_train < 1000:
+                include_algos = ["GLM", "DRF"]
+                logger.info(f"Small dataset ({n_train} < 1000): using GLM + DRF only for full mode")
+            else:
+                include_algos = ["GBM", "XGBoost", "GLM", "DRF", "StackedEnsemble"]
         
         # Adapt nfolds to dataset size to prevent CV splits with too few samples
         if n_train < 100:
@@ -389,7 +425,13 @@ class H2OTrainer:
             return result
             
         except Exception as e:
-            logger.error(f"H2O training failed: {e}")
+            error_msg = str(e)
+            logger.error(f"H2O training failed: {error_msg}")
+            # If H2O JVM died, mark as not initialized so next call restarts it
+            if "died unexpectedly" in error_msg or "RIP" in error_msg or "Connection refused" in error_msg:
+                logger.warning("H2O JVM crashed — marking for restart on next call")
+                self._h2o_initialized = False
+                self._last_model = None
             raise
         finally:
             # CRITICAL: Clean up H2O frames to prevent memory leaks

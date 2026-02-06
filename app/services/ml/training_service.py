@@ -1379,33 +1379,123 @@ class TrainingService:
             df = df.dropna(subset=[target_column])
             
             # ================================================================
+            # MISSINGNESS INDICATORS - Tell the model which rows have real odds
+            # When 82% of rows are missing odds data, imputation fills with 0.5
+            # but the model can't distinguish "real 0.5 probability" from "unknown".
+            # Adding has_odds binary feature lets the model learn to weight
+            # odds-based features differently when they're real vs imputed.
+            # ================================================================
+            odds_indicator_cols = [
+                'implied_home_prob', 'no_vig_home_prob', 
+                'moneyline_home_close', 'moneyline_away_close',
+                'spread_close', 'total_close',
+            ]
+            
+            indicators_added = []
+            # Master indicator: does this row have ANY odds data?
+            odds_present = pd.Series(False, index=df.index)
+            for col in odds_indicator_cols:
+                if col in df.columns:
+                    col_present = df[col].notna()
+                    odds_present = odds_present | col_present
+            
+            if odds_present.any():
+                df['has_odds'] = odds_present.astype(int)
+                if 'has_odds' not in feature_columns:
+                    feature_columns.append('has_odds')
+                indicators_added.append('has_odds')
+                
+                odds_pct = odds_present.mean() * 100
+                logger.info(
+                    f"📊 ODDS COVERAGE: {odds_pct:.1f}% of rows have odds data "
+                    f"({odds_present.sum()}/{len(df)} rows)"
+                )
+            
+            # Specific indicators for key odds groups
+            # Spread odds indicator
+            spread_cols = [c for c in ['spread_close', 'spread_open'] if c in df.columns]
+            if spread_cols:
+                has_spread = df[spread_cols].notna().any(axis=1)
+                df['has_spread_odds'] = has_spread.astype(int)
+                if 'has_spread_odds' not in feature_columns:
+                    feature_columns.append('has_spread_odds')
+                indicators_added.append('has_spread_odds')
+            
+            # Total odds indicator
+            total_cols = [c for c in ['total_close', 'total_open'] if c in df.columns]
+            if total_cols:
+                has_total = df[total_cols].notna().any(axis=1)
+                df['has_total_odds'] = has_total.astype(int)
+                if 'has_total_odds' not in feature_columns:
+                    feature_columns.append('has_total_odds')
+                indicators_added.append('has_total_odds')
+            
+            if indicators_added:
+                logger.info(
+                    f"🏷️ Added {len(indicators_added)} missingness indicators: {indicators_added}"
+                )
+            
+            # ================================================================
             # SMART IMPUTATION - fillna(0) creates false signals!
             # Example: away_away_win_pct is 94% null for WTA.
             #   fillna(0) → model sees "0% road win rate" (FALSE)
             #   fillna(0.5) → model sees "unknown = coin flip" (NEUTRAL)
+            #
+            # CRITICAL: Odds features are LEFT AS NaN for H2O to handle natively!
+            # H2O's tree-based models (GBM, XGBoost, RF) route NaN to the
+            # optimal branch during splitting, which is FAR superior to filling
+            # 82% of data with 0.5 (which destroys the feature's variance and
+            # signal, causing the low-variance filter to remove it).
             # ================================================================
+            
+            # Odds features to SKIP imputation (H2O handles NaN natively)
+            # These are the highest-value predictors (corr=0.45+ in NCAAF)
+            # and are severely damaged by constant imputation
+            odds_skip_keywords = [
+                'implied_', 'no_vig_', 'moneyline_home_close', 'moneyline_away_close',
+                'moneyline_home_open', 'moneyline_away_open',
+                'spread_close', 'spread_open', 'spread_line',
+                'total_close', 'total_open', 'total_line',
+                'consensus_spread', 'consensus_total', 'consensus_ml',
+                'pinnacle_spread', 'pinnacle_total', 'pinnacle_ml',
+                'public_spread_home_pct', 'public_ml_home_pct',
+                'public_total_over_pct', 'public_money_home_pct',
+                'sharp_action_indicator', 'num_books',
+                'spread_value', 'total_value', 'margin_value',  # derived from odds
+                'total_line_move', 'line_move_direction', 'total_move_direction',
+                'h2h_total_vs_line',  # derived from odds
+            ]
             
             # Categorize features by type for appropriate fill values
             pct_keywords = ['_win_pct', '_pct_last', '_home_win_pct', '_away_win_pct',
-                           '_ats_record', '_ou_over_pct', 'implied_', 'no_vig_',
-                           'public_spread_home_pct', 'public_ml_home_pct',
-                           'public_total_over_pct', 'public_money_home_pct']
+                           '_ats_record', '_ou_over_pct']
             
             margin_keywords = ['_avg_margin', '_avg_pts', 'power_rating', 'h2h_home_avg_margin',
-                              'h2h_total_avg', 'sharp_action_indicator']
+                              'h2h_total_avg']
             
-            count_keywords = ['_injuries_out', '_starters_out', '_wins_last', 'num_books',
+            count_keywords = ['_injuries_out', '_starters_out', '_wins_last',
                              'h2h_home_wins_last']
             
             # Boolean features are fine with 0 (False)
             bool_keywords = ['is_', '_is_', 'steam_move']
             
-            imputed_stats = {'pct_0.5': 0, 'median': 0, 'zero': 0}
+            imputed_stats = {'pct_0.5': 0, 'median': 0, 'zero': 0, 'skipped_odds': 0}
             
             for col in feature_columns:
                 if df[col].isna().any():
                     col_lower = col.lower()
                     null_count = df[col].isna().sum()
+                    null_pct = null_count / len(df) * 100
+                    
+                    # SKIP odds features entirely — let H2O handle NaN natively
+                    if any(kw in col_lower for kw in odds_skip_keywords):
+                        imputed_stats['skipped_odds'] += 1
+                        if null_pct > 50:
+                            logger.debug(
+                                f"  Skipping imputation for odds feature {col}: "
+                                f"{null_pct:.0f}% null → H2O will handle NaN natively"
+                            )
+                        continue  # DO NOT IMPUTE — leave as NaN
                     
                     # Win percentages / probability → 0.5 (unknown = coin flip)
                     if any(kw in col_lower for kw in pct_keywords):
@@ -1424,7 +1514,8 @@ class TrainingService:
                         imputed_stats['zero'] += 1
             
             logger.info(
-                f"🔧 SMART IMPUTATION: {imputed_stats['pct_0.5']} pct→0.5, "
+                f"🔧 SMART IMPUTATION: {imputed_stats['skipped_odds']} odds→NaN(H2O native), "
+                f"{imputed_stats['pct_0.5']} pct→0.5, "
                 f"{imputed_stats['median']} margin→median, {imputed_stats['zero']} other→0"
             )
             

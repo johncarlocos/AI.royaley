@@ -696,33 +696,78 @@ class H2OTrainer:
         Remove features with near-zero variance that H2O would drop anyway.
         Pre-filtering prevents H2O 'bad and constant' warnings and improves stability.
         
+        CRITICAL FIX: Calculates variance on NON-NULL values only.
+        When 82% of odds data is missing and imputed with 0.5, the imputed
+        variance drops to ~0.002 → filter removes the best predictive features.
+        By checking variance on real (non-null) values, we preserve features
+        that have genuine predictive signal in the rows that have data.
+        
+        Also protects critical odds/probability features from removal since
+        they are known high-value predictors (corr=0.45+ in NCAAF).
+        
         Args:
-            df: Training dataframe
+            df: Training dataframe (may contain imputed values)
             feature_columns: List of feature column names
             variance_threshold: Minimum variance to keep a feature
             
         Returns:
             Filtered list of feature columns
         """
+        # Critical odds/probability features that should NEVER be filtered
+        # These have proven correlation with outcomes (e.g. implied_home_prob corr=0.45 NCAAF)
+        protected_keywords = [
+            'implied_', 'no_vig_', 'moneyline_', 'spread_close', 'spread_open',
+            'total_close', 'total_open', 'consensus_', 'pinnacle_',
+            'has_odds',  # missingness indicator
+        ]
+        
         try:
-            # Calculate variance for each feature
-            variances = df[feature_columns].var()
-            
-            # Also check for constant columns (all same value)
-            nunique = df[feature_columns].nunique()
-            
             selected = []
             dropped = []
+            protected_kept = []
             
             for col in feature_columns:
-                col_var = variances.get(col, 0)
-                col_unique = nunique.get(col, 0)
+                col_lower = col.lower()
+                
+                # Always keep protected features (odds/probability columns)
+                is_protected = any(kw in col_lower for kw in protected_keywords)
+                if is_protected:
+                    # Only drop if TRULY constant (0 non-null unique values)
+                    non_null = df[col].dropna()
+                    if len(non_null) > 0 and non_null.nunique() > 1:
+                        selected.append(col)
+                        protected_kept.append(col)
+                        continue
+                    elif len(non_null) == 0:
+                        dropped.append(f"{col}(all-null)")
+                        continue
+                    # Even if only 1 unique non-null value, keep if enough data
+                    if len(non_null) >= 50:
+                        selected.append(col)
+                        protected_kept.append(col)
+                        continue
+                
+                # For non-protected features: calculate variance on NON-NULL values
+                non_null_vals = df[col].dropna()
+                
+                if len(non_null_vals) == 0:
+                    dropped.append(f"{col}(all-null)")
+                    continue
+                
+                col_var = non_null_vals.var()
+                col_unique = non_null_vals.nunique()
                 
                 # Drop if: zero/near-zero variance OR only 1 unique value
                 if col_unique <= 1 or col_var < variance_threshold:
                     dropped.append(col)
                 else:
                     selected.append(col)
+            
+            if protected_kept:
+                logger.info(
+                    f"🛡️ Protected {len(protected_kept)} odds/probability features from filtering: "
+                    f"{protected_kept[:8]}{'...' if len(protected_kept) > 8 else ''}"
+                )
             
             if dropped:
                 logger.info(
@@ -734,9 +779,13 @@ class H2OTrainer:
                 logger.warning(
                     "All features have low variance! Keeping top features by variance."
                 )
-                # Fallback: keep top 10 features by variance
-                top_features = variances.nlargest(min(10, len(feature_columns)))
-                selected = top_features.index.tolist()
+                # Fallback: keep top 10 features by non-null variance
+                non_null_vars = {}
+                for col in feature_columns:
+                    nn = df[col].dropna()
+                    non_null_vars[col] = nn.var() if len(nn) > 0 else 0
+                top_features = sorted(non_null_vars.items(), key=lambda x: x[1], reverse=True)[:10]
+                selected = [col for col, _ in top_features]
             
             return selected
             

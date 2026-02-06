@@ -119,7 +119,7 @@ class SklearnEnsembleTrainer:
         bet_type: str,
         validation_df: pd.DataFrame = None,
         use_stacking: bool = True,
-        cv_folds: int = 3,  # Reduced from 5 for faster training
+        cv_folds: int = 5,
     ) -> SklearnModelResult:
         """
         Train Sklearn ensemble model.
@@ -132,7 +132,7 @@ class SklearnEnsembleTrainer:
             bet_type: Bet type
             validation_df: Optional validation data
             use_stacking: Use stacking (True) or voting (False)
-            cv_folds: Number of cross-validation folds (default: 3 for speed)
+            cv_folds: Number of cross-validation folds
             
         Returns:
             SklearnModelResult with trained model info
@@ -143,6 +143,24 @@ class SklearnEnsembleTrainer:
         )
         
         start_time = datetime.now(timezone.utc)
+        
+        # ============================================================
+        # SMALL DATASET WARNING
+        # ML needs sufficient samples for reliable learning
+        # ============================================================
+        MIN_SAMPLES_WARNING = 50
+        MIN_SAMPLES_RELIABLE = 200
+        
+        if len(train_df) < MIN_SAMPLES_WARNING:
+            logger.warning(
+                f"⚠️  VERY SMALL DATASET: Only {len(train_df)} samples. "
+                f"Results will be UNRELIABLE. Need {MIN_SAMPLES_RELIABLE}+ for good ML."
+            )
+        elif len(train_df) < MIN_SAMPLES_RELIABLE:
+            logger.warning(
+                f"⚠️  SMALL DATASET: {len(train_df)} samples is below recommended "
+                f"{MIN_SAMPLES_RELIABLE}+. Results may have high variance."
+            )
         
         # Prepare data
         X_train = train_df[feature_columns].copy()
@@ -254,17 +272,17 @@ class SklearnEnsembleTrainer:
         self._model.fit(X_train_scaled, y_train)
         
         # Cross-validation (skip for very small datasets)
-        # SPEED FIX: Single CV call with n_jobs=-1, estimate accuracy from AUC
         if len(y_train) >= cv_folds * 4:
-            logger.info(f"Running {cv_folds}-fold cross-validation (parallelized)...")
+            logger.info(f"Running {cv_folds}-fold cross-validation...")
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
             cv_auc_scores = cross_val_score(
                 self._model, X_train_scaled, y_train,
-                cv=cv, scoring='roc_auc', n_jobs=-1  # Parallelize folds
+                cv=cv, scoring='roc_auc'
             )
-            # Estimate accuracy from AUC to avoid second expensive CV call
-            # Empirical relationship: accuracy ≈ 0.5 + (AUC - 0.5) * 0.8
-            cv_acc_scores = 0.5 + (cv_auc_scores - 0.5) * 0.8
+            cv_acc_scores = cross_val_score(
+                self._model, X_train_scaled, y_train,
+                cv=cv, scoring='accuracy'
+            )
         else:
             logger.warning(
                 f"⚠️  Dataset too small for CV ({len(y_train)} samples). "
@@ -303,10 +321,13 @@ class SklearnEnsembleTrainer:
                 val_logloss = train_logloss
             val_brier = brier_score_loss(y_val, val_probs)
         else:
-            val_auc = train_auc
-            val_acc = train_acc
-            val_logloss = train_logloss
-            val_brier = train_brier
+            # No validation set (small dataset) - use CV metrics as primary
+            # This avoids showing inflated training metrics
+            logger.info("No validation set - using CV metrics as primary evaluation")
+            val_auc = cv_auc_scores.mean()
+            val_acc = cv_acc_scores.mean()
+            val_logloss = train_logloss  # No CV logloss available
+            val_brier = train_brier  # No CV brier available
         
         # Get feature importance
         feature_importance = self._get_feature_importance(feature_columns)
@@ -344,6 +365,22 @@ class SklearnEnsembleTrainer:
                 'learning_rate': self.config.sklearn_learning_rate,
             },
         )
+        
+        # Check for reliability issues
+        auc_gap = abs(result.auc - result.cv_auc_mean)
+        if auc_gap > 0.15:
+            logger.warning(
+                f"⚠️  RELIABILITY WARNING: Large gap between Test AUC ({result.auc:.4f}) "
+                f"and CV AUC ({result.cv_auc_mean:.4f}). Difference: {auc_gap:.4f}. "
+                f"Results may be unreliable due to small sample size or data issues."
+            )
+        
+        # Warn if CV AUC has high variance
+        if result.cv_auc_std > 0.10:
+            logger.warning(
+                f"⚠️  HIGH VARIANCE: CV AUC std={result.cv_auc_std:.4f}. "
+                f"Results unstable - need more training data."
+            )
         
         logger.info(
             f"Sklearn training complete: {result.model_id} "
@@ -508,13 +545,9 @@ class SklearnEnsembleTrainer:
     def _create_stacking_ensemble(
         self,
         base_models: Dict[str, Any],
-        cv_folds: int = 3,  # Reduced from 5 for faster training
+        cv_folds: int = 5,
     ) -> StackingClassifier:
-        """Create stacking ensemble with logistic regression meta-learner
-        
-        Note: cv_folds controls internal stacking CV for generating meta-features.
-        Lower = faster training with minimal impact on final model quality.
-        """
+        """Create stacking ensemble with logistic regression meta-learner"""
         estimators = [(name, model) for name, model in base_models.items()]
         
         # Use StratifiedKFold to ensure both classes present in every fold
@@ -531,7 +564,6 @@ class SklearnEnsembleTrainer:
             cv=cv,
             stack_method='predict_proba',
             n_jobs=-1,
-            passthrough=False,  # Don't pass raw features (saves memory)
         )
     
     def _create_voting_ensemble(

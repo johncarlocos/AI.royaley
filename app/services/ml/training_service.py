@@ -359,6 +359,25 @@ class TrainingService:
                 
                 logger.info(f"Loaded {len(train_df)} samples with {len(feature_columns)} features")
                 
+                # Provide guidance on expected results based on sample size
+                if len(train_df) < 50:
+                    logger.warning(
+                        f"⚠️  CRITICAL: Only {len(train_df)} samples. "
+                        f"ML will NOT work reliably. Results will be essentially random."
+                    )
+                elif len(train_df) < 100:
+                    logger.warning(
+                        f"⚠️  LOW SAMPLE SIZE: {len(train_df)} samples. "
+                        f"Expect AUC in 0.50-0.60 range (barely above random). "
+                        f"Model useful for testing only, not production."
+                    )
+                elif len(train_df) < 200:
+                    logger.warning(
+                        f"⚠️  SMALL SAMPLE SIZE: {len(train_df)} samples. "
+                        f"Expect moderate performance with high variance. "
+                        f"Recommend 500+ samples for reliable predictions."
+                    )
+                
                 # Walk-forward validation (optional)
                 wfv_result = None
                 if use_walk_forward and len(train_df) > 1000:
@@ -371,7 +390,18 @@ class TrainingService:
                     result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0) if wfv_result else 0.0
                 
                 # Split train/validation
-                train_data, valid_data = self._split_data(train_df, test_size=0.2, target_column=target_column)
+                # For small datasets, skip validation split (use CV-only)
+                MIN_SAMPLES_FOR_HOLDOUT = 100
+                
+                if len(train_df) < MIN_SAMPLES_FOR_HOLDOUT:
+                    logger.warning(
+                        f"⚠️  SMALL DATASET: {len(train_df)} samples < {MIN_SAMPLES_FOR_HOLDOUT}. "
+                        f"Using CV-only evaluation (no holdout test set)."
+                    )
+                    train_data = train_df.copy()
+                    valid_data = None  # No holdout - rely on CV
+                else:
+                    train_data, valid_data = self._split_data(train_df, test_size=0.2, target_column=target_column)
                 
                 # Train model
                 logger.info(f"Training {framework} model...")

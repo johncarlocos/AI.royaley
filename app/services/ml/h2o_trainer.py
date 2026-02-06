@@ -89,9 +89,34 @@ class H2OTrainer:
         self._last_model = None
         self._last_feature_columns = None
         self._target_mem_size = None  # Set before _init_h2o for adaptive memory
+        self._h2o_port = None  # Unique port per instance
         
+    def _find_free_port(self) -> int:
+        """Find a free port for H2O JVM — enables parallel training."""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            return s.getsockname()[1]
+    
+    def _get_nthreads(self) -> int:
+        """Calculate threads per H2O job for parallel training.
+        
+        Container has 48 CPUs / 256GB. Target: up to 10 parallel jobs.
+        Each job gets ~4 threads to avoid over-subscription.
+        """
+        import os
+        total_cores = os.cpu_count() or 8
+        # Allow up to 10 parallel jobs, each gets a fair share of cores
+        threads_per_job = max(2, total_cores // 10)
+        return min(threads_per_job, 8)  # Cap at 8 threads per job
+    
     def _init_h2o(self, max_mem_size: str = None) -> None:
-        """Initialize H2O cluster with adaptive memory sizing and crash recovery."""
+        """Initialize H2O cluster with adaptive memory sizing and crash recovery.
+        
+        Each training process gets its own H2O JVM on a unique port,
+        enabling safe parallel training across multiple sports/bet types.
+        """
         if self._h2o_initialized:
             # Check if H2O is actually alive (not just flagged as initialized)
             if self._is_h2o_alive():
@@ -115,14 +140,23 @@ class H2OTrainer:
             mem_size = max_mem_size or self.config.h2o_max_mem_size
             self._target_mem_size = mem_size
             
+            # Find a unique free port for this process (enables parallel training)
+            port = self._find_free_port()
+            self._h2o_port = port
+            nthreads = self._get_nthreads()
+            
+            logger.info(f"Starting H2O JVM on port {port} with {mem_size} memory, {nthreads} threads")
+            
             h2o.init(
+                port=port,
                 max_mem_size=mem_size,
-                nthreads=-1,  # Use all available cores
+                nthreads=nthreads,
                 min_mem_size="2g",
+                bind_to_localhost=True,
             )
             
             self._h2o_initialized = True
-            logger.info(f"H2O initialized with {mem_size} memory")
+            logger.info(f"H2O initialized on port {port} with {mem_size} memory, {nthreads} threads")
             
             # Brief pause to let JVM stabilize
             import time
@@ -147,18 +181,18 @@ class H2OTrainer:
             return False
     
     def _get_adaptive_mem_size(self, n_samples: int, n_features: int) -> str:
-        """Calculate appropriate H2O memory based on dataset size."""
-        # Estimate: each sample * feature * 8 bytes * overhead factor
-        estimated_mb = (n_samples * n_features * 8 * 10) / (1024 * 1024)
+        """Calculate appropriate H2O memory based on dataset size.
         
+        Container has 256GB. With up to 10 parallel jobs, each gets 8-20GB.
+        """
         if n_samples < 500:
-            return "4g"
-        elif n_samples < 2000:
             return "8g"
+        elif n_samples < 2000:
+            return "12g"
         elif n_samples < 10000:
             return "16g"
         else:
-            return self.config.h2o_max_mem_size  # Use configured max
+            return "20g"  # Per-job max for parallel safety
     
     def _get_adaptive_min_rows(self, n_samples: int) -> int:
         """Calculate appropriate min_rows based on training set size."""
@@ -185,6 +219,7 @@ class H2OTrainer:
         self._h2o_initialized = False
         self._last_model = None
         self._target_mem_size = None
+        self._h2o_port = None
     
     def train(
         self,

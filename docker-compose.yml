@@ -84,11 +84,11 @@ services:
     deploy:
       resources:
         limits:
+          cpus: '48'
+          memory: 256G
+        reservations:
           cpus: '8'
           memory: 16G
-        reservations:
-          cpus: '4'
-          memory: 8G
           devices:
             - driver: nvidia
               device_ids: ['2']

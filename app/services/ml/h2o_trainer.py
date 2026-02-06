@@ -380,20 +380,52 @@ class H2OTrainer:
                 except (TypeError, ValueError):
                     return default
             
+            # Helper: Get VALIDATION AUC for a model (not training AUC!)
+            # Training AUC can be 0.97 for overfitting XGBoost while validation is 0.49
+            def get_validation_auc(model):
+                """Get the most realistic AUC: validation > xval > training."""
+                # 1. Validation frame AUC (most trustworthy)
+                if valid_h2o is not None:
+                    try:
+                        val_auc = extract_scalar(
+                            model.model_performance(valid_h2o).auc(), 0.0
+                        )
+                        if val_auc > 0:
+                            return val_auc, "validation"
+                    except:
+                        pass
+                # 2. Cross-validation AUC  
+                try:
+                    xval_auc = extract_scalar(
+                        model.model_performance(xval=True).auc(), 0.0
+                    )
+                    if xval_auc > 0:
+                        return xval_auc, "xval"
+                except:
+                    pass
+                # 3. Training AUC (last resort — least trustworthy)
+                try:
+                    train_auc = extract_scalar(
+                        model.model_performance().auc(), 0.0
+                    )
+                    return train_auc, "training"
+                except:
+                    return 0.0, "unknown"
+            
             # Get best model — with degenerate model guard
             best_model = aml.leader
-            leader_auc = 0.0
-            try:
-                leader_auc = extract_scalar(best_model.model_performance().auc(), 0.0)
-            except:
-                pass
+            leader_auc, auc_source = get_validation_auc(best_model)
+            logger.info(
+                f"Leader {best_model.model_id}: {auc_source} AUC={leader_auc:.4f}"
+            )
             
-            # GUARD: If leader AUC < 0.52, it's degenerate (worse than coin flip).
-            # Walk down leaderboard to find a model with real signal.
+            # GUARD: If leader VALIDATION AUC < 0.52, it's degenerate.
+            # Walk down leaderboard checking VALIDATION AUC for each model.
             if leader_auc < 0.52:
                 logger.warning(
-                    f"⚠️ Leader model {best_model.model_id} has degenerate AUC={leader_auc:.4f} "
-                    f"(below 0.52). Searching leaderboard for better model..."
+                    f"⚠️ Leader model {best_model.model_id} has degenerate "
+                    f"{auc_source} AUC={leader_auc:.4f} (below 0.52). "
+                    f"Searching leaderboard for better model..."
                 )
                 lb = aml.leaderboard.as_data_frame()
                 fallback_found = False
@@ -402,13 +434,11 @@ class H2OTrainer:
                         continue
                     try:
                         candidate = self._h2o.get_model(row['model_id'])
-                        candidate_auc = extract_scalar(
-                            candidate.model_performance().auc(), 0.0
-                        )
+                        candidate_auc, cand_source = get_validation_auc(candidate)
                         if candidate_auc >= 0.52:
                             logger.info(
                                 f"✅ Fallback to model #{idx+1}: {row['model_id']} "
-                                f"AUC={candidate_auc:.4f} (was {leader_auc:.4f})"
+                                f"{cand_source} AUC={candidate_auc:.4f} (was {leader_auc:.4f})"
                             )
                             best_model = candidate
                             leader_auc = candidate_auc
@@ -416,7 +446,8 @@ class H2OTrainer:
                             break
                         else:
                             logger.debug(
-                                f"  Skipping #{idx+1} {row['model_id']}: AUC={candidate_auc:.4f}"
+                                f"  Skipping #{idx+1} {row['model_id']}: "
+                                f"{cand_source} AUC={candidate_auc:.4f}"
                             )
                     except Exception as e:
                         logger.debug(f"  Could not load #{idx+1}: {e}")
@@ -424,7 +455,7 @@ class H2OTrainer:
                 
                 if not fallback_found:
                     logger.warning(
-                        f"⚠️ No model on leaderboard has AUC >= 0.52. "
+                        f"⚠️ No model on leaderboard has validation AUC >= 0.52. "
                         f"Using leader anyway but flagging as unreliable."
                     )
             
@@ -473,24 +504,29 @@ class H2OTrainer:
             except:
                 logloss_val = 0.0
             
-            # FIX: Use actual confusion matrix accuracy instead of 1-MPCE
-            # MPCE averages per-class error rates which masks degenerate predictions
+            # Compute REAL accuracy from predictions (not broken CM parsing)
+            # H2O's confusion_matrix().to_list() returns columns not rows,
+            # making the old CM parser unreliable. Predictions are ground truth.
+            eval_frame = valid_h2o if valid_h2o else train_h2o
             try:
-                cm = val_perf.confusion_matrix()
-                cm_df = cm.to_list()
-                # H2O confusion matrix: last row/col are totals
-                # For binary: [[TN, FP, total], [FN, TP, total], [total, total, grand_total]]
-                correct = 0
-                total = 0
-                for i in range(len(cm_df) - 1):  # Skip totals row
-                    for j in range(len(cm_df[i]) - 1):  # Skip totals col
-                        if i == j:
-                            correct += cm_df[i][j]
-                        total += cm_df[i][j]
-                accuracy_val = correct / total if total > 0 else 0.0
-                logger.info(f"Confusion matrix accuracy: {accuracy_val:.4f} (correct={correct}/{total})")
+                preds_h2o = best_model.predict(eval_frame)
+                preds_df = preds_h2o.as_data_frame()
+                actual_df = eval_frame[target_column].as_data_frame()
+                y_pred = preds_df['predict'].astype(str).values
+                y_true = actual_df[target_column].astype(str).values
+                accuracy_val = float((y_pred == y_true).mean())
+                n_eval = len(y_true)
+                logger.info(
+                    f"Prediction-based accuracy: {accuracy_val:.4f} "
+                    f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
+                )
+                # Cleanup prediction frame
+                try:
+                    self._h2o.remove(preds_h2o)
+                except:
+                    pass
             except Exception as e:
-                logger.warning(f"Could not extract CM accuracy ({e}), falling back to 1-MPCE")
+                logger.warning(f"Could not compute prediction accuracy ({e}), using 1-MPCE")
                 accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))
             
             # Create result

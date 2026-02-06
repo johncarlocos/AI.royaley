@@ -1021,6 +1021,99 @@ class TrainingService:
                     df['expected_margin_vs_spread'] = df['margin_diff'] + df['spread_close'].fillna(0)
                     derived_features_created.append('expected_margin_vs_spread')
             
+            # ============================================================
+            # TIER 6: TOTAL-SPECIFIC FEATURES (SUM, not DIFF)
+            # These predict combined scoring volume for over/under
+            # Spread features use A-B (differential), Total features use A+B (sum)
+            # ============================================================
+            
+            # 21. Scoring Sum: Combined offensive output predicts total points
+            if 'scoring_sum' not in df.columns:
+                if 'home_avg_pts_last10' in df.columns and 'away_avg_pts_last10' in df.columns:
+                    df['scoring_sum'] = df['home_avg_pts_last10'].fillna(0) + df['away_avg_pts_last10'].fillna(0)
+                    derived_features_created.append('scoring_sum')
+            
+            # 22. Defense Sum: Combined defensive weakness (higher = more points allowed)
+            if 'defense_sum' not in df.columns:
+                if 'home_avg_pts_allowed_last10' in df.columns and 'away_avg_pts_allowed_last10' in df.columns:
+                    df['defense_sum'] = df['home_avg_pts_allowed_last10'].fillna(0) + df['away_avg_pts_allowed_last10'].fillna(0)
+                    derived_features_created.append('defense_sum')
+            
+            # 23. Pace Proxy: Average of offensive + defensive sums = expected game tempo
+            if 'pace_proxy' not in df.columns:
+                if 'scoring_sum' in df.columns and 'defense_sum' in df.columns:
+                    df['pace_proxy'] = (df['scoring_sum'] + df['defense_sum']) / 2
+                    derived_features_created.append('pace_proxy')
+            
+            # 24. Total Value: Is the line too high/low vs expected combined scoring?
+            # Positive = line higher than stats suggest → value on Under
+            # Negative = line lower than stats suggest → value on Over
+            if 'total_value' not in df.columns:
+                total_line_col = None
+                for col in ['consensus_total', 'total_close', 'pinnacle_total']:
+                    if col in df.columns and df[col].notna().sum() > 50:
+                        total_line_col = col
+                        break
+                if total_line_col and 'pace_proxy' in df.columns:
+                    df['total_value'] = df[total_line_col].fillna(df['pace_proxy']) - df['pace_proxy']
+                    derived_features_created.append('total_value')
+            
+            # 25. Offensive Mismatch: Home offense vs Away defense and vice versa
+            # High values = one side can exploit the other's weak defense
+            if 'offensive_mismatch' not in df.columns:
+                home_off = df.get('home_avg_pts_last10')
+                away_def = df.get('away_avg_pts_allowed_last10')
+                away_off = df.get('away_avg_pts_last10')
+                home_def = df.get('home_avg_pts_allowed_last10')
+                if home_off is not None and away_def is not None and away_off is not None and home_def is not None:
+                    # How much each team can exploit opponent's defense
+                    home_exploit = home_off.fillna(0) - away_def.fillna(0)  # Home offense vs Away defense
+                    away_exploit = away_off.fillna(0) - home_def.fillna(0)  # Away offense vs Home defense
+                    df['offensive_mismatch'] = home_exploit + away_exploit  # Total exploitation potential
+                    derived_features_created.append('offensive_mismatch')
+            
+            # 26. Total Line Movement: How much the total line moved (sharp action signal)
+            if 'total_line_move' not in df.columns:
+                if 'total_close' in df.columns and 'total_open' in df.columns:
+                    df['total_line_move'] = df['total_close'] - df['total_open']
+                    derived_features_created.append('total_line_move')
+            
+            # 27. H2H Total vs Line: Does this matchup historically go over?
+            if 'h2h_total_vs_line' not in df.columns:
+                if 'h2h_total_avg' in df.columns:
+                    total_line_col = None
+                    for col in ['consensus_total', 'total_close', 'pinnacle_total']:
+                        if col in df.columns and df[col].notna().sum() > 50:
+                            total_line_col = col
+                            break
+                    if total_line_col:
+                        df['h2h_total_vs_line'] = df['h2h_total_avg'].fillna(0) - df[total_line_col].fillna(0)
+                        derived_features_created.append('h2h_total_vs_line')
+            
+            # 28. Margin Sum: Combined margin indicates quality of both teams
+            # Two strong teams (high margins) → tighter game → potentially under
+            # Two weak teams (negative margins) → sloppy game → potentially over
+            if 'margin_sum' not in df.columns:
+                if 'home_avg_margin_last10' in df.columns and 'away_avg_margin_last10' in df.columns:
+                    df['margin_sum'] = df['home_avg_margin_last10'].fillna(0) + df['away_avg_margin_last10'].fillna(0)
+                    derived_features_created.append('margin_sum')
+            
+            # 29. Rest Total Impact: Combined rest days (more rest → more energy → higher scoring?)
+            if 'rest_total' not in df.columns:
+                if 'home_rest_days' in df.columns and 'away_rest_days' in df.columns:
+                    df['rest_total'] = df['home_rest_days'].fillna(1) + df['away_rest_days'].fillna(1)
+                    derived_features_created.append('rest_total')
+            
+            # 30. Back-to-back fatigue: Teams on B2B typically score fewer points
+            if 'b2b_fatigue_count' not in df.columns:
+                b2b_count = np.zeros(len(df))
+                if 'home_is_back_to_back' in df.columns:
+                    b2b_count += df['home_is_back_to_back'].fillna(0).astype(int)
+                if 'away_is_back_to_back' in df.columns:
+                    b2b_count += df['away_is_back_to_back'].fillna(0).astype(int)
+                df['b2b_fatigue_count'] = b2b_count
+                derived_features_created.append('b2b_fatigue_count')
+            
             if derived_features_created:
                 logger.info(
                     f"📊 FEATURE ENGINEERING: Created {len(derived_features_created)} derived features: "

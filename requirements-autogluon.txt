@@ -8,6 +8,11 @@
 # AutoGluon Tabular (main package for structured data)
 autogluon.tabular>=1.0.0
 
+# Ray for parallel fold training (3x faster bagged model training)
+# Without ray, AutoGluon trains 8 folds sequentially which is very slow
+# AutoGluon 1.5.0 requires ray >=2.43.0,<2.53.0
+ray>=2.43.0,<2.53.0
+
 # Note: autogluon.tabular includes:
 # - XGBoost
 # - LightGBM

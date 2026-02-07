@@ -71,6 +71,8 @@ RUN if [ "$INSTALL_GPU" = "true" ]; then \
 RUN if [ "$INSTALL_AUTOGLUON" = "true" ]; then \
         echo "Installing AutoGluon dependencies..." && \
         pip install --no-cache-dir "autogluon.tabular>=1.0.0" \
+        && echo "Installing Ray for parallel fold training..." && \
+        pip install --no-cache-dir "ray>=2.43.0,<2.53.0" \
         || echo "WARNING: AutoGluon installation had issues, continuing..."; \
     fi
 

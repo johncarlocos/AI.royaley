@@ -222,20 +222,29 @@ class AutoGluonTrainer:
             leaderboard = predictor.leaderboard(silent=True)
             leaderboard_list = leaderboard.to_dict('records')
             
-            # Get best model info
-            best_model = predictor.get_model_best()
+            # Get best model info (AutoGluon 1.5+ uses property, not method)
+            best_model = predictor.model_best if hasattr(predictor, 'model_best') else 'WeightedEnsemble_L2'
             
             # Evaluate performance
-            if tuning_data is not None:
-                eval_data = tuning_data
+            # In bagged mode with no tuning_data, use OOF predictions for evaluation
+            # predictor.evaluate() on train_data would be overly optimistic
+            # Instead, use the leaderboard's validation score (which uses OOF)
+            best_row = leaderboard[leaderboard['model'] == best_model]
+            if not best_row.empty:
+                auc = float(best_row['score_val'].iloc[0])
             else:
-                eval_data = train_data
+                auc = float(leaderboard['score_val'].iloc[0])
             
-            perf = predictor.evaluate(eval_data, silent=True)
+            # Get accuracy via predict on train data (approximate)
+            try:
+                y_pred = predictor.predict(train_data.drop(columns=[target_column]))
+                accuracy = float((y_pred == train_data[target_column]).mean())
+            except Exception:
+                accuracy = 0.0
             
             # Get feature importance
             try:
-                feat_imp = predictor.feature_importance(eval_data)
+                feat_imp = predictor.feature_importance(train_data)
                 feat_imp_dict = dict(zip(
                     feat_imp.index.tolist(),
                     feat_imp['importance'].tolist()
@@ -244,15 +253,6 @@ class AutoGluonTrainer:
                 feat_imp_dict = {}
             
             training_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
-            # Determine AUC and accuracy from performance dict
-            auc = perf.get('roc_auc', perf.get('auc', 0.0))
-            accuracy = perf.get('accuracy', 0.0)
-            
-            # If perf is a single value (like roc_auc), extract it
-            if isinstance(perf, (int, float)):
-                auc = perf
-                accuracy = 0.0
             
             # Create result
             result = AutoGluonModelResult(
@@ -263,8 +263,8 @@ class AutoGluonTrainer:
                 ensemble_size=len(leaderboard),
                 auc=auc if isinstance(auc, float) else 0.0,
                 accuracy=accuracy if isinstance(accuracy, float) else 0.0,
-                log_loss=perf.get('log_loss', 0.0) if isinstance(perf, dict) else 0.0,
-                balanced_accuracy=perf.get('balanced_accuracy', 0.0) if isinstance(perf, dict) else 0.0,
+                log_loss=0.0,
+                balanced_accuracy=0.0,
                 training_time_secs=training_time,
                 n_training_samples=len(train_df),
                 n_features=len(feature_columns),
@@ -463,8 +463,8 @@ class AutoGluonTrainer:
             return {}
         
         return {
-            'best_model': self._predictor.get_model_best(),
-            'model_names': self._predictor.get_model_names(),
+            'best_model': self._predictor.model_best if hasattr(self._predictor, 'model_best') else 'unknown',
+            'model_names': self._predictor.model_names() if callable(getattr(self._predictor, 'model_names', None)) else [],
             'problem_type': self._predictor.problem_type,
             'eval_metric': str(self._predictor.eval_metric),
         }

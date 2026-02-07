@@ -466,11 +466,22 @@ class H2OTrainer:
             self._last_feature_columns = feature_columns
             
             # Extract performance metrics
+            # CRITICAL: When no validation frame (small datasets), use xval metrics.
+            # Training metrics show memorization (AUC=0.93, accuracy=100%)
+            # while xval shows reality (AUC=0.53).
             perf = best_model.model_performance()
-            val_perf = (
-                best_model.model_performance(valid_h2o) 
-                if valid_h2o else perf
-            )
+            if valid_h2o is not None:
+                val_perf = best_model.model_performance(valid_h2o)
+                metrics_source = "validation"
+            else:
+                # No validation frame - prefer cross-validation metrics
+                try:
+                    val_perf = best_model.model_performance(xval=True)
+                    metrics_source = "xval"
+                except:
+                    val_perf = perf  # Last resort: training (will overfit)
+                    metrics_source = "training"
+                logger.info(f"Using {metrics_source} metrics (no holdout validation set)")
             
             # Get variable importance
             try:
@@ -509,22 +520,67 @@ class H2OTrainer:
             # making the old CM parser unreliable. Predictions are ground truth.
             eval_frame = valid_h2o if valid_h2o else train_h2o
             try:
-                preds_h2o = best_model.predict(eval_frame)
-                preds_df = preds_h2o.as_data_frame()
-                actual_df = eval_frame[target_column].as_data_frame()
-                y_pred = preds_df['predict'].astype(str).values
-                y_true = actual_df[target_column].astype(str).values
-                accuracy_val = float((y_pred == y_true).mean())
-                n_eval = len(y_true)
-                logger.info(
-                    f"Prediction-based accuracy: {accuracy_val:.4f} "
-                    f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
-                )
-                # Cleanup prediction frame
-                try:
-                    self._h2o.remove(preds_h2o)
-                except:
-                    pass
+                if valid_h2o is not None:
+                    # Use holdout validation set predictions (most trustworthy)
+                    preds_h2o = best_model.predict(eval_frame)
+                    preds_df = preds_h2o.as_data_frame()
+                    actual_df = eval_frame[target_column].as_data_frame()
+                    y_pred = preds_df['predict'].astype(str).values
+                    y_true = actual_df[target_column].astype(str).values
+                    accuracy_val = float((y_pred == y_true).mean())
+                    n_eval = len(y_true)
+                    logger.info(
+                        f"Prediction-based accuracy: {accuracy_val:.4f} "
+                        f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
+                    )
+                    # Cleanup prediction frame
+                    try:
+                        self._h2o.remove(preds_h2o)
+                    except:
+                        pass
+                else:
+                    # No validation frame - use cross-validation holdout predictions
+                    # These are out-of-fold predictions, NOT training predictions
+                    try:
+                        xval_preds = best_model.cross_validation_holdout_predictions()
+                        if xval_preds is not None:
+                            preds_df = xval_preds.as_data_frame()
+                            actual_df = train_h2o[target_column].as_data_frame()
+                            y_pred = preds_df['predict'].astype(str).values
+                            y_true = actual_df[target_column].astype(str).values
+                            accuracy_val = float((y_pred == y_true).mean())
+                            n_eval = len(y_true)
+                            logger.info(
+                                f"Cross-validation holdout accuracy: {accuracy_val:.4f} "
+                                f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
+                            )
+                            try:
+                                self._h2o.remove(xval_preds)
+                            except:
+                                pass
+                        else:
+                            raise ValueError("No xval predictions available")
+                    except Exception as xval_e:
+                        # Fallback: compute on training data but warn
+                        logger.warning(
+                            f"Could not get xval predictions ({xval_e}), "
+                            f"falling back to training accuracy (will be inflated)"
+                        )
+                        preds_h2o = best_model.predict(eval_frame)
+                        preds_df = preds_h2o.as_data_frame()
+                        actual_df = eval_frame[target_column].as_data_frame()
+                        y_pred = preds_df['predict'].astype(str).values
+                        y_true = actual_df[target_column].astype(str).values
+                        accuracy_val = float((y_pred == y_true).mean())
+                        n_eval = len(y_true)
+                        logger.info(
+                            f"⚠️ Training-based accuracy (inflated): {accuracy_val:.4f} "
+                            f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
+                        )
+                        try:
+                            self._h2o.remove(preds_h2o)
+                        except:
+                            pass
             except Exception as e:
                 logger.warning(f"Could not compute prediction accuracy ({e}), using 1-MPCE")
                 accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))

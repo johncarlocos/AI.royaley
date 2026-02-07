@@ -206,6 +206,17 @@ class WalkForwardValidator:
             f"Generating walk-forward folds from {start_date.date()} to {end_date.date()}"
         )
         
+        # GUARD: If start_date > end_date, data span is shorter than min_training_days
+        if start_date >= end_date:
+            date_span = (data_end - data_start).days
+            logger.warning(
+                f"⚠️ Cannot generate walk-forward folds: data spans {date_span} days "
+                f"but min_training_days={self.min_training_days}. "
+                f"Need at least {self.min_training_days} days of data before first test fold. "
+                f"Skipping walk-forward validation."
+            )
+            return  # Generator yields nothing
+        
         fold_number = 0
         current_test_start = start_date
         

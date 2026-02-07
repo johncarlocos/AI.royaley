@@ -817,6 +817,108 @@ class TrainingService:
                     logger.warning(f"🔧 No total line column found - over_result NaN rows will be dropped")
             
             # ================================================================
+            # FIX 2b2: FALLBACK TARGET RECONSTRUCTION
+            # When odds data is too sparse (e.g., 4 out of 3431 NCAAB rows),
+            # spread_result/over_result will be NaN for most rows.
+            # Without a fallback, dropna(target) reduces dataset to near-zero.
+            #
+            # Strategy: Use game-specific PROXY LINES from pre-game data:
+            #   - Spread proxy: power_rating_diff (how much better is home team?)
+            #   - Total proxy: median total_points from the dataset
+            # These aren't perfect but give the model 3000+ rows instead of 4.
+            # A 'has_real_line' feature lets the model weight accordingly.
+            # ================================================================
+            if 'home_score' in df.columns and 'away_score' in df.columns:
+                margin = df['home_score'] - df['away_score']
+                total_pts = df['home_score'] + df['away_score']
+                
+                # Spread fallback
+                if 'spread_result' in df.columns:
+                    n_valid_spread = df['spread_result'].notna().sum()
+                    n_total = len(df)
+                    spread_coverage = n_valid_spread / n_total if n_total > 0 else 0
+                    
+                    if spread_coverage < 0.5 and n_valid_spread < 200:
+                        # Too few real spread results - use proxy
+                        fill_mask = df['spread_result'].isna() & df['home_score'].notna()
+                        
+                        if fill_mask.any():
+                            # Best proxy: power rating differential (pre-game estimate of spread)
+                            if 'home_power_rating' in df.columns and 'away_power_rating' in df.columns:
+                                pr_valid = (df['home_power_rating'].notna() & df['away_power_rating'].notna())
+                                proxy_mask = fill_mask & pr_valid
+                                proxy_spread = df.loc[proxy_mask, 'away_power_rating'] - df.loc[proxy_mask, 'home_power_rating']
+                                df.loc[proxy_mask, 'spread_result'] = (
+                                    margin[proxy_mask] > -proxy_spread
+                                ).astype(float)
+                                # Mark pushes as NaN
+                                push_mask = proxy_mask & (margin == -(df['away_power_rating'] - df['home_power_rating']))
+                                df.loc[push_mask, 'spread_result'] = np.nan
+                                
+                                # Remaining rows without power ratings: use median margin
+                                remaining = fill_mask & ~pr_valid
+                                if remaining.any():
+                                    median_margin = margin.median()
+                                    df.loc[remaining, 'spread_result'] = (
+                                        margin[remaining] > median_margin
+                                    ).astype(float)
+                                
+                                n_filled = df['spread_result'].notna().sum() - n_valid_spread
+                                logger.warning(
+                                    f"🔧 SPREAD FALLBACK: Only {n_valid_spread}/{n_total} had real spread lines. "
+                                    f"Filled {n_filled} rows using power_rating proxy. "
+                                    f"Total valid: {df['spread_result'].notna().sum()}"
+                                )
+                            else:
+                                # No power ratings: use median score_margin as proxy line
+                                median_margin = margin.median()
+                                df.loc[fill_mask, 'spread_result'] = (
+                                    margin[fill_mask] > median_margin
+                                ).astype(float)
+                                n_filled = fill_mask.sum()
+                                logger.warning(
+                                    f"🔧 SPREAD FALLBACK: Only {n_valid_spread}/{n_total} had real spread lines. "
+                                    f"Filled {n_filled} rows using median margin ({median_margin:.1f}) as proxy. "
+                                    f"Total valid: {df['spread_result'].notna().sum()}"
+                                )
+                            
+                            # Add indicator so model knows which rows have real vs proxy lines
+                            df['has_real_spread_line'] = 0
+                            if spread_line_col and spread_line_col in df.columns:
+                                df.loc[df[spread_line_col].notna(), 'has_real_spread_line'] = 1
+                
+                # Total fallback
+                if 'over_result' in df.columns:
+                    n_valid_total = df['over_result'].notna().sum()
+                    n_total = len(df)
+                    total_coverage = n_valid_total / n_total if n_total > 0 else 0
+                    
+                    if total_coverage < 0.5 and n_valid_total < 200:
+                        fill_mask = df['over_result'].isna() & df['home_score'].notna()
+                        
+                        if fill_mask.any():
+                            # Use median total points as the proxy line
+                            median_total = total_pts.median()
+                            df.loc[fill_mask, 'over_result'] = (
+                                total_pts[fill_mask] > median_total
+                            ).astype(float)
+                            # Mark exact median as NaN (push equivalent)
+                            push_mask = fill_mask & (total_pts == median_total)
+                            df.loc[push_mask, 'over_result'] = np.nan
+                            
+                            n_filled = df['over_result'].notna().sum() - n_valid_total
+                            logger.warning(
+                                f"🔧 TOTAL FALLBACK: Only {n_valid_total}/{n_total} had real total lines. "
+                                f"Filled {n_filled} rows using median total ({median_total:.1f}) as proxy. "
+                                f"Total valid: {df['over_result'].notna().sum()}"
+                            )
+                            
+                            # Add indicator so model knows which rows have real vs proxy lines
+                            df['has_real_total_line'] = 0
+                            if total_line_col and total_line_col in df.columns:
+                                df.loc[df[total_line_col].notna(), 'has_real_total_line'] = 1
+            
+            # ================================================================
             # FIX 2d: ADVANCED FEATURE ENGINEERING
             # Create features that identify VALUE - when the line is wrong
             # Focus on: ATS trends, situational spots, line value indicators

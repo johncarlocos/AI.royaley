@@ -155,19 +155,36 @@ class AutoGluonTrainer:
         try:
             from autogluon.tabular import TabularPredictor
             
-            # Prepare save path
+            # Prepare save path - FORCE clean to prevent "Learner is already fit"
             model_path = self.model_dir / sport_code / bet_type
             if model_path.exists():
                 shutil.rmtree(model_path)
-            model_path.mkdir(parents=True, exist_ok=True)
+            # Do NOT mkdir here - let AutoGluon create it (avoids stale state)
             
             # Prepare training data
             train_data = train_df[feature_columns + [target_column]].copy()
             
             # Prepare validation data
+            # IMPORTANT: best_quality preset uses bagging (num_bag_folds=8).
+            # In bagged mode, tuning_data MUST be None - AutoGluon uses internal
+            # cross-validation instead. Passing tuning_data causes DyStack to
+            # partially fit the learner, then the main fit crashes with
+            # "Learner is already fit."
             tuning_data = None
+            use_bag_holdout = False
             if validation_df is not None:
-                tuning_data = validation_df[feature_columns + [target_column]].copy()
+                # Only use tuning_data with non-bagged presets
+                if presets in ('medium_quality', 'good_quality'):
+                    tuning_data = validation_df[feature_columns + [target_column]].copy()
+                else:
+                    # For best_quality: merge validation into training data
+                    # AutoGluon will use internal CV for validation
+                    extra_data = validation_df[feature_columns + [target_column]].copy()
+                    train_data = pd.concat([train_data, extra_data], ignore_index=True)
+                    logger.info(
+                        f"Merged validation data into training set for bagged mode: "
+                        f"{len(train_data)} total samples"
+                    )
             
             # Create predictor
             predictor = TabularPredictor(

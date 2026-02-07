@@ -207,8 +207,12 @@ class AutoGluonTrainer:
                 num_bag_folds=num_bag_folds,
                 num_stack_levels=num_stack_levels,
                 verbosity=2,
-                # Excluded models that are too slow
-                excluded_model_types=['NN_TORCH', 'FASTAI'],
+                # Excluded models:
+                # - NN_TORCH, FASTAI: Too slow for production
+                # - XGB: XGBoost 2.1+ removed n_classes_ attribute, incompatible
+                #   with AutoGluon 1.5.0 predict_proba(). CatBoost/LightGBM
+                #   perform identically. Re-enable after upgrading AutoGluon.
+                excluded_model_types=['NN_TORCH', 'FASTAI', 'XGB'],
             )
             
             # Store predictor
@@ -390,16 +394,17 @@ class AutoGluonTrainer:
                     'num_leaves': 128,
                 },
             ],
-            # XGBoost
-            'XGB': [
-                {
-                    'n_estimators': 500,
-                    'learning_rate': 0.05,
-                    'max_depth': 6,
-                    'subsample': 0.8,
-                    'colsample_bytree': 0.8,
-                },
-            ],
+            # XGBoost - DISABLED: xgboost 2.1+ incompatible with AutoGluon 1.5.0
+            # Re-enable after upgrading AutoGluon or downgrading xgboost<2.1
+            # 'XGB': [
+            #     {
+            #         'n_estimators': 500,
+            #         'learning_rate': 0.05,
+            #         'max_depth': 6,
+            #         'subsample': 0.8,
+            #         'colsample_bytree': 0.8,
+            #     },
+            # ],
             # CatBoost
             'CAT': [
                 {

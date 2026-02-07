@@ -332,6 +332,33 @@ class H2OTrainer:
                 valid_h2o = self._h2o.H2OFrame(validation_df)
                 frames_to_cleanup.append(valid_h2o)
                 valid_h2o[target_column] = valid_h2o[target_column].asfactor()
+                
+                # CRITICAL: Synchronize column types between train and validation frames.
+                # H2O auto-infers types independently per frame. With sparse data (e.g. odds 
+                # columns ~30% populated), the train set may have a few real values (→ categorical)
+                # while the validation set has all NaN (→ numeric), causing type mismatch errors.
+                train_types = train_h2o.types  # dict of {col_name: type_string}
+                valid_types = valid_h2o.types
+                type_fixes = 0
+                for col in feature_columns:
+                    if col not in train_types or col not in valid_types:
+                        continue
+                    t_type = train_types[col]
+                    v_type = valid_types[col]
+                    if t_type != v_type:
+                        # Force both to numeric if either is numeric (odds/stats should be numeric)
+                        if t_type in ('real', 'int') and v_type == 'enum':
+                            valid_h2o[col] = valid_h2o[col].asnumeric()
+                            type_fixes += 1
+                        elif v_type in ('real', 'int') and t_type == 'enum':
+                            # Train is categorical but should be numeric — fix training frame
+                            train_h2o[col] = train_h2o[col].asnumeric()
+                            type_fixes += 1
+                if type_fixes > 0:
+                    logger.warning(
+                        f"🔧 H2O TYPE SYNC: Fixed {type_fixes} column type mismatches "
+                        f"between train and validation frames"
+                    )
             
             # Configure AutoML with dynamic settings
             # Use unique project name per training run to avoid model conflicts across folds
@@ -415,6 +442,17 @@ class H2OTrainer:
             
             # Get best model — with degenerate model guard
             best_model = aml.leader
+            
+            # Guard: If all models failed, leader is None
+            if best_model is None:
+                lb_df = aml.leaderboard.as_data_frame() if aml.leaderboard is not None else None
+                n_tried = len(lb_df) if lb_df is not None else 0
+                raise ValueError(
+                    f"H2O AutoML failed to build any model. "
+                    f"Leaderboard empty ({n_tried} attempted). "
+                    f"Check logs above for per-model errors (e.g. column type mismatches)."
+                )
+            
             leader_auc, auc_source = get_validation_auc(best_model)
             logger.info(
                 f"Leader {best_model.model_id}: {auc_source} AUC={leader_auc:.4f}"

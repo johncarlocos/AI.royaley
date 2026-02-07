@@ -225,22 +225,32 @@ class AutoGluonTrainer:
             # Get best model info (AutoGluon 1.5+ uses property, not method)
             best_model = predictor.model_best if hasattr(predictor, 'model_best') else 'WeightedEnsemble_L2'
             
-            # Evaluate performance
-            # In bagged mode with no tuning_data, use OOF predictions for evaluation
-            # predictor.evaluate() on train_data would be overly optimistic
-            # Instead, use the leaderboard's validation score (which uses OOF)
+            # Evaluate performance using OOF (out-of-fold) predictions
+            # These are predictions on data the model DIDN'T see during training
+            # This gives realistic, unbiased performance estimates
+            
+            # AUC from leaderboard (OOF-based)
             best_row = leaderboard[leaderboard['model'] == best_model]
             if not best_row.empty:
                 auc = float(best_row['score_val'].iloc[0])
             else:
                 auc = float(leaderboard['score_val'].iloc[0])
             
-            # Get accuracy via predict on train data (approximate)
+            # Accuracy from OOF predictions (realistic, not inflated)
             try:
-                y_pred = predictor.predict(train_data.drop(columns=[target_column]))
-                accuracy = float((y_pred == train_data[target_column]).mean())
-            except Exception:
-                accuracy = 0.0
+                # get_oof_pred() returns OOF predictions for bagged models
+                # These are predictions made on held-out folds during training
+                oof_preds = predictor.get_oof_pred()
+                y_true = train_data[target_column]
+                # Align indices in case of any mismatch
+                common_idx = oof_preds.index.intersection(y_true.index)
+                accuracy = float((oof_preds.loc[common_idx] == y_true.loc[common_idx]).mean())
+                logger.info(f"OOF accuracy: {accuracy:.4f} ({len(common_idx)} samples)")
+            except Exception as e:
+                logger.warning(f"Could not compute OOF accuracy: {e}, falling back to leaderboard")
+                # Fallback: estimate from AUC (rough approximation)
+                # For balanced binary classification, accuracy ≈ 0.5 + (AUC - 0.5) * 0.8
+                accuracy = 0.5 + (auc - 0.5) * 0.8 if auc > 0.5 else 0.5
             
             # Get feature importance
             try:

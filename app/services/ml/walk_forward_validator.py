@@ -340,6 +340,20 @@ class WalkForwardValidator:
             data, date_column, start_date, end_date
         ):
             try:
+                # CLASS BALANCE GUARD: Skip folds where target has only 1 class
+                # H2O crashes with "Number of classes is equal to 1" otherwise.
+                # Common in tennis data where winner is always listed as "home".
+                train_classes = train_df[target_column].nunique()
+                
+                if train_classes < 2:
+                    logger.warning(
+                        f"Fold {fold.fold_number}: Skipping - training set has only "
+                        f"{train_classes} class(es) in '{target_column}' "
+                        f"(need 2 for binary classification). "
+                        f"Distribution: {train_df[target_column].value_counts().to_dict()}"
+                    )
+                    continue
+                
                 # Train model on this fold
                 logger.info(f"Training fold {fold.fold_number}...")
                 

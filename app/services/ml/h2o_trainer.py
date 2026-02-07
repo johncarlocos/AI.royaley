@@ -319,6 +319,18 @@ class H2OTrainer:
             if len(feature_columns) == 0:
                 raise ValueError("No features remaining after variance filtering")
             
+            # CLASS BALANCE GUARD: H2O crashes with "Number of classes is equal to 1"
+            # if the target column has only one unique value. This happens commonly
+            # with tennis data where winner is always listed as "home" player.
+            n_classes = train_df[target_column].nunique()
+            if n_classes < 2:
+                class_dist = train_df[target_column].value_counts().to_dict()
+                raise ValueError(
+                    f"Target '{target_column}' has only {n_classes} class(es): {class_dist}. "
+                    f"Need at least 2 classes for binary classification. "
+                    f"For tennis, this usually means the data needs swap debiasing."
+                )
+            
             # Convert to H2O frames
             train_h2o = self._h2o.H2OFrame(train_df)
             frames_to_cleanup.append(train_h2o)

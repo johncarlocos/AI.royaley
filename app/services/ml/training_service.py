@@ -445,6 +445,27 @@ class TrainingService:
                 result.log_loss = getattr(model_result, 'log_loss', 0.0)
                 result.model_path = getattr(model_result, 'model_path', '')
                 
+                # SANITY CHECK: Flag suspiciously high accuracy
+                # No sports prediction model should exceed ~75% accuracy.
+                # Higher values indicate data leakage or severe class imbalance.
+                if result.accuracy > 0.85:
+                    # Check class distribution
+                    class_dist = train_df[target_column].value_counts(normalize=True)
+                    majority_pct = class_dist.max() * 100
+                    logger.warning(
+                        f"⚠️ SUSPICIOUSLY HIGH ACCURACY: {result.accuracy:.1%} for "
+                        f"{sport_code} {bet_type}. "
+                        f"Class distribution: {class_dist.to_dict()}. "
+                        f"Majority class: {majority_pct:.1f}%. "
+                        f"If majority > 80%, model may just be predicting the majority class."
+                    )
+                    if majority_pct > 80:
+                        logger.warning(
+                            f"⚠️ SEVERE CLASS IMBALANCE DETECTED: {majority_pct:.1f}% majority. "
+                            f"Model accuracy ({result.accuracy:.1%}) is likely NOT real predictive power. "
+                            f"For tennis: ensure swap debiasing is active."
+                        )
+                
                 # Extract top features
                 var_imp = getattr(model_result, 'variable_importance', {})
                 result.top_features = [
@@ -1246,11 +1267,13 @@ class TrainingService:
                 return None, [], ""
             
             # ================================================================
-            # TENNIS HANDLING: Use relative features to avoid home/away bias
-            # In tennis data, Player 1 (home) is usually the winner.
-            # Instead of swapping (which creates detectable patterns),
-            # we use ONLY relative/difference features that don't depend
-            # on home/away ordering.
+            # TENNIS HANDLING: Random swap debiasing + relative features
+            # In tennis data, Player 1 (home) is usually the winner,
+            # creating ~95% class imbalance. This makes models appear
+            # 97%+ accurate when they're really just predicting majority class.
+            #
+            # FIX: Randomly swap home/away for 50% of rows so home_win ≈ 50%.
+            # This forces the model to learn ACTUAL predictive signal.
             # ================================================================
             if sport_code in ('ATP', 'WTA'):
                 # Remove exact duplicates
@@ -1261,9 +1284,80 @@ class TrainingService:
                 
                 home_win_pct = df['home_win'].mean() if 'home_win' in df.columns else 0
                 logger.info(
-                    f"🎾 TENNIS: home_win={home_win_pct:.1%}. "
-                    f"Using relative features only (no swap debiasing)."
+                    f"🎾 TENNIS PRE-SWAP: home_win={home_win_pct:.1%} "
+                    f"({len(df)} rows)"
                 )
+                
+                # ============================================================
+                # RANDOM SWAP: Flip home/away for 50% of rows to debias
+                # Without this, home_win≈95% and models just predict majority
+                # ============================================================
+                if home_win_pct > 0.65:  # Only swap if clearly biased
+                    np.random.seed(42)  # Reproducible
+                    swap_mask = np.random.random(len(df)) < 0.5
+                    n_swap = swap_mask.sum()
+                    
+                    # Find all home_*/away_* column pairs to swap
+                    home_cols = [c for c in df.columns if c.startswith('home_')]
+                    away_cols = [c for c in df.columns if c.startswith('away_')]
+                    
+                    # Build swap pairs: (home_X, away_X) where both exist
+                    swap_pairs = []
+                    for hcol in home_cols:
+                        suffix = hcol[5:]  # Remove 'home_'
+                        acol = f'away_{suffix}'
+                        if acol in away_cols:
+                            swap_pairs.append((hcol, acol))
+                    
+                    # Also swap odds columns containing home/away
+                    odds_swap_pairs = [
+                        ('moneyline_home_open', 'moneyline_away_open'),
+                        ('moneyline_home_close', 'moneyline_away_close'),
+                    ]
+                    for hcol, acol in odds_swap_pairs:
+                        if hcol in df.columns and acol in df.columns:
+                            swap_pairs.append((hcol, acol))
+                    
+                    # Perform the swap on selected rows
+                    for hcol, acol in swap_pairs:
+                        temp = df.loc[swap_mask, hcol].copy()
+                        df.loc[swap_mask, hcol] = df.loc[swap_mask, acol]
+                        df.loc[swap_mask, acol] = temp
+                    
+                    # Flip implied probability columns for swapped rows
+                    prob_cols = ['implied_home_prob', 'no_vig_home_prob']
+                    for pcol in prob_cols:
+                        if pcol in df.columns:
+                            df.loc[swap_mask, pcol] = 1.0 - df.loc[swap_mask, pcol]
+                    
+                    # Flip spread for swapped rows (home spread becomes negative)
+                    spread_cols = ['spread_open', 'spread_close']
+                    for scol in spread_cols:
+                        if scol in df.columns:
+                            df.loc[swap_mask, scol] = -df.loc[swap_mask, scol]
+                    
+                    # Flip target columns
+                    target_flip_cols = ['home_win', 'spread_result', 'over_result']
+                    for tcol in target_flip_cols:
+                        if tcol in df.columns:
+                            # home_win: 1→0, 0→1
+                            df.loc[swap_mask, tcol] = 1 - df.loc[swap_mask, tcol]
+                    
+                    # Flip score columns
+                    score_swap = [('home_score', 'away_score')]
+                    for hcol, acol in score_swap:
+                        if hcol in df.columns and acol in df.columns:
+                            temp = df.loc[swap_mask, hcol].copy()
+                            df.loc[swap_mask, hcol] = df.loc[swap_mask, acol]
+                            df.loc[swap_mask, acol] = temp
+                    
+                    new_pct = df['home_win'].mean() if 'home_win' in df.columns else 0
+                    logger.info(
+                        f"🎾 TENNIS SWAP: Flipped {n_swap}/{len(df)} rows. "
+                        f"home_win: {home_win_pct:.1%} → {new_pct:.1%}"
+                    )
+                else:
+                    logger.info(f"🎾 TENNIS: home_win={home_win_pct:.1%} - no swap needed (balanced)")
                 
                 # Create relative/difference features that don't encode home/away bias
                 # These features only capture the DIFFERENCE between players
@@ -1395,30 +1489,33 @@ class TrainingService:
             feature_columns = clean_features
             
             # ================================================================
-            # TENNIS: Use only relative/difference features
-            # For tennis, home_* and away_* features encode who the winner is
-            # (since winner is usually listed as "home"). Instead, use only
-            # difference features that capture actual skill differences.
+            # TENNIS: Feature filtering
+            # With random swap debiasing above, home/away is now balanced.
+            # We still exclude raw home_*/away_* features (use diff features
+            # instead) and h2h features, but odds features are now safe
+            # since they've been properly flipped during the swap.
             # ================================================================
             if sport_code in ('ATP', 'WTA') and '_is_tennis' in df.columns:
                 # Remove the marker column from features
                 if '_is_tennis' in feature_columns:
                     feature_columns.remove('_is_tennis')
                 
-                # Features that are safe for tennis (no home/away bias)
+                # Features that are safe for tennis
                 tennis_safe_prefixes = (
                     'power_diff', 'wins_diff', 'wins5_diff', 'winpct_diff',
                     'rest_diff', 'margin_diff', 'pts_diff', 'streak_diff',
                     'games_diff', 'rest_advantage', 'power_rating_diff',
-                    'h2h_', 'month', 'day_of_week', 'season'
+                    'month', 'day_of_week', 'season',
+                    # Odds features - safe after swap debiasing
+                    'implied_', 'no_vig_', 'moneyline_', 'spread_',
+                    'total_', 'overround', 'has_odds', 'has_spread',
+                    'has_total', 'odds_',
                 )
                 
-                # Additional individual features that are OK
-                # NOTE: Exclude h2h_ features - they have suspiciously high correlation
-                # with outcome (0.48+) suggesting potential computation leakage
                 tennis_safe_exact = {
                     'month', 'day_of_week', 'year', 'hour',
                     'rest_advantage', 'power_rating_diff',
+                    'has_odds', 'is_playoff', 'is_neutral_site',
                 }
                 
                 tennis_features = []
@@ -1426,7 +1523,7 @@ class TrainingService:
                 excluded_h2h = []
                 
                 for col in feature_columns:
-                    # Exclude h2h features (potential leakage)
+                    # Exclude h2h features (computation may still leak)
                     if col.startswith('h2h_') or col.startswith('H2H_'):
                         excluded_h2h.append(col)
                         continue
@@ -1437,7 +1534,7 @@ class TrainingService:
                     # Keep if it's an exact match
                     elif col in tennis_safe_exact or col.lower() in tennis_safe_exact:
                         tennis_features.append(col)
-                    # Exclude home_* and away_* (these encode winner bias)
+                    # Exclude raw home_* and away_* (use diff features instead)
                     elif col.startswith('home_') or col.startswith('away_'):
                         excluded_home_away.append(col)
                     # Keep other neutral features

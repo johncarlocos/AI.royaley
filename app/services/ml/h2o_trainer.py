@@ -351,6 +351,7 @@ class H2OTrainer:
                 include_algos=include_algos,
                 project_name=unique_project,
                 exploitation_ratio=0.1 if n_train < 500 else 0.0,  # More exploration for small datasets
+                keep_cross_validation_predictions=True,  # Required for xval accuracy when no holdout set
             )
             
             # Train
@@ -561,26 +562,42 @@ class H2OTrainer:
                         else:
                             raise ValueError("No xval predictions available")
                     except Exception as xval_e:
-                        # Fallback: compute on training data but warn
-                        logger.warning(
-                            f"Could not get xval predictions ({xval_e}), "
-                            f"falling back to training accuracy (will be inflated)"
-                        )
-                        preds_h2o = best_model.predict(eval_frame)
-                        preds_df = preds_h2o.as_data_frame()
-                        actual_df = eval_frame[target_column].as_data_frame()
-                        y_pred = preds_df['predict'].astype(str).values
-                        y_true = actual_df[target_column].astype(str).values
-                        accuracy_val = float((y_pred == y_true).mean())
-                        n_eval = len(y_true)
-                        logger.info(
-                            f"⚠️ Training-based accuracy (inflated): {accuracy_val:.4f} "
-                            f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
-                        )
+                        # Fallback 2: Extract accuracy from xval confusion matrix
                         try:
-                            self._h2o.remove(preds_h2o)
-                        except:
-                            pass
+                            xval_perf = best_model.model_performance(xval=True)
+                            cm = xval_perf.confusion_matrix()
+                            # H2O confusion matrix has .to_list() with error rates
+                            # Total correct = sum of diagonal / total samples
+                            cm_table = cm.to_list()
+                            # For binary: [[TP, FP, err], [FN, TN, err], [total0, total1, overall_err]]
+                            overall_err = cm_table[-1][-1]  # Last row, last col = overall error rate
+                            accuracy_val = 1.0 - overall_err
+                            n_eval = len(train_df)
+                            logger.info(
+                                f"Cross-validation confusion matrix accuracy: {accuracy_val:.4f} "
+                                f"(from xval error rate {overall_err:.4f})"
+                            )
+                        except Exception as cm_e:
+                            # Fallback 3: compute on training data but warn
+                            logger.warning(
+                                f"Could not get xval predictions ({xval_e}) or CM ({cm_e}), "
+                                f"falling back to training accuracy (will be inflated)"
+                            )
+                            preds_h2o = best_model.predict(eval_frame)
+                            preds_df = preds_h2o.as_data_frame()
+                            actual_df = eval_frame[target_column].as_data_frame()
+                            y_pred = preds_df['predict'].astype(str).values
+                            y_true = actual_df[target_column].astype(str).values
+                            accuracy_val = float((y_pred == y_true).mean())
+                            n_eval = len(y_true)
+                            logger.info(
+                                f"⚠️ Training-based accuracy (inflated): {accuracy_val:.4f} "
+                                f"({int(accuracy_val * n_eval)}/{n_eval} correct)"
+                            )
+                            try:
+                                self._h2o.remove(preds_h2o)
+                            except:
+                                pass
             except Exception as e:
                 logger.warning(f"Could not compute prediction accuracy ({e}), using 1-MPCE")
                 accuracy_val = max(0.0, min(1.0, 1.0 - mpce_val))

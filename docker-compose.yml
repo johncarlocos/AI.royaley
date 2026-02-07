@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-false}
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
         INSTALL_QUANTUM: ${INSTALL_QUANTUM:-false}
         INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_api
@@ -222,7 +222,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-false}
+        INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
         INSTALL_QUANTUM: ${INSTALL_QUANTUM:-true}
         INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_ensemble_worker

@@ -53,7 +53,6 @@ services:
       - BALLDONTLIE_API_KEY=${BALLDONTLIE_API_KEY}
       - WEATHERSTACK_API_KEY=${WEATHERSTACK_API_KEY}
       - GPU_ENABLED=true
-      - CUDA_VISIBLE_DEVICES=2
       - NVIDIA_VISIBLE_DEVICES=2
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
@@ -116,7 +115,6 @@ services:
       - RAPIDAPI_KEY=${RAPIDAPI_KEY}
       - WEATHERSTACK_API_KEY=${WEATHERSTACK_API_KEY}
       - GPU_ENABLED=true
-      - CUDA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=0
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - H2O_MAX_MEM_SIZE=96g
@@ -172,7 +170,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY}
       - GPU_ENABLED=true
-      - CUDA_VISIBLE_DEVICES=1
       - NVIDIA_VISIBLE_DEVICES=1
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - AUTOGLUON_PRESETS=best_quality
@@ -226,7 +223,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY}
       - GPU_ENABLED=true
-      - CUDA_VISIBLE_DEVICES=3
       - NVIDIA_VISIBLE_DEVICES=3
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:

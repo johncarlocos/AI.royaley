@@ -90,10 +90,6 @@ services:
         reservations:
           cpus: '8'
           memory: 16G
-          devices:
-            - driver: nvidia
-              device_ids: ['2']
-              capabilities: [gpu]
 
   # =============================================================================
   # Background Worker (GPU 0 - Primary ML Training)
@@ -154,10 +150,6 @@ services:
         reservations:
           cpus: '8'
           memory: 64G
-          devices:
-            - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
 
   # =============================================================================
   # ML Training Worker (GPU 1 - AutoGluon)
@@ -212,10 +204,6 @@ services:
         reservations:
           cpus: '8'
           memory: 32G
-          devices:
-            - driver: nvidia
-              device_ids: ['1']
-              capabilities: [gpu]
 
   # =============================================================================
   # Ensemble/Backup Worker (GPU 3)
@@ -267,10 +255,6 @@ services:
         reservations:
           cpus: '4'
           memory: 16G
-          devices:
-            - driver: nvidia
-              device_ids: ['3']
-              capabilities: [gpu]
 
   # =============================================================================
   # PostgreSQL Database (NVMe 0 - Fast Storage)

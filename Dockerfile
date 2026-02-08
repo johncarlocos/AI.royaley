@@ -69,6 +69,7 @@ RUN if [ "$INSTALL_GPU" = "true" ]; then \
         pip install --no-cache-dir \
             "nvidia-cublas-cu12" \
             "nvidia-cuda-cupti-cu12" \
+            "nvidia-cuda-nvcc-cu12" \
             "nvidia-cuda-nvrtc-cu12" \
             "nvidia-cuda-runtime-cu12" \
             "nvidia-cudnn-cu12==8.9.*" \
@@ -119,7 +120,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     APP_HOME=/app \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/lib/python3.11/site-packages/nvidia/cuda_nvcc/bin:/opt/venv/bin:$PATH"
 
 # NVIDIA CUDA pip packages install shared libraries (.so) inside the venv.
 # TensorFlow needs LD_LIBRARY_PATH to find libcudart, libcublas, libcudnn, etc.
@@ -136,6 +137,10 @@ ENV LD_LIBRARY_PATH="/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:\
 /opt/venv/lib/python3.11/site-packages/nvidia/nccl/lib:\
 /opt/venv/lib/python3.11/site-packages/nvidia/nvjitlink/lib\
 ${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# TensorFlow XLA needs ptxas and libdevice.10.bc for GPU kernel compilation.
+# nvidia-cuda-nvcc-cu12 pip package provides these inside the venv.
+ENV XLA_FLAGS="--xla_gpu_cuda_data_dir=/opt/venv/lib/python3.11/site-packages/nvidia/cuda_nvcc"
 
 WORKDIR $APP_HOME
 

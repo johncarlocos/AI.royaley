@@ -26,6 +26,7 @@ cupy-cuda12x>=13.0.0
 # ============================================================================
 nvidia-cublas-cu12
 nvidia-cuda-cupti-cu12
+nvidia-cuda-nvcc-cu12
 nvidia-cuda-nvrtc-cu12
 nvidia-cuda-runtime-cu12
 nvidia-cudnn-cu12==8.9.*

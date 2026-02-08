@@ -1414,6 +1414,41 @@ class TrainingService:
                             f"pre-swap diff features: {diff_negate_cols[:5]}..."
                         )
                     
+                    # ============================================================
+                    # CRITICAL: Negate ALL directional derived features.
+                    #
+                    # The diff_negate_cols above only catches features with '_diff'
+                    # in the name. But feature engineering (Tier 2-5) creates many
+                    # directional features WITHOUT '_diff' in the name:
+                    #   spread_value, margin_value, combined_strength, etc.
+                    # These encode the pre-swap "home=winner" perspective. Without
+                    # negation, the model compares these (always positive for winners)
+                    # with properly-negated _diff features to detect which rows were
+                    # swapped, achieving 0.97+ AUC on what should be 0.65-0.75.
+                    # ============================================================
+                    directional_derived_features = [
+                        'spread_value',                 # power_rating_diff + spread_close
+                        'margin_value',                 # margin_diff + spread_close
+                        'expected_margin_vs_spread',    # margin_diff + spread_close
+                        'combined_strength',            # weighted sum of directional diffs
+                        'combined_value',               # weighted sum of spread/margin value
+                        'revenge_edge',                 # home_is_revenge - away_is_revenge
+                        'rest_power_combo',             # rest_advantage * power_rating_diff
+                        'spot_danger',                  # -home_letdown + away_letdown + ...
+                        'line_move_direction',          # sign(spread_close - spread_open)
+                    ]
+                    negated_derived = []
+                    for dcol in directional_derived_features:
+                        if dcol in df.columns and df[dcol].dtype in ['float64', 'int64', 'float32', 'int32']:
+                            df.loc[swap_mask, dcol] = -df.loc[swap_mask, dcol]
+                            negated_derived.append(dcol)
+                    
+                    if negated_derived:
+                        logger.info(
+                            f"🎾 TENNIS SWAP: Negated {len(negated_derived)} "
+                            f"directional derived features: {negated_derived}"
+                        )
+                    
                     # Also negate home-perspective features that don't start with home_/away_
                     # These would bypass the home_/away_ feature filter
                     home_perspective_cols = [

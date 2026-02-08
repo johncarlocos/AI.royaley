@@ -65,6 +65,20 @@ RUN if [ "$INSTALL_GPU" = "true" ]; then \
             "gpustat>=1.1.1" \
             "onnxruntime-gpu>=1.16.0" \
         || echo "WARNING: Some GPU packages failed to install, continuing..."; \
+        echo "Installing TensorFlow CUDA runtime libraries..." && \
+        pip install --no-cache-dir \
+            "nvidia-cublas-cu12" \
+            "nvidia-cuda-cupti-cu12" \
+            "nvidia-cuda-nvrtc-cu12" \
+            "nvidia-cuda-runtime-cu12" \
+            "nvidia-cudnn-cu12==8.9.*" \
+            "nvidia-cufft-cu12" \
+            "nvidia-curand-cu12" \
+            "nvidia-cusolver-cu12" \
+            "nvidia-cusparse-cu12" \
+            "nvidia-nccl-cu12" \
+            "nvidia-nvjitlink-cu12" \
+        || echo "WARNING: Some TF CUDA packages failed, GPU may not work"; \
     fi
 
 # Step 3: Install AutoGluon if requested (handles its own numpy/pandas/scipy versions)
@@ -106,6 +120,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     APP_HOME=/app \
     PATH="/opt/venv/bin:$PATH"
+
+# NVIDIA CUDA pip packages install shared libraries (.so) inside the venv.
+# TensorFlow needs LD_LIBRARY_PATH to find libcudart, libcublas, libcudnn, etc.
+# Without this, TF detects the GPU device but fails with "Could not find cuda drivers".
+ENV LD_LIBRARY_PATH="/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cuda_cupti/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cufft/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/curand/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cusolver/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/cusparse/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/nccl/lib:\
+/opt/venv/lib/python3.11/site-packages/nvidia/nvjitlink/lib\
+${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 WORKDIR $APP_HOME
 

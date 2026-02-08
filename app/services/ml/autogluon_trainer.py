@@ -121,6 +121,7 @@ class AutoGluonTrainer:
         presets: str = None,
         num_bag_folds: int = None,
         num_stack_levels: int = None,
+        fast_mode: bool = False,
     ) -> AutoGluonModelResult:
         """
         Train AutoGluon model with multi-layer stacking.
@@ -136,14 +137,22 @@ class AutoGluonTrainer:
             presets: AutoGluon presets ('best_quality', 'high_quality', 'medium_quality')
             num_bag_folds: Number of bagging folds
             num_stack_levels: Number of stacking levels
+            fast_mode: If True, use faster settings (for walk-forward folds)
             
         Returns:
             AutoGluonModelResult with trained model info
         """
-        time_limit = time_limit or self.config.autogluon_time_limit
-        presets = presets or self.config.autogluon_presets
-        num_bag_folds = num_bag_folds or self.config.autogluon_num_bag_folds
-        num_stack_levels = num_stack_levels or self.config.autogluon_num_stack_levels
+        if fast_mode:
+            # Walk-forward fold: fast training with no stacking
+            time_limit = time_limit or 120  # 2 minutes max per fold
+            presets = 'medium_quality'
+            num_bag_folds = 5
+            num_stack_levels = 0
+        else:
+            time_limit = time_limit or self.config.autogluon_time_limit
+            presets = presets or self.config.autogluon_presets
+            num_bag_folds = num_bag_folds or self.config.autogluon_num_bag_folds
+            num_stack_levels = num_stack_levels or self.config.autogluon_num_stack_levels
         
         logger.info(
             f"Starting AutoGluon training for {sport_code} {bet_type} "
@@ -162,7 +171,50 @@ class AutoGluonTrainer:
             # Do NOT mkdir here - let AutoGluon create it (avoids stale state)
             
             # Prepare training data
-            train_data = train_df[feature_columns + [target_column]].copy()
+            # Include scheduled_at temporarily for tennis temporal holdout
+            keep_cols = feature_columns + [target_column]
+            if sport_code in ('ATP', 'WTA') and 'scheduled_at' in train_df.columns:
+                keep_cols = keep_cols + ['scheduled_at']
+            train_data = train_df[keep_cols].copy()
+            
+            # ================================================================
+            # HOLDOUT FOR ACCURACY: Split off a small portion (10%) that is
+            # NEVER seen during training. AutoGluon 1.5.0 doesn't have
+            # get_oof_pred(), and validation_df gets merged into training
+            # for best_quality preset, so we need a truly separate holdout.
+            # ================================================================
+            accuracy_holdout = None
+            if not fast_mode and len(train_data) > 500:
+                # For tennis: use TEMPORAL holdout (last 10% chronologically)
+                # Random holdout gives inflated accuracy because home=winner bias
+                # is consistent across random splits. Temporal holdout captures
+                # real prediction difficulty.
+                if sport_code in ('ATP', 'WTA') and 'scheduled_at' in train_data.columns:
+                    train_data_sorted = train_data.sort_values('scheduled_at').reset_index(drop=True)
+                    split_idx = int(len(train_data_sorted) * 0.90)
+                    accuracy_holdout = train_data_sorted.iloc[split_idx:].copy()
+                    train_data = train_data_sorted.iloc[:split_idx].copy()
+                    # Drop scheduled_at from both - not a feature
+                    train_data = train_data.drop(columns=['scheduled_at'], errors='ignore')
+                    accuracy_holdout = accuracy_holdout.drop(columns=['scheduled_at'], errors='ignore')
+                    logger.info(
+                        f"🎾 Temporal holdout: {len(accuracy_holdout)} samples "
+                        f"(last 10% chronologically, never seen during training)"
+                    )
+                else:
+                    # For team sports: stratified random split is fine
+                    from sklearn.model_selection import train_test_split
+                    train_data, accuracy_holdout = train_test_split(
+                        train_data, test_size=0.10, random_state=42,
+                        stratify=train_data[target_column]
+                    )
+                    logger.info(
+                        f"Accuracy holdout: {len(accuracy_holdout)} samples reserved "
+                        f"(never seen during training)"
+                    )
+            else:
+                # Drop scheduled_at if present (not a feature for AutoGluon)
+                train_data = train_data.drop(columns=['scheduled_at'], errors='ignore')
             
             # Prepare validation data
             # IMPORTANT: best_quality preset uses bagging (num_bag_folds=8).
@@ -236,21 +288,48 @@ class AutoGluonTrainer:
             else:
                 auc = float(leaderboard['score_val'].iloc[0])
             
-            # Accuracy from OOF predictions (realistic, not inflated)
+            # Accuracy from holdout predictions (realistic, not inflated)
             try:
-                # get_oof_pred() returns OOF predictions for bagged models
-                # These are predictions made on held-out folds during training
-                oof_preds = predictor.get_oof_pred()
-                y_true = train_data[target_column]
-                # Align indices in case of any mismatch
-                common_idx = oof_preds.index.intersection(y_true.index)
-                accuracy = float((oof_preds.loc[common_idx] == y_true.loc[common_idx]).mean())
-                logger.info(f"OOF accuracy: {accuracy:.4f} ({len(common_idx)} samples)")
+                if accuracy_holdout is not None and len(accuracy_holdout) > 50:
+                    # Use the holdout we saved before merging into training
+                    holdout_features = accuracy_holdout[feature_columns]
+                    holdout_probs = predictor.predict_proba(holdout_features)
+                    
+                    # Get positive class probabilities
+                    if isinstance(holdout_probs, pd.DataFrame):
+                        if 1 in holdout_probs.columns:
+                            pos_probs = holdout_probs[1].values
+                        else:
+                            pos_probs = holdout_probs.iloc[:, 1].values
+                    else:
+                        pos_probs = holdout_probs[:, 1]
+                    
+                    holdout_preds = (pos_probs >= 0.5).astype(int)
+                    holdout_true = accuracy_holdout[target_column].values
+                    accuracy = float((holdout_preds == holdout_true).mean())
+                    
+                    # Also compute holdout AUC for cross-check
+                    from sklearn.metrics import roc_auc_score as _roc_auc
+                    if len(np.unique(holdout_true)) > 1:
+                        holdout_auc = float(_roc_auc(holdout_true, pos_probs))
+                        logger.info(
+                            f"Holdout accuracy: {accuracy:.4f}, holdout AUC: {holdout_auc:.4f} "
+                            f"({len(accuracy_holdout)} samples)"
+                        )
+                    else:
+                        logger.info(f"Holdout accuracy: {accuracy:.4f} ({len(accuracy_holdout)} samples)")
+                else:
+                    # No holdout available - estimate from AUC
+                    # More conservative formula than before
+                    accuracy = 0.5 + (auc - 0.5) * 0.5 if auc > 0.5 else 0.5
+                    logger.warning(
+                        f"No holdout for accuracy, estimated from AUC: {accuracy:.4f} "
+                        f"(rough estimate only)"
+                    )
             except Exception as e:
-                logger.warning(f"Could not compute OOF accuracy: {e}, falling back to leaderboard")
-                # Fallback: estimate from AUC (rough approximation)
-                # For balanced binary classification, accuracy ≈ 0.5 + (AUC - 0.5) * 0.8
-                accuracy = 0.5 + (auc - 0.5) * 0.8 if auc > 0.5 else 0.5
+                logger.warning(f"Could not compute holdout accuracy: {e}, falling back to estimate")
+                # Conservative fallback
+                accuracy = 0.5 + (auc - 0.5) * 0.5 if auc > 0.5 else 0.5
             
             # Get feature importance
             try:

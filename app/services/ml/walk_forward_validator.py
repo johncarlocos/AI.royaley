@@ -387,6 +387,17 @@ class WalkForwardValidator:
                         feature_columns=feature_columns,
                     )
                 
+                # Sanitize predictions - replace NaN/Inf with 0.5
+                probs = np.array(probs, dtype=np.float64)
+                nan_mask = np.isnan(probs) | np.isinf(probs)
+                if nan_mask.any():
+                    logger.warning(
+                        f"Fold {fold.fold_number}: {nan_mask.sum()} NaN/Inf predictions, "
+                        f"replacing with 0.5"
+                    )
+                    probs[nan_mask] = 0.5
+                probs = np.clip(probs, 1e-7, 1 - 1e-7)  # Prevent log(0)
+                
                 # Calculate metrics
                 y_true = test_df[target_column].values
                 y_pred = (probs >= 0.5).astype(int)
@@ -467,12 +478,26 @@ class WalkForwardValidator:
         bet_type: str,
     ) -> WalkForwardResult:
         """Aggregate metrics across all folds"""
-        accuracies = [m.accuracy for m in fold_metrics]
-        aucs = [m.auc for m in fold_metrics]
-        log_losses = [m.log_loss for m in fold_metrics]
-        brier_scores = [m.brier_score for m in fold_metrics]
-        clvs = [m.clv for m in fold_metrics]
-        rois = [m.roi for m in fold_metrics]
+        accuracies = [m.accuracy for m in fold_metrics if not np.isnan(m.accuracy)]
+        aucs = [m.auc for m in fold_metrics if not np.isnan(m.auc)]
+        log_losses = [m.log_loss for m in fold_metrics if not np.isnan(m.log_loss)]
+        brier_scores = [m.brier_score for m in fold_metrics if not np.isnan(m.brier_score)]
+        clvs = [m.clv for m in fold_metrics if not np.isnan(m.clv)]
+        rois = [m.roi for m in fold_metrics if not np.isnan(m.roi)]
+        
+        # Ensure we have at least some valid metrics
+        if not accuracies:
+            accuracies = [0.5]
+        if not aucs:
+            aucs = [0.5]
+        if not log_losses:
+            log_losses = [0.693]
+        if not brier_scores:
+            brier_scores = [0.25]
+        if not clvs:
+            clvs = [0.0]
+        if not rois:
+            rois = [0.0]
         
         # Calculate trend in accuracy
         if len(accuracies) > 1:

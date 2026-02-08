@@ -394,15 +394,39 @@ class TrainingService:
                         f"Using cross-validation only for model evaluation."
                     )
                 
-                # Safely access overall_metrics from WFV result
-                if wfv_result:
-                    if hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
-                        result.wfv_accuracy = wfv_result.overall_metrics.get("accuracy", 0.0)
-                        result.wfv_roi = wfv_result.overall_metrics.get("roi", 0.0)
-                    else:
-                        logger.warning("Walk-forward validation returned no metrics (all folds may have failed)")
+                # Safely access metrics from WFV result
+                if wfv_result is not None:
+                    # WalkForwardResult uses direct attributes, not overall_metrics dict
+                    result.wfv_accuracy = getattr(wfv_result, 'mean_accuracy', 0.0)
+                    result.wfv_roi = getattr(wfv_result, 'mean_roi', 0.0)
+                    wfv_auc = getattr(wfv_result, 'mean_auc', 0.0)
+                    wfv_n_folds = getattr(wfv_result, 'n_folds', 0)
+                    
+                    # Handle NaN values from numpy (nan > 0 is False)
+                    import math
+                    if isinstance(wfv_auc, float) and math.isnan(wfv_auc):
+                        wfv_auc = 0.0
+                    if isinstance(result.wfv_accuracy, float) and math.isnan(result.wfv_accuracy):
                         result.wfv_accuracy = 0.0
-                        result.wfv_roi = 0.0
+                    
+                    logger.info(
+                        f"📊 Walk-forward result: type={type(wfv_result).__name__}, "
+                        f"n_folds={wfv_n_folds}, mean_auc={wfv_auc}, "
+                        f"mean_accuracy={result.wfv_accuracy}"
+                    )
+                    
+                    if wfv_auc > 0 and wfv_n_folds > 0:
+                        logger.info(
+                            f"📊 Walk-forward validation: AUC={wfv_auc:.4f}, "
+                            f"Accuracy={result.wfv_accuracy:.4f} ({wfv_n_folds} folds)"
+                        )
+                    else:
+                        logger.warning(
+                            f"Walk-forward validation returned no usable metrics: "
+                            f"auc={wfv_auc}, n_folds={wfv_n_folds}"
+                        )
+                else:
+                    logger.warning("Walk-forward validation returned None (exception during validation)")
                 
                 # Split train/validation
                 # For small datasets, skip validation split (use CV-only)
@@ -446,24 +470,33 @@ class TrainingService:
                 result.model_path = getattr(model_result, 'model_path', '')
                 
                 # SANITY CHECK: Flag suspiciously high accuracy
-                # No sports prediction model should exceed ~75% accuracy.
-                # Higher values indicate data leakage or severe class imbalance.
-                if result.accuracy > 0.85:
+                if result.accuracy > 0.80:
                     # Check class distribution
                     class_dist = train_df[target_column].value_counts(normalize=True)
                     majority_pct = class_dist.max() * 100
-                    logger.warning(
-                        f"⚠️ SUSPICIOUSLY HIGH ACCURACY: {result.accuracy:.1%} for "
-                        f"{sport_code} {bet_type}. "
-                        f"Class distribution: {class_dist.to_dict()}. "
-                        f"Majority class: {majority_pct:.1f}%. "
-                        f"If majority > 80%, model may just be predicting the majority class."
-                    )
-                    if majority_pct > 80:
+                    
+                    is_tennis = sport_code in ('ATP', 'WTA')
+                    
+                    if is_tennis and majority_pct > 80:
                         logger.warning(
-                            f"⚠️ SEVERE CLASS IMBALANCE DETECTED: {majority_pct:.1f}% majority. "
-                            f"Model accuracy ({result.accuracy:.1%}) is likely NOT real predictive power. "
-                            f"For tennis: ensure swap debiasing is active."
+                            f"🎾 TENNIS NOTE: Reported accuracy {result.accuracy:.1%} may be inflated. "
+                            f"Original class distribution: {majority_pct:.0f}% majority (home=winner bias). "
+                            f"Walk-forward accuracy (temporal holdout) is the reliable metric. "
+                            f"WFV accuracy: {getattr(result, 'wfv_accuracy', 'N/A')}"
+                        )
+                    elif majority_pct > 80:
+                        logger.warning(
+                            f"⚠️ SEVERE CLASS IMBALANCE: {majority_pct:.1f}% majority for "
+                            f"{sport_code} {bet_type}. "
+                            f"Accuracy ({result.accuracy:.1%}) is likely NOT real predictive power. "
+                            f"Class distribution: {class_dist.to_dict()}"
+                        )
+                    elif result.accuracy > 0.85:
+                        logger.warning(
+                            f"⚠️ SUSPICIOUSLY HIGH ACCURACY: {result.accuracy:.1%} for "
+                            f"{sport_code} {bet_type}. "
+                            f"Class distribution: {class_dist.to_dict()}. "
+                            f"Check for data leakage if not tennis."
                         )
                 
                 # Extract top features
@@ -1350,6 +1383,58 @@ class TrainingService:
                             temp = df.loc[swap_mask, hcol].copy()
                             df.loc[swap_mask, hcol] = df.loc[swap_mask, acol]
                             df.loc[swap_mask, acol] = temp
+                    
+                    # ============================================================
+                    # CRITICAL FIX: Negate ALL pre-existing diff features
+                    # 
+                    # Diff features (scoring_diff, defense_diff, power_rating_diff,
+                    # etc.) were computed BEFORE the swap as home_X - away_X when
+                    # home=winner ~91% of the time. Without negation, these retain
+                    # the original biased direction: always positive for winners.
+                    #
+                    # The model can compare pre-swap diffs (always positive) with
+                    # post-swap diffs (sign-correct) to detect which rows were
+                    # swapped, achieving 0.99 AUC on what should be 0.62-0.75.
+                    #
+                    # Fix: Negate diff features for swapped rows so the sign is
+                    # consistent with the new home/away assignment.
+                    # ============================================================
+                    diff_negate_cols = [
+                        c for c in df.columns
+                        if ('_diff' in c or c == 'rest_advantage')
+                        and c not in target_flip_cols  # Don't double-flip targets
+                        and df[c].dtype in ['float64', 'int64', 'float32', 'int32']
+                    ]
+                    for dcol in diff_negate_cols:
+                        df.loc[swap_mask, dcol] = -df.loc[swap_mask, dcol]
+                    
+                    if diff_negate_cols:
+                        logger.info(
+                            f"🎾 TENNIS SWAP: Negated {len(diff_negate_cols)} "
+                            f"pre-swap diff features: {diff_negate_cols[:5]}..."
+                        )
+                    
+                    # Also negate home-perspective features that don't start with home_/away_
+                    # These would bypass the home_/away_ feature filter
+                    home_perspective_cols = [
+                        c for c in df.columns
+                        if any(kw in c.lower() for kw in ['_home_', 'home_pct', 'home_prob'])
+                        and not c.startswith('home_')
+                        and not c.startswith('away_')
+                        and df[c].dtype in ['float64', 'int64', 'float32', 'int32']
+                    ]
+                    # For probability columns (0-1 range), flip as 1-x
+                    for pcol in home_perspective_cols:
+                        if 'prob' in pcol.lower() or 'pct' in pcol.lower():
+                            df.loc[swap_mask, pcol] = 1.0 - df.loc[swap_mask, pcol]
+                        else:
+                            df.loc[swap_mask, pcol] = -df.loc[swap_mask, pcol]
+                    
+                    if home_perspective_cols:
+                        logger.info(
+                            f"🎾 TENNIS SWAP: Flipped {len(home_perspective_cols)} "
+                            f"home-perspective features: {home_perspective_cols}"
+                        )
                     
                     new_pct = df['home_win'].mean() if 'home_win' in df.columns else 0
                     logger.info(
@@ -2388,10 +2473,20 @@ class TrainingService:
                 bet_type=bet_type,
             )
             
+            # Verify result integrity before returning
+            if result is not None:
+                logger.info(
+                    f"WFV completed: n_folds={getattr(result, 'n_folds', 'N/A')}, "
+                    f"mean_auc={getattr(result, 'mean_auc', 'N/A')}, "
+                    f"mean_accuracy={getattr(result, 'mean_accuracy', 'N/A')}"
+                )
+            
             return result
             
         except Exception as e:
-            logger.warning(f"Walk-forward validation failed: {e}")
+            logger.warning(f"Walk-forward validation failed: {type(e).__name__}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
     
     async def _train_framework(
@@ -2696,9 +2791,25 @@ class TrainingService:
             "training_time_secs": getattr(model_result, 'training_time_secs', 0.0),
         }
         
-        if wfv_result and hasattr(wfv_result, 'overall_metrics') and wfv_result.overall_metrics:
-            metrics["wfv_accuracy"] = wfv_result.overall_metrics.get("accuracy", 0.0)
-            metrics["wfv_roi"] = wfv_result.overall_metrics.get("roi", 0.0)
+        if wfv_result is not None:
+            wfv_accuracy = getattr(wfv_result, 'mean_accuracy', 0.0)
+            wfv_auc = getattr(wfv_result, 'mean_auc', 0.0)
+            wfv_roi = getattr(wfv_result, 'mean_roi', 0.0)
+            wfv_n_folds = getattr(wfv_result, 'n_folds', 0)
+            
+            # Handle NaN values
+            import math
+            if isinstance(wfv_accuracy, float) and math.isnan(wfv_accuracy):
+                wfv_accuracy = 0.0
+            if isinstance(wfv_auc, float) and math.isnan(wfv_auc):
+                wfv_auc = 0.0
+            if isinstance(wfv_roi, float) and math.isnan(wfv_roi):
+                wfv_roi = 0.0
+            
+            metrics["wfv_accuracy"] = wfv_accuracy
+            metrics["wfv_auc"] = wfv_auc
+            metrics["wfv_roi"] = wfv_roi
+            metrics["wfv_n_folds"] = wfv_n_folds
         
         # Create model record
         model = MLModel(

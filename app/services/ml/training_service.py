@@ -2452,6 +2452,10 @@ class TrainingService:
                 trainer = self.h2o_trainer
             elif framework == "sklearn":
                 trainer = self.sklearn_trainer
+            elif framework in ("deep_learning", "tensorflow", "lstm"):
+                trainer = self.deep_learning_trainer
+            elif framework == "autogluon":
+                trainer = self.autogluon_trainer
             else:
                 trainer = self.autogluon_trainer
             

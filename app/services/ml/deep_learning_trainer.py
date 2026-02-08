@@ -33,6 +33,18 @@ try:
     TENSORFLOW_AVAILABLE = True
     # Suppress TF warnings
     tf.get_logger().setLevel('ERROR')
+    
+    # GPU configuration: allow memory growth to avoid OOM
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            logger.info(f"TensorFlow GPU configured: {len(gpus)} GPU(s) available with memory growth")
+        except RuntimeError as e:
+            logger.warning(f"GPU config error (may already be set): {e}")
+    else:
+        logger.info("TensorFlow running on CPU (no GPU detected)")
 except ImportError:
     logger.warning(
         "TensorFlow not installed. Install with: pip install tensorflow>=2.15.0\n"
@@ -564,6 +576,9 @@ class DeepLearningTrainer:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self._model = None
         self._model_type = None
+        self._scaler = None
+        self._feature_columns = None
+        self._model_path = None
     
     def train_lstm(
         self,
@@ -659,6 +674,124 @@ class DeepLearningTrainer:
             training_history=history,
         )
     
+    def train(
+        self,
+        train_df: pd.DataFrame,
+        target_column: str,
+        feature_columns: List[str],
+        sport_code: str,
+        bet_type: str,
+        validation_df: pd.DataFrame = None,
+        max_epochs: int = 100,
+        early_stopping_patience: int = 10,
+        fast_mode: bool = False,
+        **kwargs,
+    ) -> DeepLearningModelResult:
+        """
+        Train Deep Learning model from DataFrame inputs.
+        
+        Main entry point called by training_service.
+        Handles DataFrame → numpy conversion, NaN imputation, feature scaling,
+        and delegates to train_dense().
+        """
+        from sklearn.preprocessing import StandardScaler
+        
+        if fast_mode:
+            max_epochs = min(max_epochs, 30)
+            early_stopping_patience = 5
+        
+        logger.info(
+            f"Deep Learning train() for {sport_code} {bet_type}: "
+            f"{len(train_df)} samples, {len(feature_columns)} features, "
+            f"epochs={max_epochs}, patience={early_stopping_patience}"
+        )
+        
+        # Log GPU status
+        if TENSORFLOW_AVAILABLE:
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                logger.info(f"🎮 Training on GPU: {gpus[0].name}")
+            else:
+                logger.info("🖥️ Training on CPU (no GPU detected)")
+        
+        # Extract numpy arrays
+        X_train = train_df[feature_columns].values.astype(np.float32)
+        y_train = train_df[target_column].values.astype(np.float32)
+        
+        X_val = None
+        y_val = None
+        if validation_df is not None and len(validation_df) > 0:
+            X_val = validation_df[feature_columns].values.astype(np.float32)
+            y_val = validation_df[target_column].values.astype(np.float32)
+        
+        # Handle NaN/Inf
+        nan_count_train = np.isnan(X_train).sum()
+        if nan_count_train > 0:
+            logger.warning(f"Replacing {nan_count_train} NaN values in training features")
+            X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+        if X_val is not None:
+            X_val = np.nan_to_num(X_val, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Feature scaling - critical for neural networks
+        self._scaler = StandardScaler()
+        X_train = self._scaler.fit_transform(X_train)
+        if X_val is not None:
+            X_val = self._scaler.transform(X_val)
+        
+        # Save scaler for prediction
+        scaler_path = self.model_dir / sport_code / bet_type / "scaler.pkl"
+        scaler_path.parent.mkdir(parents=True, exist_ok=True)
+        import pickle
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(self._scaler, f)
+        
+        # Store for prediction
+        self._feature_columns = feature_columns
+        self._model_path = str(self.model_dir / sport_code / bet_type / "dense_model")
+        
+        # Train Dense NN (tabular data → Dense is the right architecture)
+        result = self.train_dense(
+            X_train=X_train,
+            y_train=y_train,
+            sport_code=sport_code,
+            bet_type=bet_type,
+            X_val=X_val,
+            y_val=y_val,
+            epochs=max_epochs,
+            batch_size=min(64, max(16, len(X_train) // 50)),
+        )
+        
+        # Use validation metrics as primary (more realistic)
+        if result.val_auc > 0:
+            result.auc = result.val_auc
+        if result.val_accuracy > 0:
+            result.accuracy = result.val_accuracy
+        
+        logger.info(
+            f"Deep Learning complete: AUC={result.auc:.4f}, "
+            f"Accuracy={result.accuracy:.4f}, "
+            f"Epochs={result.n_epochs_trained}, Time={result.training_time_secs:.1f}s"
+        )
+        
+        return result
+    
+    def predict_with_loaded(
+        self,
+        data: pd.DataFrame,
+        feature_columns: List[str],
+    ) -> np.ndarray:
+        """Predict using already-loaded model (for walk-forward validation)."""
+        if self._model is None:
+            raise ValueError("No model loaded. Call train() first.")
+        
+        X = data[feature_columns].values.astype(np.float32)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        if hasattr(self, '_scaler') and self._scaler is not None:
+            X = self._scaler.transform(X)
+        
+        return self._model.predict(X)
+    
     def train_dense(
         self,
         X_train: np.ndarray,
@@ -752,6 +885,38 @@ class DeepLearningTrainerMock:
     def __init__(self, config: MLConfig = None, model_dir: str = None):
         self.config = config or default_ml_config
         self.model_dir = Path(model_dir or "./models/tensorflow_mock")
+        self._model = None
+        self._scaler = None
+        self._feature_columns = None
+    
+    def train(
+        self,
+        train_df: pd.DataFrame,
+        target_column: str,
+        feature_columns: List[str],
+        sport_code: str,
+        bet_type: str,
+        validation_df: pd.DataFrame = None,
+        **kwargs,
+    ) -> DeepLearningModelResult:
+        """Mock train() for testing without TensorFlow."""
+        logger.info(f"Mock Deep Learning training for {sport_code} {bet_type}")
+        return DeepLearningModelResult(
+            model_id=f"mock_dl_{sport_code}_{bet_type}",
+            sport_code=sport_code,
+            bet_type=bet_type,
+            model_type='dense',
+            auc=0.56 + np.random.random() * 0.08,
+            accuracy=0.53 + np.random.random() * 0.08,
+            training_time_secs=60.0,
+            n_training_samples=len(train_df),
+            n_features=len(feature_columns),
+            model_path=str(self.model_dir / sport_code / bet_type / "mock_model"),
+        )
+    
+    def predict_with_loaded(self, data: pd.DataFrame, feature_columns: List[str]) -> np.ndarray:
+        """Mock prediction."""
+        return np.random.beta(2, 2, len(data))
     
     def train_lstm(
         self,

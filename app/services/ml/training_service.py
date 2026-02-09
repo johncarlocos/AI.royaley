@@ -2638,15 +2638,41 @@ class TrainingService:
         """
         Train meta-ensemble combining all base models.
         
-        This trains H2O, Sklearn, AutoGluon, and Deep Learning models,
-        then combines their predictions using an optimized weighting scheme.
+        Uses a 3-way split to prevent data leakage:
+        - base_train (60%): training data for base models
+        - base_valid (20%): validation data passed to base trainers
+        - ensemble_holdout (20%): NEVER seen by any base model, used only
+          for meta-ensemble weight optimization
+          
+        This prevents AutoGluon (which merges valid_df into training for
+        bagged mode) from inflating meta-ensemble accuracy.
         """
         logger.info("Training Meta Ensemble - training all base models...")
+        
+        # --- 3-way split to prevent leakage ---
+        # Recombine train+valid then re-split into 3 parts
+        full_df = pd.concat([train_df, valid_df], ignore_index=True)
+        full_df = full_df.sample(frac=1, random_state=42).reset_index(drop=True)
+        
+        n = len(full_df)
+        split1 = int(n * 0.60)
+        split2 = int(n * 0.80)
+        
+        base_train = full_df.iloc[:split1].copy()
+        base_valid = full_df.iloc[split1:split2].copy()
+        ensemble_holdout = full_df.iloc[split2:].copy()
+        
+        logger.info(
+            f"  3-way split: base_train={len(base_train)}, "
+            f"base_valid={len(base_valid)}, "
+            f"ensemble_holdout={len(ensemble_holdout)} "
+            f"(holdout NEVER seen by base models)"
+        )
         
         base_results = {}
         base_predictions = {}
         
-        # Train each base framework
+        # Train each base framework on base_train with base_valid
         base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning"]
         
         for base_fw in base_frameworks:
@@ -2654,8 +2680,8 @@ class TrainingService:
                 logger.info(f"  Training base model: {base_fw}")
                 result = await self._train_framework(
                     framework=base_fw,
-                    train_df=train_df,
-                    valid_df=valid_df,
+                    train_df=base_train,
+                    valid_df=base_valid,
                     target_column=target_column,
                     feature_columns=feature_columns,
                     sport_code=sport_code,
@@ -2664,13 +2690,13 @@ class TrainingService:
                 )
                 base_results[base_fw] = result
                 
-                # Get predictions on validation set
+                # Get predictions on ensemble_holdout (never seen by any model)
                 if hasattr(result, 'model_path') and result.model_path:
-                    # Each trainer has a predict method
                     trainer = getattr(self, f"{base_fw}_trainer", None)
                     if trainer and hasattr(trainer, 'predict'):
-                        preds = trainer.predict(result.model_path, valid_df, feature_columns)
+                        preds = trainer.predict(result.model_path, ensemble_holdout, feature_columns)
                         base_predictions[base_fw] = preds
+                        logger.info(f"    {base_fw} holdout preds: mean={np.mean(preds):.4f}, std={np.std(preds):.4f}")
                         
             except Exception as e:
                 logger.warning(f"  Failed to train {base_fw}: {e}")
@@ -2679,13 +2705,13 @@ class TrainingService:
         if not base_predictions:
             raise ValueError("No base models could be trained for meta-ensemble")
         
-        # Combine predictions using meta-ensemble
-        y_valid = valid_df[target_column].values
+        # Optimize weights using ensemble_holdout (clean, unseen data)
+        y_holdout = ensemble_holdout[target_column].values
         
-        # Optimize weights using validation performance
+        logger.info(f"  Optimizing meta-ensemble weights on {len(ensemble_holdout)} holdout samples...")
         ensemble_result = self.meta_ensemble.fit(
             predictions=base_predictions,
-            y_true=y_valid,
+            y_true=y_holdout,
             sport_code=sport_code,
             bet_type=bet_type,
         )
@@ -2708,7 +2734,7 @@ class TrainingService:
             'accuracy': ensemble_result.accuracy if hasattr(ensemble_result, 'accuracy') else 0.0,
             'log_loss': ensemble_result.log_loss if hasattr(ensemble_result, 'log_loss') else 0.0,
             'training_time_secs': sum(getattr(r, 'training_time_secs', 0) for r in base_results.values()),
-            'n_training_samples': len(train_df),
+            'n_training_samples': len(base_train),
             'ensemble_weights': ensemble_result.weights if hasattr(ensemble_result, 'weights') else {},
             'base_model_results': [
                 {'framework': fw, 'auc': getattr(r, 'auc', 0), 'accuracy': getattr(r, 'accuracy', 0)}

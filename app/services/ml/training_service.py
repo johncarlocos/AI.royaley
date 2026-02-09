@@ -512,7 +512,7 @@ class TrainingService:
                     logger.info("Calibrating probabilities...")
                     calibrator_path = await self._calibrate_model(
                         model_result, valid_data, feature_columns, target_column,
-                        sport_code, bet_type
+                        sport_code, bet_type, framework=framework
                     )
                     result.calibrator_path = calibrator_path
                 
@@ -2800,21 +2800,47 @@ class TrainingService:
         target_column: str,
         sport_code: str,
         bet_type: str,
+        framework: str = "h2o",
     ) -> str:
-        """Calibrate model probabilities."""
+        """Calibrate model probabilities using the correct framework predictor."""
         try:
             calibrator = ProbabilityCalibrator()
             
-            # Get predictions on validation set
+            # Get predictions on validation set using the right framework
             model_path = getattr(model_result, 'model_path', '')
+            probs = None
             
-            if hasattr(self, '_h2o_trainer') and self._h2o_trainer:
-                probs = self._h2o_trainer.predict(
-                    model_path, valid_df, feature_columns
-                )
-            else:
-                # Mock predictions
-                probs = np.random.beta(2, 2, len(valid_df))
+            if framework == 'meta_ensemble':
+                # Meta-ensemble: skip calibration (already combines calibrated base models)
+                # Or could re-predict using stored weights, but not worth the complexity
+                logger.info("Skipping calibration for meta_ensemble (uses pre-calibrated base model predictions)")
+                return ""
+                
+            elif framework == 'h2o':
+                if self._h2o_trainer:
+                    probs = self._h2o_trainer.predict(model_path, valid_df, feature_columns)
+                    
+            elif framework == 'sklearn':
+                if self._sklearn_trainer:
+                    probs = self._sklearn_trainer.predict(model_path, valid_df, feature_columns)
+                    
+            elif framework == 'autogluon':
+                if self._autogluon_trainer:
+                    probs = self._autogluon_trainer.predict(model_path, valid_df, feature_columns)
+                    
+            elif framework == 'deep_learning':
+                if self._deep_learning_trainer:
+                    probs = self._deep_learning_trainer.predict(model_path, valid_df, feature_columns)
+                    
+            elif framework == 'quantum':
+                if self._quantum_trainer:
+                    probs = self._quantum_trainer.predict(model_path, valid_df, feature_columns)
+            
+            if probs is None:
+                logger.warning(f"No predictions available for calibration ({framework})")
+                return ""
+            
+            probs = np.asarray(probs).ravel()
             
             # Fit calibrator
             y_true = valid_df[target_column].values

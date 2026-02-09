@@ -234,16 +234,16 @@ class MetaEnsemble:
         # Build combined prediction for metrics
         w = opt_result.optimal_weights
         combined = (
-            w.h2o * h2o_preds +
-            w.autogluon * ag_preds +
-            w.sklearn * sk_preds
+            w.h2o_weight * h2o_preds +
+            w.autogluon_weight * ag_preds +
+            w.sklearn_weight * sk_preds
         )
         
         # Store weights as simple dict for serialization
         weight_dict = {
-            'h2o': w.h2o,
-            'autogluon': w.autogluon, 
-            'sklearn': w.sklearn,
+            'h2o': w.h2o_weight,
+            'autogluon': w.autogluon_weight, 
+            'sklearn': w.sklearn_weight,
         }
         
         logger.info(f"Meta-ensemble optimized: weights={weight_dict}, "

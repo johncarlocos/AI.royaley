@@ -143,24 +143,31 @@ class PennyLaneQNN:
         if not PENNYLANE_AVAILABLE:
             raise ImportError("PennyLane is required but not installed")
         
+        # Use PennyLane's numpy for autograd support
+        pnp = qml.numpy
+        
         self.dev = qml.device(self.device_name, wires=self.n_qubits)
         
-        # Calculate number of parameters
-        n_params = self.n_qubits * self.n_layers * 3  # Rx, Ry, Rz per qubit per layer
+        # Initialize weights with PennyLane numpy (requires_grad=True for autograd)
+        # Scale ~pi/4 is standard for variational quantum circuits
+        self.weights = pnp.array(
+            np.random.uniform(-np.pi/2, np.pi/2, (self.n_layers, self.n_qubits, 3)),
+            requires_grad=True
+        )
         
-        # Initialize weights
-        self.weights = 0.01 * np.random.randn(self.n_layers, self.n_qubits, 3)
+        # Use adjoint diff for lightning (much faster), parameter-shift for default
+        diff_method = "adjoint" if "lightning" in self.device_name else "parameter-shift"
         
-        @qml.qnode(self.dev)
+        @qml.qnode(self.dev, diff_method=diff_method)
         def circuit(inputs, weights):
             """Variational quantum circuit."""
-            # Encode classical data
+            # Encode classical data (angle encoding)
             for i in range(min(len(inputs), self.n_qubits)):
                 qml.RY(inputs[i] * np.pi, wires=i)
             
             # Variational layers
             for layer in range(self.n_layers):
-                # Rotation gates
+                # Rotation gates (trainable)
                 for qubit in range(self.n_qubits):
                     qml.Rot(
                         weights[layer, qubit, 0],
@@ -183,35 +190,46 @@ class PennyLaneQNN:
         self.qnode = circuit
         self._is_built = True
         
-        logger.info(f"Built PennyLane QNN with {self.n_qubits} qubits, {self.n_layers} layers")
+        logger.info(f"Built PennyLane QNN with {self.n_qubits} qubits, {self.n_layers} layers, {self.n_qubits * self.n_layers * 3} parameters")
         return self
     
+    def _preprocess_features(self, X: np.ndarray) -> np.ndarray:
+        """Preprocess features: truncate/pad to n_qubits, normalize to [0, 1]."""
+        X = np.array(X)
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+        
+        n_samples = X.shape[0]
+        processed = np.zeros((n_samples, self.n_qubits))
+        
+        for i in range(n_samples):
+            sample = X[i]
+            feat = np.zeros(self.n_qubits)
+            feat[:min(len(sample), self.n_qubits)] = sample[:self.n_qubits]
+            # Normalize to [0, 1]
+            fmin, fmax = feat.min(), feat.max()
+            if fmax - fmin > 1e-8:
+                feat = (feat - fmin) / (fmax - fmin)
+            else:
+                feat = np.full(self.n_qubits, 0.5)
+            processed[i] = feat
+        
+        return processed
+    
     def forward(self, x: np.ndarray) -> np.ndarray:
-        """Forward pass through quantum circuit."""
+        """Forward pass through quantum circuit (non-differentiable, for eval only)."""
         if not self._is_built:
             self.build()
         
-        # Ensure input fits qubits
-        x = np.array(x)
-        if x.ndim == 1:
-            x = x.reshape(1, -1)
+        processed = self._preprocess_features(x)
         
         outputs = []
-        for sample in x:
-            # Truncate or pad features to match qubits
-            features = np.zeros(self.n_qubits)
-            features[:min(len(sample), self.n_qubits)] = sample[:self.n_qubits]
-            
-            # Normalize to [0, 1]
-            features = (features - features.min()) / (features.max() - features.min() + 1e-8)
-            
+        for features in processed:
             output = self.qnode(features, self.weights)
-            outputs.append(output)
+            outputs.append(float(output))
         
-        # Convert to probability [0, 1]
         outputs = np.array(outputs)
         probs = (outputs + 1) / 2  # Map [-1, 1] to [0, 1]
-        
         return probs
     
     def fit(
@@ -224,7 +242,7 @@ class PennyLaneQNN:
         batch_size: int = 16,
     ) -> Dict[str, List[float]]:
         """
-        Train the QNN using gradient descent.
+        Train the QNN using gradient descent with PennyLane autograd.
         
         Args:
             X_train: Training features
@@ -237,8 +255,13 @@ class PennyLaneQNN:
         Returns:
             Training history
         """
+        import time
+        
         if not self._is_built:
             self.build()
+        
+        # Use PennyLane numpy for differentiable operations
+        pnp = qml.numpy
         
         optimizer = qml.GradientDescentOptimizer(stepsize=self.learning_rate)
         
@@ -249,54 +272,107 @@ class PennyLaneQNN:
         
         n_samples = len(X_train)
         
-        def cost(weights, X, y):
-            """Binary cross-entropy loss."""
-            predictions = []
-            for sample in X:
-                features = np.zeros(self.n_qubits)
-                features[:min(len(sample), self.n_qubits)] = sample[:self.n_qubits]
-                features = (features - features.min()) / (features.max() - features.min() + 1e-8)
-                
-                output = self.qnode(features, weights)
-                prob = (output + 1) / 2
-                predictions.append(prob)
-            
-            predictions = np.array(predictions)
-            predictions = np.clip(predictions, 1e-7, 1 - 1e-7)
-            
-            loss = -np.mean(y * np.log(predictions) + (1 - y) * np.log(1 - predictions))
+        # Preprocess ALL features ONCE (not inside gradient loop)
+        X_train_processed = self._preprocess_features(X_train)
+        if X_val is not None:
+            X_val_processed = self._preprocess_features(X_val)
+        
+        # Convert labels to PennyLane numpy
+        y_train_pnp = pnp.array(y_train, requires_grad=False)
+        
+        # Cost function: ONLY weights are trainable, data is fixed via closure
+        def cost(weights):
+            """Binary cross-entropy loss over current batch (differentiable)."""
+            predictions = pnp.array([
+                (self.qnode(pnp.array(X_batch_current[i], requires_grad=False), weights) + 1) / 2
+                for i in range(len(X_batch_current))
+            ])
+            predictions = pnp.clip(predictions, 1e-7, 1 - 1e-7)
+            loss = -pnp.mean(
+                y_batch_current * pnp.log(predictions) + 
+                (1 - y_batch_current) * pnp.log(1 - predictions)
+            )
             return loss
         
+        best_loss = float('inf')
+        patience_counter = 0
+        patience = 15  # Early stopping patience
+        
+        logger.info(f"Starting PennyLane training: {n_iterations} iterations, batch_size={batch_size}, "
+                     f"{self.n_qubits} qubits, {self.n_layers} layers, lr={self.learning_rate}")
+        
         for iteration in range(n_iterations):
+            iter_start = time.time()
+            
             # Sample batch
             batch_idx = np.random.choice(n_samples, min(batch_size, n_samples), replace=False)
-            X_batch = X_train[batch_idx]
-            y_batch = y_train[batch_idx]
             
-            # Update weights
-            self.weights = optimizer.step(
-                lambda w: cost(w, X_batch, y_batch),
-                self.weights
-            )
+            # Set batch data for closure (non-trainable)
+            X_batch_current = pnp.array(X_train_processed[batch_idx], requires_grad=False)
+            y_batch_current = pnp.array(y_train[batch_idx], requires_grad=False)
             
-            # Calculate metrics
-            train_preds = self.forward(X_train)
-            train_loss = cost(self.weights, X_train, y_train)
-            train_acc = np.mean((train_preds > 0.5) == y_train)
+            # Gradient step — PennyLane differentiates cost w.r.t. weights
+            self.weights = optimizer.step(cost, self.weights)
             
-            history['loss'].append(float(train_loss))
-            history['accuracy'].append(float(train_acc))
+            iter_time = time.time() - iter_start
             
-            if X_val is not None:
-                val_preds = self.forward(X_val)
-                val_loss = cost(self.weights, X_val, y_val)
-                val_acc = np.mean((val_preds > 0.5) == y_val)
-                history['val_loss'].append(float(val_loss))
-                history['val_accuracy'].append(float(val_acc))
-            
-            if (iteration + 1) % 10 == 0:
-                logger.info(f"Iteration {iteration + 1}: loss={train_loss:.4f}, acc={train_acc:.4f}")
+            # Evaluate metrics every 5 iterations (expensive on full dataset)
+            if (iteration + 1) % 5 == 0 or iteration == 0:
+                # Quick eval on a subsample (max 200) for speed
+                eval_size = min(200, n_samples)
+                eval_idx = np.random.choice(n_samples, eval_size, replace=False)
+                
+                train_preds = np.array([
+                    float((self.qnode(X_train_processed[i], self.weights) + 1) / 2)
+                    for i in eval_idx
+                ])
+                train_preds_clip = np.clip(train_preds, 1e-7, 1 - 1e-7)
+                y_eval = y_train[eval_idx]
+                
+                train_loss = float(-np.mean(
+                    y_eval * np.log(train_preds_clip) + 
+                    (1 - y_eval) * np.log(1 - train_preds_clip)
+                ))
+                train_acc = float(np.mean((train_preds > 0.5) == y_eval))
+                
+                history['loss'].append(train_loss)
+                history['accuracy'].append(train_acc)
+                
+                # Early stopping check
+                if train_loss < best_loss - 0.001:
+                    best_loss = train_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                
+                if X_val is not None and (iteration + 1) % 10 == 0:
+                    val_eval_size = min(200, len(X_val))
+                    val_eval_idx = np.random.choice(len(X_val), val_eval_size, replace=False)
+                    val_preds = np.array([
+                        float((self.qnode(X_val_processed[i], self.weights) + 1) / 2)
+                        for i in val_eval_idx
+                    ])
+                    val_preds_clip = np.clip(val_preds, 1e-7, 1 - 1e-7)
+                    y_val_eval = y_val[val_eval_idx]
+                    val_loss = float(-np.mean(
+                        y_val_eval * np.log(val_preds_clip) + 
+                        (1 - y_val_eval) * np.log(1 - val_preds_clip)
+                    ))
+                    val_acc = float(np.mean((val_preds > 0.5) == y_val_eval))
+                    history['val_loss'].append(val_loss)
+                    history['val_accuracy'].append(val_acc)
+                
+                logger.info(
+                    f"Iteration {iteration + 1}/{n_iterations}: "
+                    f"loss={train_loss:.4f}, acc={train_acc:.4f}, "
+                    f"iter_time={iter_time:.1f}s"
+                )
+                
+                if patience_counter >= patience:
+                    logger.info(f"Early stopping at iteration {iteration + 1} (no improvement for {patience} evals)")
+                    break
         
+        logger.info(f"Training complete. Final loss={history['loss'][-1]:.4f}, acc={history['accuracy'][-1]:.4f}")
         return history
     
     def predict(self, X: np.ndarray) -> np.ndarray:
@@ -326,7 +402,9 @@ class PennyLaneQNN:
             n_layers=config['n_layers'],
         )
         instance.build()
-        instance.weights = np.array(config['weights'])
+        # Restore weights as PennyLane trainable tensors
+        pnp = qml.numpy
+        instance.weights = pnp.array(config['weights'], requires_grad=True)
         return instance
 
 
@@ -726,6 +804,8 @@ class QuantumMLTrainer:
         model = PennyLaneQNN(
             n_qubits=n_qubits,
             n_layers=n_layers,
+            learning_rate=0.1,  # Quantum circuits need higher LR than classical
+            device="lightning.qubit",  # C++ backend, 10-50x faster than default.qubit
         )
         model.build()
         

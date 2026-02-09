@@ -2605,7 +2605,7 @@ class TrainingService:
                 sport_code=sport_code,
                 bet_type=bet_type,
                 framework=quantum_type,
-                n_qubits=min(len(feature_columns), 8),  # Limit qubits for performance
+                n_qubits=min(len(feature_columns), 4),  # 4 qubits = 36 params, fast enough
                 n_iterations=50,
             )
         

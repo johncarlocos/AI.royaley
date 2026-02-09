@@ -940,10 +940,33 @@ class QuantumMLTrainer:
         
         return X_selected, selector.selected_features
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """Make predictions with trained model."""
+    def predict(self, model_path: str = None, data=None, feature_columns=None) -> np.ndarray:
+        """Make predictions with trained model.
+        
+        Args:
+            model_path: Ignored (model kept in memory), for interface compatibility
+            data: DataFrame or numpy array of features
+            feature_columns: List of feature column names (used if data is DataFrame)
+            
+        Returns:
+            Array of predicted probabilities
+        """
         if self._model is None:
             raise ValueError("No model trained")
+        
+        # Handle DataFrame input
+        if data is not None and hasattr(data, 'values'):
+            if feature_columns is not None:
+                X = data[feature_columns].values
+            else:
+                X = data.values
+        elif data is not None:
+            X = np.asarray(data)
+        else:
+            raise ValueError("No data provided for prediction")
+        
+        # Replace NaN with 0 for quantum circuits
+        X = np.nan_to_num(X, nan=0.0)
         
         if self._framework == 'pennylane':
             return self._model.predict(X)
@@ -1036,9 +1059,15 @@ class QuantumMLTrainerMock:
         selected = np.argsort(variances)[::-1][:n_features].tolist()
         return X[:, selected], selected
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, model_path: str = None, data=None, feature_columns=None) -> np.ndarray:
         """Mock prediction."""
-        return np.random.beta(2, 2, len(X))
+        if data is not None and hasattr(data, 'values'):
+            n = len(data)
+        elif data is not None:
+            n = len(data)
+        else:
+            n = 100
+        return np.random.beta(2, 2, n)
 
 
 def get_quantum_trainer(

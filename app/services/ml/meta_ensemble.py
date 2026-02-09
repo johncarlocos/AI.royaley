@@ -175,6 +175,91 @@ class MetaEnsemble:
         self.calibrator = None
         self.performance_history: List[Dict[str, float]] = []
         
+    def fit(
+        self,
+        predictions: Dict[str, np.ndarray],
+        y_true: np.ndarray,
+        sport_code: str = None,
+        bet_type: str = None,
+        method: str = 'grid_search',
+        metric: str = 'accuracy',
+    ):
+        """
+        Fit meta-ensemble weights from a dict of framework predictions.
+        
+        Args:
+            predictions: Dict mapping framework name to prediction arrays
+            y_true: True labels
+            sport_code: Sport code (for logging)
+            bet_type: Bet type (for logging)
+            method: Optimization method
+            metric: Optimization metric
+            
+        Returns:
+            Object with .weights, .auc, .accuracy, .log_loss attributes
+        """
+        y_true = np.asarray(y_true).ravel()
+        fw_names = list(predictions.keys())
+        fw_preds = {k: np.asarray(v).ravel() for k, v in predictions.items()}
+        
+        logger.info(f"Meta-ensemble fit: {len(fw_names)} frameworks for {sport_code} {bet_type}")
+        
+        # Map to h2o/autogluon/sklearn slots (fill missing with zeros)
+        n = len(y_true)
+        h2o_preds = fw_preds.get('h2o', np.full(n, 0.5))
+        ag_preds = fw_preds.get('autogluon', np.full(n, 0.5))
+        sk_preds = fw_preds.get('sklearn', np.full(n, 0.5))
+        
+        # If we have extra frameworks (deep_learning, quantum), average them into sklearn slot
+        extra_preds = []
+        for fw in fw_names:
+            if fw not in ('h2o', 'autogluon', 'sklearn'):
+                extra_preds.append(fw_preds[fw])
+        
+        if extra_preds:
+            # Blend extra predictions with sklearn
+            all_sk = [sk_preds] + extra_preds if 'sklearn' in fw_preds else extra_preds
+            sk_preds = np.mean(all_sk, axis=0)
+        
+        # Run optimization
+        opt_result = self.optimize_weights(
+            h2o_predictions=h2o_preds,
+            autogluon_predictions=ag_preds,
+            sklearn_predictions=sk_preds,
+            labels=y_true,
+            method=method,
+            metric=metric,
+        )
+        
+        # Build combined prediction for metrics
+        w = opt_result.optimal_weights
+        combined = (
+            w.h2o * h2o_preds +
+            w.autogluon * ag_preds +
+            w.sklearn * sk_preds
+        )
+        
+        # Store weights as simple dict for serialization
+        weight_dict = {
+            'h2o': w.h2o,
+            'autogluon': w.autogluon, 
+            'sklearn': w.sklearn,
+        }
+        
+        logger.info(f"Meta-ensemble optimized: weights={weight_dict}, "
+                     f"AUC={opt_result.validation_auc:.4f}, "
+                     f"Acc={opt_result.validation_accuracy:.4f}")
+        
+        # Return result object matching training_service expectations
+        return type('MetaEnsembleFitResult', (), {
+            'weights': weight_dict,
+            'auc': opt_result.validation_auc,
+            'accuracy': opt_result.validation_accuracy,
+            'log_loss': opt_result.validation_log_loss,
+            'improvement': opt_result.improvement_over_equal,
+            'method': opt_result.optimization_method,
+        })()
+
     def combine_predictions(
         self,
         h2o_prob: Optional[float] = None,

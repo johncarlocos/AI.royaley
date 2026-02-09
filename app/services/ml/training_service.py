@@ -241,7 +241,7 @@ class TrainingService:
     @property
     def meta_ensemble(self):
         if self._meta_ensemble is None:
-            self._meta_ensemble = MetaEnsemble(config=self.config)
+            self._meta_ensemble = MetaEnsemble()
         return self._meta_ensemble
     
     # NEW: Model Registry

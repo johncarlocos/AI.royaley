@@ -860,11 +860,46 @@ class DeepLearningTrainer:
             training_history=history,
         )
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """Make predictions using loaded model."""
-        if self._model is None:
-            raise ValueError("No model loaded")
-        return self._model.predict(X)
+    def predict(self, model_path: str = None, data: pd.DataFrame = None, feature_columns: List[str] = None) -> np.ndarray:
+        """Make predictions using loaded or specified model.
+        
+        Supports two calling conventions:
+        - predict(X) - numpy array, uses already-loaded model
+        - predict(model_path, data, feature_columns) - loads model and predicts
+        """
+        # Handle legacy call: predict(X_numpy_array)
+        if model_path is not None and isinstance(model_path, np.ndarray):
+            if self._model is None:
+                raise ValueError("No model loaded")
+            return self._model.predict(model_path)
+        
+        # Standard interface: predict(model_path, data, feature_columns)
+        if data is not None and feature_columns is not None:
+            # Load model if not already loaded
+            if self._model is None and model_path:
+                model_dir = Path(model_path)
+                if model_dir.is_dir():
+                    # Check for dense_model subdirectory
+                    dense_path = model_dir / "dense_model"
+                    if dense_path.exists():
+                        self.load(str(dense_path), model_type='dense')
+                    else:
+                        self.load(str(model_dir), model_type='dense')
+                else:
+                    self.load(str(model_dir.parent), model_type='dense')
+            
+            if self._model is None:
+                raise ValueError("No model loaded")
+            
+            X = data[feature_columns].values.astype(np.float32)
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            if hasattr(self, '_scaler') and self._scaler is not None:
+                X = self._scaler.transform(X)
+            
+            return self._model.predict(X)
+        
+        raise ValueError("Invalid arguments: provide either (X) or (model_path, data, feature_columns)")
     
     def load(self, model_path: str, model_type: str = 'lstm') -> None:
         """Load a saved model."""

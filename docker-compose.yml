@@ -30,7 +30,7 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
-        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-false}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-true}
         INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_api
     restart: unless-stopped
@@ -53,6 +53,7 @@ services:
       - BALLDONTLIE_API_KEY=${BALLDONTLIE_API_KEY}
       - WEATHERSTACK_API_KEY=${WEATHERSTACK_API_KEY}
       - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=2
       - NVIDIA_VISIBLE_DEVICES=2
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
@@ -99,7 +100,7 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_AUTOGLUON: ${INSTALL_AUTOGLUON:-true}
-        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-false}
+        INSTALL_QUANTUM: ${INSTALL_QUANTUM:-true}
         INSTALL_GPU: ${INSTALL_GPU:-true}
     container_name: royaley_worker
     restart: unless-stopped
@@ -115,6 +116,7 @@ services:
       - RAPIDAPI_KEY=${RAPIDAPI_KEY}
       - WEATHERSTACK_API_KEY=${WEATHERSTACK_API_KEY}
       - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=0
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - H2O_MAX_MEM_SIZE=96g
@@ -170,6 +172,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY}
       - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=1
       - NVIDIA_VISIBLE_DEVICES=1
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - AUTOGLUON_PRESETS=best_quality
@@ -223,6 +226,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY}
       - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=3
       - NVIDIA_VISIBLE_DEVICES=3
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:

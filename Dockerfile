@@ -20,6 +20,7 @@ FROM python:3.11-slim AS builder
 # Build arguments for optional dependencies
 ARG INSTALL_AUTOGLUON=false
 ARG INSTALL_QUANTUM=false
+ARG INSTALL_QUANTUM_FULL=false
 ARG INSTALL_GPU=false
 
 WORKDIR /build
@@ -91,19 +92,24 @@ RUN if [ "$INSTALL_AUTOGLUON" = "true" ]; then \
         || echo "WARNING: AutoGluon installation had issues, continuing..."; \
     fi
 
-# Step 4: Install Quantum ML if requested (may update scipy)
+# Step 4: Install Quantum ML if requested (PennyLane only ~50MB, full stack ~500MB)
 RUN if [ "$INSTALL_QUANTUM" = "true" ]; then \
-        echo "Installing Quantum ML dependencies..." && \
+        echo "Installing PennyLane Quantum ML..." && \
         pip install --no-cache-dir \
             "pennylane>=0.34.0" \
             "pennylane-lightning>=0.34.0" \
-            "qiskit>=1.0.0" \
-            "qiskit-aer>=0.13.0" \
-            "qiskit-machine-learning>=0.7.0" \
-            "qiskit-algorithms>=0.3.0" \
-            "dwave-ocean-sdk>=6.5.0" \
-            "dimod>=0.12.0" \
-        || echo "WARNING: Some Quantum packages failed to install, continuing..."; \
+        || echo "WARNING: PennyLane installation failed, continuing..."; \
+        if [ "$INSTALL_QUANTUM_FULL" = "true" ]; then \
+            echo "Installing full Quantum stack (Qiskit + D-Wave)..." && \
+            pip install --no-cache-dir \
+                "qiskit>=1.0.0" \
+                "qiskit-aer>=0.13.0" \
+                "qiskit-machine-learning>=0.7.0" \
+                "qiskit-algorithms>=0.3.0" \
+                "dwave-ocean-sdk>=6.5.0" \
+                "dimod>=0.12.0" \
+            || echo "WARNING: Some Quantum packages failed to install, continuing..."; \
+        fi; \
     fi
 
 # Step 5: CRITICAL - Ensure NumPy < 2.0 for pandas/pyarrow compatibility

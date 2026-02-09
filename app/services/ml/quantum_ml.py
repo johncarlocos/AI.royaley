@@ -91,6 +91,7 @@ class QuantumModelResult:
     
     # Artifact paths
     model_path: str = ""
+    variable_importance: Dict = field(default_factory=dict)
     
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -634,6 +635,58 @@ class QuantumMLTrainer:
         self._model = None
         self._framework = None
     
+    def train(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        sport_code: str,
+        bet_type: str,
+        X_valid: np.ndarray = None,
+        y_valid: np.ndarray = None,
+        framework: str = "pennylane",
+        n_qubits: int = 4,
+        n_layers: int = 3,
+        n_iterations: int = 100,
+        **kwargs,
+    ) -> QuantumModelResult:
+        """
+        Unified training interface - dispatches to framework-specific method.
+        
+        Args:
+            X_train: Training features
+            y_train: Training labels
+            sport_code: Sport code
+            bet_type: Bet type
+            X_valid: Validation features
+            y_valid: Validation labels
+            framework: 'pennylane' or 'qiskit'
+            n_qubits: Number of qubits
+            n_layers: Number of variational layers
+            n_iterations: Training iterations
+            
+        Returns:
+            QuantumModelResult
+        """
+        if framework == 'qiskit':
+            if not QISKIT_AVAILABLE:
+                logger.warning("Qiskit not installed, falling back to PennyLane")
+                framework = 'pennylane'
+            else:
+                return self.train_qiskit(
+                    X_train=X_train, y_train=y_train,
+                    sport_code=sport_code, bet_type=bet_type,
+                    n_qubits=n_qubits, n_layers=n_layers,
+                )
+        
+        # Default: PennyLane
+        return self.train_pennylane(
+            X_train=X_train, y_train=y_train,
+            sport_code=sport_code, bet_type=bet_type,
+            X_val=X_valid, y_val=y_valid,
+            n_qubits=n_qubits, n_layers=n_layers,
+            n_iterations=n_iterations,
+        )
+    
     def train_pennylane(
         self,
         X_train: np.ndarray,
@@ -826,6 +879,25 @@ class QuantumMLTrainerMock:
     def __init__(self, config: MLConfig = None, model_dir: str = None):
         self.config = config or default_ml_config
         self.model_dir = Path(model_dir or "./models/quantum_mock")
+    
+    def train(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        sport_code: str,
+        bet_type: str,
+        X_valid: np.ndarray = None,
+        y_valid: np.ndarray = None,
+        framework: str = "pennylane",
+        n_qubits: int = 4,
+        n_layers: int = 3,
+        n_iterations: int = 50,
+        **kwargs,
+    ) -> QuantumModelResult:
+        """Unified mock training interface."""
+        if framework == 'qiskit':
+            return self.train_qiskit(X_train, y_train, sport_code, bet_type, n_qubits=n_qubits)
+        return self.train_pennylane(X_train, y_train, sport_code, bet_type, n_qubits=n_qubits, n_iterations=n_iterations)
     
     def train_pennylane(
         self,

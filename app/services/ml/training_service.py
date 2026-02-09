@@ -2673,7 +2673,8 @@ class TrainingService:
         base_predictions = {}
         
         # Train each base framework on base_train with base_valid
-        base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning"]
+        base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning", "quantum"]
+        n_frameworks = len(base_frameworks)
         
         for base_fw in base_frameworks:
             try:
@@ -2686,7 +2687,7 @@ class TrainingService:
                     feature_columns=feature_columns,
                     sport_code=sport_code,
                     bet_type=bet_type,
-                    max_runtime_secs=max_runtime_secs // 4 if max_runtime_secs else None,
+                    max_runtime_secs=max_runtime_secs // n_frameworks if max_runtime_secs else None,
                 )
                 base_results[base_fw] = result
                 

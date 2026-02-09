@@ -187,78 +187,186 @@ class MetaEnsemble:
         """
         Fit meta-ensemble weights from a dict of framework predictions.
         
+        Fully dynamic — every framework that trained successfully gets its
+        own independent weight slot. No more hardcoded 3-slot limitation.
+        
         Args:
             predictions: Dict mapping framework name to prediction arrays
+                         e.g. {'h2o': [...], 'sklearn': [...], 'autogluon': [...], 'deep_learning': [...]}
             y_true: True labels
             sport_code: Sport code (for logging)
             bet_type: Bet type (for logging)
-            method: Optimization method
-            metric: Optimization metric
+            method: Optimization method ('grid_search' or 'scipy')
+            metric: Optimization metric ('accuracy', 'auc', 'log_loss')
             
         Returns:
-            Object with .weights, .auc, .accuracy, .log_loss attributes
+            Object with .weights (dict), .auc, .accuracy, .log_loss attributes
         """
         y_true = np.asarray(y_true).ravel()
-        fw_names = list(predictions.keys())
+        fw_names = sorted(predictions.keys())
         fw_preds = {k: np.asarray(v).ravel() for k, v in predictions.items()}
         
-        logger.info(f"Meta-ensemble fit: {len(fw_names)} frameworks for {sport_code} {bet_type}")
+        logger.info(f"Meta-ensemble fit: {len(fw_names)} frameworks ({', '.join(fw_names)}) for {sport_code} {bet_type}")
         
-        # Map to h2o/autogluon/sklearn slots (fill missing with zeros)
-        n = len(y_true)
-        h2o_preds = fw_preds.get('h2o', np.full(n, 0.5))
-        ag_preds = fw_preds.get('autogluon', np.full(n, 0.5))
-        sk_preds = fw_preds.get('sklearn', np.full(n, 0.5))
-        
-        # If we have extra frameworks (deep_learning, quantum), average them into sklearn slot
-        extra_preds = []
-        for fw in fw_names:
-            if fw not in ('h2o', 'autogluon', 'sklearn'):
-                extra_preds.append(fw_preds[fw])
-        
-        if extra_preds:
-            # Blend extra predictions with sklearn
-            all_sk = [sk_preds] + extra_preds if 'sklearn' in fw_preds else extra_preds
-            sk_preds = np.mean(all_sk, axis=0)
-        
-        # Run optimization
-        opt_result = self.optimize_weights(
-            h2o_predictions=h2o_preds,
-            autogluon_predictions=ag_preds,
-            sklearn_predictions=sk_preds,
+        # Run dynamic optimization over ALL frameworks
+        opt_result = self._dynamic_optimize(
+            fw_names=fw_names,
+            fw_preds=fw_preds,
             labels=y_true,
             method=method,
             metric=metric,
         )
         
-        # Build combined prediction for metrics
-        w = opt_result.optimal_weights
-        combined = (
-            w.h2o_weight * h2o_preds +
-            w.autogluon_weight * ag_preds +
-            w.sklearn_weight * sk_preds
+        # Store weights as simple dict for serialization
+        weight_dict = opt_result['weights']
+        
+        # Build combined prediction for final metrics
+        from sklearn.metrics import roc_auc_score, log_loss, accuracy_score
+        
+        combined = np.zeros(len(y_true))
+        for fw in fw_names:
+            combined += weight_dict[fw] * fw_preds[fw]
+        combined = np.clip(combined, 0.001, 0.999)
+        
+        final_accuracy = accuracy_score(y_true, combined > 0.5)
+        final_auc = roc_auc_score(y_true, combined)
+        final_logloss = log_loss(y_true, combined)
+        
+        # Also store in self.weights for backward compat
+        self.weights = EnsembleWeights(
+            h2o_weight=weight_dict.get('h2o', 0.0),
+            autogluon_weight=weight_dict.get('autogluon', 0.0),
+            sklearn_weight=weight_dict.get('sklearn', 0.0),
         )
         
-        # Store weights as simple dict for serialization
-        weight_dict = {
-            'h2o': w.h2o_weight,
-            'autogluon': w.autogluon_weight, 
-            'sklearn': w.sklearn_weight,
-        }
+        # Log per-framework individual accuracy
+        for fw in fw_names:
+            fw_acc = accuracy_score(y_true, fw_preds[fw] > 0.5)
+            fw_auc = roc_auc_score(y_true, fw_preds[fw])
+            logger.info(f"  {fw}: weight={weight_dict[fw]:.2f}, accuracy={fw_acc:.4f}, AUC={fw_auc:.4f}")
         
         logger.info(f"Meta-ensemble optimized: weights={weight_dict}, "
-                     f"AUC={opt_result.validation_auc:.4f}, "
-                     f"Acc={opt_result.validation_accuracy:.4f}")
+                     f"AUC={final_auc:.4f}, Acc={final_accuracy:.4f}")
         
         # Return result object matching training_service expectations
         return type('MetaEnsembleFitResult', (), {
             'weights': weight_dict,
-            'auc': opt_result.validation_auc,
-            'accuracy': opt_result.validation_accuracy,
-            'log_loss': opt_result.validation_log_loss,
-            'improvement': opt_result.improvement_over_equal,
-            'method': opt_result.optimization_method,
+            'auc': final_auc,
+            'accuracy': final_accuracy,
+            'log_loss': final_logloss,
+            'improvement': opt_result['improvement'],
+            'method': opt_result['method'],
         })()
+    
+    def _dynamic_optimize(
+        self,
+        fw_names: List[str],
+        fw_preds: Dict[str, np.ndarray],
+        labels: np.ndarray,
+        method: str = 'grid_search',
+        metric: str = 'accuracy',
+    ) -> Dict[str, Any]:
+        """
+        Dynamic weight optimization for any number of frameworks.
+        
+        Uses grid search for ≤4 frameworks, scipy for 5+.
+        """
+        from sklearn.metrics import roc_auc_score, log_loss, accuracy_score
+        
+        n_fw = len(fw_names)
+        
+        # Baseline: equal weights
+        equal_w = 1.0 / n_fw
+        baseline = np.zeros(len(labels))
+        for fw in fw_names:
+            baseline += equal_w * fw_preds[fw]
+        baseline_accuracy = accuracy_score(labels, baseline > 0.5)
+        
+        def score_weights(weights_dict):
+            """Score a given weight combination."""
+            combined = np.zeros(len(labels))
+            for fw, w in weights_dict.items():
+                combined += w * fw_preds[fw]
+            combined = np.clip(combined, 0.001, 0.999)
+            
+            if metric == 'accuracy':
+                return accuracy_score(labels, combined > 0.5)
+            elif metric == 'auc':
+                return roc_auc_score(labels, combined)
+            elif metric == 'log_loss':
+                return -log_loss(labels, combined)
+            return accuracy_score(labels, combined > 0.5)
+        
+        # Grid search (feasible for ≤5 frameworks)
+        if n_fw <= 5:
+            step = 0.05
+            best_score = -float('inf')
+            best_weights = {fw: equal_w for fw in fw_names}
+            iterations = 0
+            
+            # Generate all weight combos that sum to 1.0
+            import itertools
+            grid_vals = np.arange(0.0, 1.01, step)
+            
+            for combo in itertools.product(grid_vals, repeat=n_fw - 1):
+                last_w = 1.0 - sum(combo)
+                if last_w < -0.001 or last_w > 1.001:
+                    continue
+                last_w = max(0.0, min(1.0, last_w))
+                
+                all_weights = list(combo) + [last_w]
+                weights_dict = {fw: w for fw, w in zip(fw_names, all_weights)}
+                
+                iterations += 1
+                score = score_weights(weights_dict)
+                
+                if score > best_score:
+                    best_score = score
+                    best_weights = weights_dict.copy()
+            
+            improvement = (best_score - baseline_accuracy) / baseline_accuracy * 100 if baseline_accuracy > 0 else 0
+            
+            # Log results
+            weight_str = ", ".join(f"{fw}={w:.2f}" for fw, w in best_weights.items())
+            logger.info(f"Weight optimization complete ({iterations} combos): {weight_str}")
+            logger.info(f"Accuracy: {baseline_accuracy:.4f} -> {best_score:.4f} ({improvement:.1f}% improvement)")
+            
+            return {
+                'weights': best_weights,
+                'improvement': improvement,
+                'method': f'grid_search_{iterations}_combos',
+            }
+        
+        else:
+            # Scipy optimization for 6+ frameworks
+            from scipy.optimize import minimize as scipy_minimize
+            
+            def objective(x):
+                last_w = 1.0 - sum(x)
+                if last_w < 0:
+                    return 1e10
+                weights_dict = {fw: w for fw, w in zip(fw_names[:-1], x)}
+                weights_dict[fw_names[-1]] = last_w
+                return -score_weights(weights_dict)
+            
+            x0 = [equal_w] * (n_fw - 1)
+            bounds = [(0, 1)] * (n_fw - 1)
+            
+            result = scipy_minimize(objective, x0, method='L-BFGS-B', bounds=bounds)
+            
+            opt_weights = list(result.x) + [max(0, 1.0 - sum(result.x))]
+            total = sum(opt_weights)
+            opt_weights = [w / total for w in opt_weights]
+            
+            best_weights = {fw: w for fw, w in zip(fw_names, opt_weights)}
+            best_score = score_weights(best_weights)
+            improvement = (best_score - baseline_accuracy) / baseline_accuracy * 100 if baseline_accuracy > 0 else 0
+            
+            return {
+                'weights': best_weights,
+                'improvement': improvement,
+                'method': 'scipy_optimize',
+            }
 
     def combine_predictions(
         self,

@@ -175,6 +175,10 @@ class MetaEnsemble:
         self.calibrator = None
         self.performance_history: List[Dict[str, float]] = []
         
+    # ----- Quality Gate Constants -----
+    MIN_HOLDOUT_FOR_GRID_SEARCH = 50   # Below this: skip grid search, use best single framework
+    MIN_AUC_FOR_INCLUSION = 0.52       # Below this: framework is effectively random, exclude it
+    
     def fit(
         self,
         predictions: Dict[str, np.ndarray],
@@ -190,9 +194,13 @@ class MetaEnsemble:
         Fully dynamic — every framework that trained successfully gets its
         own independent weight slot. No more hardcoded 3-slot limitation.
         
+        Quality Gates (prevent garbage-in → garbage-out):
+          1. Frameworks with AUC ≤ 0.52 are excluded (effectively random)
+          2. If holdout < 50 samples, skip grid search → use best single framework
+          3. If only 1 framework passes quality gate, use it at 100% weight
+        
         Args:
             predictions: Dict mapping framework name to prediction arrays
-                         e.g. {'h2o': [...], 'sklearn': [...], 'autogluon': [...], 'deep_learning': [...]}
             y_true: True labels
             sport_code: Sport code (for logging)
             bet_type: Bet type (for logging)
@@ -202,60 +210,156 @@ class MetaEnsemble:
         Returns:
             Object with .weights (dict), .auc, .accuracy, .log_loss attributes
         """
-        y_true = np.asarray(y_true).ravel()
-        fw_names = sorted(predictions.keys())
-        fw_preds = {k: np.asarray(v).ravel() for k, v in predictions.items()}
-        
-        logger.info(f"Meta-ensemble fit: {len(fw_names)} frameworks ({', '.join(fw_names)}) for {sport_code} {bet_type}")
-        
-        # Run dynamic optimization over ALL frameworks
-        opt_result = self._dynamic_optimize(
-            fw_names=fw_names,
-            fw_preds=fw_preds,
-            labels=y_true,
-            method=method,
-            metric=metric,
-        )
-        
-        # Store weights as simple dict for serialization
-        weight_dict = opt_result['weights']
-        
-        # Build combined prediction for final metrics
         from sklearn.metrics import roc_auc_score, log_loss, accuracy_score
         
-        combined = np.zeros(len(y_true))
-        for fw in fw_names:
-            combined += weight_dict[fw] * fw_preds[fw]
-        combined = np.clip(combined, 0.001, 0.999)
+        y_true = np.asarray(y_true).ravel()
+        n_holdout = len(y_true)
+        all_fw_names = sorted(predictions.keys())
+        all_fw_preds = {k: np.asarray(v).ravel() for k, v in predictions.items()}
         
-        final_accuracy = accuracy_score(y_true, combined > 0.5)
-        final_auc = roc_auc_score(y_true, combined)
-        final_logloss = log_loss(y_true, combined)
+        logger.info(f"Meta-ensemble fit: {len(all_fw_names)} frameworks "
+                     f"({', '.join(all_fw_names)}) for {sport_code} {bet_type}, "
+                     f"{n_holdout} holdout samples")
         
-        # Also store in self.weights for backward compat
+        # ── QUALITY GATE 1: Exclude random frameworks (AUC ≤ 0.52) ──
+        fw_auc_scores = {}
+        for fw in all_fw_names:
+            try:
+                auc = roc_auc_score(y_true, all_fw_preds[fw])
+            except Exception:
+                auc = 0.5
+            fw_auc_scores[fw] = auc
+        
+        qualified_fw = [
+            fw for fw in all_fw_names 
+            if fw_auc_scores[fw] > self.MIN_AUC_FOR_INCLUSION
+        ]
+        excluded_fw = [
+            fw for fw in all_fw_names 
+            if fw not in qualified_fw
+        ]
+        
+        if excluded_fw:
+            for fw in excluded_fw:
+                logger.warning(
+                    f"  ✂️ EXCLUDING {fw}: AUC={fw_auc_scores[fw]:.4f} "
+                    f"≤ {self.MIN_AUC_FOR_INCLUSION} (effectively random, "
+                    f"would add noise to ensemble)"
+                )
+        
+        # If no framework passed quality gate, fall back to best by AUC
+        if not qualified_fw:
+            best_fw = max(all_fw_names, key=lambda fw: fw_auc_scores[fw])
+            logger.warning(
+                f"  ⚠️ NO framework passed AUC > {self.MIN_AUC_FOR_INCLUSION}. "
+                f"Using best single: {best_fw} (AUC={fw_auc_scores[best_fw]:.4f})"
+            )
+            qualified_fw = [best_fw]
+        
+        # Build filtered prediction dict
+        fw_names = qualified_fw
+        fw_preds = {k: all_fw_preds[k] for k in fw_names}
+        
+        logger.info(f"  {len(fw_names)} frameworks passed quality gate: {', '.join(fw_names)}")
+        
+        # ── QUALITY GATE 2: Minimum holdout size for grid search ──
+        if n_holdout < self.MIN_HOLDOUT_FOR_GRID_SEARCH:
+            # Not enough holdout data to reliably optimize weights
+            # Use best single framework by AUC to avoid overfitting to noise
+            best_fw = max(fw_names, key=lambda fw: fw_auc_scores[fw])
+            
+            logger.warning(
+                f"  ⚠️ SMALL HOLDOUT ({n_holdout} < {self.MIN_HOLDOUT_FOR_GRID_SEARCH}): "
+                f"Grid search would overfit to noise. "
+                f"Using best single framework: {best_fw} "
+                f"(AUC={fw_auc_scores[best_fw]:.4f})"
+            )
+            
+            # All weight to best framework
+            weight_dict = {fw: 0.0 for fw in all_fw_names}
+            weight_dict[best_fw] = 1.0
+            
+            combined = all_fw_preds[best_fw]
+            combined = np.clip(combined, 0.001, 0.999)
+            
+            final_accuracy = accuracy_score(y_true, combined > 0.5)
+            final_auc = roc_auc_score(y_true, combined)
+            final_logloss = log_loss(y_true, combined)
+            
+            method_used = f'best_single_{best_fw}_small_holdout_{n_holdout}'
+            improvement = 0.0
+            
+        elif len(fw_names) == 1:
+            # Only one framework passed quality gate — use it at 100%
+            best_fw = fw_names[0]
+            logger.info(f"  Only 1 qualified framework: {best_fw}. Using 100% weight.")
+            
+            weight_dict = {fw: 0.0 for fw in all_fw_names}
+            weight_dict[best_fw] = 1.0
+            
+            combined = all_fw_preds[best_fw]
+            combined = np.clip(combined, 0.001, 0.999)
+            
+            final_accuracy = accuracy_score(y_true, combined > 0.5)
+            final_auc = roc_auc_score(y_true, combined)
+            final_logloss = log_loss(y_true, combined)
+            
+            method_used = f'single_qualified_{best_fw}'
+            improvement = 0.0
+            
+        else:
+            # ── Normal path: Enough data + multiple qualified frameworks ──
+            opt_result = self._dynamic_optimize(
+                fw_names=fw_names,
+                fw_preds=fw_preds,
+                labels=y_true,
+                method=method,
+                metric=metric,
+            )
+            
+            # Merge optimized weights with zeros for excluded frameworks
+            weight_dict = {fw: 0.0 for fw in all_fw_names}
+            for fw, w in opt_result['weights'].items():
+                weight_dict[fw] = w
+            
+            improvement = opt_result['improvement']
+            method_used = opt_result['method']
+            
+            # Build combined prediction for final metrics
+            combined = np.zeros(n_holdout)
+            for fw in fw_names:
+                combined += weight_dict[fw] * fw_preds[fw]
+            combined = np.clip(combined, 0.001, 0.999)
+            
+            final_accuracy = accuracy_score(y_true, combined > 0.5)
+            final_auc = roc_auc_score(y_true, combined)
+            final_logloss = log_loss(y_true, combined)
+        
+        # ── Store backward compat weights ──
         self.weights = EnsembleWeights(
             h2o_weight=weight_dict.get('h2o', 0.0),
             autogluon_weight=weight_dict.get('autogluon', 0.0),
             sklearn_weight=weight_dict.get('sklearn', 0.0),
         )
         
-        # Log per-framework individual accuracy
-        for fw in fw_names:
-            fw_acc = accuracy_score(y_true, fw_preds[fw] > 0.5)
-            fw_auc = roc_auc_score(y_true, fw_preds[fw])
-            logger.info(f"  {fw}: weight={weight_dict[fw]:.2f}, accuracy={fw_acc:.4f}, AUC={fw_auc:.4f}")
+        # ── Log per-framework metrics ──
+        for fw in all_fw_names:
+            fw_acc = accuracy_score(y_true, all_fw_preds[fw] > 0.5)
+            fw_auc = fw_auc_scores[fw]
+            status = "✅" if fw in fw_names else "❌ excluded"
+            logger.info(f"  {fw}: weight={weight_dict[fw]:.2f}, accuracy={fw_acc:.4f}, AUC={fw_auc:.4f} {status}")
         
         logger.info(f"Meta-ensemble optimized: weights={weight_dict}, "
-                     f"AUC={final_auc:.4f}, Acc={final_accuracy:.4f}")
+                     f"AUC={final_auc:.4f}, Acc={final_accuracy:.4f}, method={method_used}")
         
-        # Return result object matching training_service expectations
+        # ── Return result ──
         return type('MetaEnsembleFitResult', (), {
             'weights': weight_dict,
             'auc': final_auc,
             'accuracy': final_accuracy,
             'log_loss': final_logloss,
-            'improvement': opt_result['improvement'],
-            'method': opt_result['method'],
+            'improvement': improvement,
+            'method': method_used,
         })()
     
     def _dynamic_optimize(

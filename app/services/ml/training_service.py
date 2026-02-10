@@ -2625,6 +2625,19 @@ class TrainingService:
         else:
             raise ValueError(f"Unknown framework: {framework}. Available: {self.get_available_frameworks()}")
     
+    # Minimum training samples required per framework.
+    # Below these thresholds, the framework produces noise, not signal.
+    FRAMEWORK_MIN_SAMPLES = {
+        'h2o': 30,           # Tree-based, handles small data OK
+        'sklearn': 30,       # Tree-based, handles small data OK
+        'autogluon': 30,     # Tree-based, handles small data OK
+        'deep_learning': 200,  # Neural nets need data; 65K params on <200 rows = overfit
+        'quantum': 500,      # QNN with 36 params still needs volume; always random on small data
+    }
+    
+    # Minimum TOTAL samples for meta-ensemble to be meaningful
+    MIN_TOTAL_SAMPLES_FOR_ENSEMBLE = 150  # Below this, meta-ensemble is unreliable
+    
     async def _train_meta_ensemble(
         self,
         train_df: pd.DataFrame,
@@ -2646,6 +2659,12 @@ class TrainingService:
           
         This prevents AutoGluon (which merges valid_df into training for
         bagged mode) from inflating meta-ensemble accuracy.
+        
+        Quality Guards:
+          1. Frameworks are skipped if base_train < FRAMEWORK_MIN_SAMPLES
+          2. Deep learning skipped if < 200 training samples (65K params overfit)
+          3. Quantum skipped if < 500 training samples (always random on small data)
+          4. Warning issued if total samples < 150 (results unreliable)
         """
         logger.info("Training Meta Ensemble - training all base models...")
         
@@ -2662,21 +2681,63 @@ class TrainingService:
         base_valid = full_df.iloc[split1:split2].copy()
         ensemble_holdout = full_df.iloc[split2:].copy()
         
+        n_train = len(base_train)
+        n_holdout = len(ensemble_holdout)
+        
         logger.info(
-            f"  3-way split: base_train={len(base_train)}, "
+            f"  3-way split: base_train={n_train}, "
             f"base_valid={len(base_valid)}, "
-            f"ensemble_holdout={len(ensemble_holdout)} "
+            f"ensemble_holdout={n_holdout} "
             f"(holdout NEVER seen by base models)"
         )
+        
+        # ── QUALITY GUARD: Warn on tiny datasets ──
+        if n < self.MIN_TOTAL_SAMPLES_FOR_ENSEMBLE:
+            logger.warning(
+                f"  ⚠️ SMALL DATASET WARNING: {sport_code} {bet_type} has only "
+                f"{n} total samples ({n_train} train, {n_holdout} holdout). "
+                f"Meta-ensemble results will be UNRELIABLE. "
+                f"Minimum recommended: {self.MIN_TOTAL_SAMPLES_FOR_ENSEMBLE} samples. "
+                f"Consider using a single framework (h2o or sklearn) instead."
+            )
         
         base_results = {}
         base_predictions = {}
         
-        # Train each base framework on base_train with base_valid
-        base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning", "quantum"]
-        n_frameworks = len(base_frameworks)
+        # ── Determine which frameworks to train based on sample size ──
+        all_base_frameworks = ["h2o", "sklearn", "autogluon", "deep_learning", "quantum"]
+        eligible_frameworks = []
+        skipped_frameworks = []
         
-        for base_fw in base_frameworks:
+        for fw in all_base_frameworks:
+            min_required = self.FRAMEWORK_MIN_SAMPLES.get(fw, 50)
+            if n_train >= min_required:
+                eligible_frameworks.append(fw)
+            else:
+                skipped_frameworks.append((fw, min_required))
+        
+        if skipped_frameworks:
+            for fw, min_req in skipped_frameworks:
+                logger.warning(
+                    f"  ⏭️ SKIPPING {fw}: only {n_train} training samples "
+                    f"< minimum {min_req} required. "
+                    f"Would produce random/overfit predictions."
+                )
+        
+        if not eligible_frameworks:
+            raise ValueError(
+                f"No frameworks eligible for {sport_code} {bet_type} "
+                f"with only {n_train} training samples"
+            )
+        
+        logger.info(
+            f"  Eligible frameworks ({len(eligible_frameworks)}): "
+            f"{', '.join(eligible_frameworks)}"
+        )
+        
+        n_frameworks = len(eligible_frameworks)
+        
+        for base_fw in eligible_frameworks:
             try:
                 logger.info(f"  Training base model: {base_fw}")
                 result = await self._train_framework(

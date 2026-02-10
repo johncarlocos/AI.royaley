@@ -51,7 +51,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # CONFIGURATION
 # ============================================================================
 
-MODELS_DIR = Path("/nvme0n1-disk/royaley/models")
+MODELS_DIR = Path("/app/models")
 BET_TYPES = ["spread", "moneyline", "total"]
 FRAMEWORKS = ["h2o", "sklearn", "autogluon", "tensorflow", "quantum"]
 

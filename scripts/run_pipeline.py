@@ -30,7 +30,7 @@ from rich.table import Table
 console = Console()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-MODELS_DIR = "/nvme0n1-disk/royaley/models"
+MODELS_DIR = "/app/models"
 SCRIPTS_DIR = Path(__file__).parent
 
 

@@ -524,7 +524,7 @@ def save_backtest(result: BacktestResult, output_dir: str = "."):
 
 def main():
     parser = argparse.ArgumentParser(description="ROYALEY Phase 5: Walk-Forward Backtesting")
-    parser.add_argument("--models-dir", "-m", type=str, default="/nvme0n1-disk/royaley/models")
+    parser.add_argument("--models-dir", "-m", type=str, default="/app/models")
     parser.add_argument("--csv-dir", type=str, default=None)
     parser.add_argument("--sports", type=str, default=None,
                         help="Comma-separated sports (e.g., NFL,NBA)")

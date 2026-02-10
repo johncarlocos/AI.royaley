@@ -435,7 +435,7 @@ def _print_optimization_report(report: List[Dict]):
 
 async def main():
     parser = argparse.ArgumentParser(description="ROYALEY Phase 4: Ensemble Optimization")
-    parser.add_argument("--models-dir", "-m", type=str, default="/nvme0n1-disk/royaley/models")
+    parser.add_argument("--models-dir", "-m", type=str, default="/app/models")
     parser.add_argument("--csv-dir", type=str, default=None)
     parser.add_argument("--sport", "-s", type=str, default=None)
     parser.add_argument("--bet-type", "-b", type=str, default=None)

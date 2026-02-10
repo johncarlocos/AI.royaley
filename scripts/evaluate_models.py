@@ -5,9 +5,9 @@ Scans all 156 trained models, loads each, evaluates on validation data,
 and generates a ranked CSV scorecard.
 
 Usage:
-    python scripts/evaluate_models.py --models-dir /nvme0n1-disk/royaley/models
-    python scripts/evaluate_models.py --models-dir /nvme0n1-disk/royaley/models --sport NFL
-    python scripts/evaluate_models.py --models-dir /nvme0n1-disk/royaley/models --output scorecard.csv
+    docker exec -it royaley_api python scripts/evaluate_models.py
+    docker exec -it royaley_api python scripts/evaluate_models.py --sport NFL
+    docker exec -it royaley_api python scripts/evaluate_models.py --output scorecard.csv --verbose
 """
 
 import asyncio
@@ -527,9 +527,9 @@ def load_validation_data(sport: str, bet_type: str,
     """
     csv_paths = [
         Path(csv_dir) if csv_dir else None,
+        Path("/app/ml_csv"),
         Path(__file__).parent.parent / "app" / "services" / "ml_csv",
         Path(__file__).parent.parent / "ml_csv",
-        Path("/nvme0n1-disk/royaley/ml_csv"),
     ]
 
     df = None
@@ -942,7 +942,7 @@ def _save_scorecard_csv(scores: List[ModelScore], path: str):
 async def main():
     parser = argparse.ArgumentParser(description="ROYALEY Phase 2: Model Evaluation")
     parser.add_argument("--models-dir", "-m", type=str,
-                        default="/nvme0n1-disk/royaley/models",
+                        default="/app/models",
                         help="Root models directory")
     parser.add_argument("--csv-dir", type=str, default=None,
                         help="Directory with ML training CSVs")

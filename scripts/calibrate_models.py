@@ -359,7 +359,7 @@ def _print_calibration_report(report: List[Dict]):
 
 async def main():
     parser = argparse.ArgumentParser(description="ROYALEY Phase 3: Probability Calibration")
-    parser.add_argument("--models-dir", "-m", type=str, default="/nvme0n1-disk/royaley/models")
+    parser.add_argument("--models-dir", "-m", type=str, default="/app/models")
     parser.add_argument("--scorecard", type=str, default=None,
                         help="Phase 2 scorecard CSV to filter models")
     parser.add_argument("--csv-dir", type=str, default=None)

@@ -40,11 +40,13 @@ from pathlib import Path
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EVALUATE_PY = Path("/home/ai-sports-betting/src/evaluation/evaluate.py")
+EVALUATE_PY = Path("/app/scripts/evaluate_models.py")
 
 # Try alternate locations
 if not EVALUATE_PY.exists():
     alt_paths = [
+        Path(__file__).parent / "evaluate_models.py",
+        Path("/home/ai-sports-betting/src/evaluation/evaluate.py"),
         Path("/home/ai-sports-betting/evaluate.py"),
         Path("/home/royaley/src/evaluation/evaluate.py"),
         Path("/home/royaley/evaluate.py"),
@@ -372,15 +374,35 @@ def _engineer_features_v52(df, sport=""):
     
     # V5.2 FIX 2: Run feature engineering to create 30+ derived features
     df = _engineer_features_v52(df, sport)
-    logger.info(f"  v5.2: Post-engineering: {len(df)} rows x {len(df.columns)} cols")
 '''
     
-    if final_match and 'v5.2 FIX 2' not in content:
-        insert_pos = final_match.end()
-        content = content[:insert_pos] + engineering_call + content[insert_pos:]
-        patches_applied += 1
-        fix2_applied = True
-        print(f"  ✅ [FIX {patches_applied}] Injected engineering call after 'Final:' log line")
+    if 'V5.2 FIX 2' not in content:
+        # Approach A: Find "exclude_cols" or "Identify feature columns" in load_validation_data
+        # This is the correct injection point for evaluate_models.py — BEFORE feature selection
+        excl_match = re.search(r'(\n\s+# Identify feature columns)', content)
+        if not excl_match:
+            excl_match = re.search(r'(\n\s+exclude_cols\s*=\s*\{)', content)
+        
+        if excl_match:
+            insert_pos = excl_match.start()
+            content = content[:insert_pos] + engineering_call + content[insert_pos:]
+            patches_applied += 1
+            fix2_applied = True
+            print(f"  ✅ [FIX {patches_applied}] Injected engineering call before feature column identification")
+
+    if not fix2_applied and 'V5.2 FIX 2' not in content:
+        # Approach B: Find "Final:" log line (original codebase)
+        final_log_pattern = re.compile(
+            r'(logger\.info\(f["\'].*Final:.*rows.*cols.*["\']\))',
+            re.IGNORECASE
+        )
+        final_match = final_log_pattern.search(content)
+        if final_match:
+            insert_pos = final_match.end()
+            content = content[:insert_pos] + engineering_call + content[insert_pos:]
+            patches_applied += 1
+            fix2_applied = True
+            print(f"  ✅ [FIX {patches_applied}] Injected engineering call after 'Final:' log line")
     
     if not fix2_applied:
         # Approach B: Find the feature_columns loop and inject BEFORE it
@@ -388,7 +410,7 @@ def _engineer_features_v52(df, sport=""):
             r'(\n\s+feature_columns\s*=\s*\[\])',
             content
         )
-        if feat_loop and 'v5.2 FIX 2' not in content:
+        if feat_loop and 'V5.2 FIX 2' not in content:
             insert_pos = feat_loop.start()
             content = content[:insert_pos] + engineering_call + content[insert_pos:]
             patches_applied += 1
@@ -409,7 +431,7 @@ def _engineer_features_v52(df, sport=""):
             
             # Find last return in the function
             returns = list(re.finditer(r'\n(\s+return\s)', func_body))
-            if returns and 'v5.2 FIX 2' not in content:
+            if returns and 'V5.2 FIX 2' not in content:
                 last_return = returns[-1]
                 insert_pos = func_start + last_return.start()
                 content = content[:insert_pos] + engineering_call + content[insert_pos:]
@@ -417,7 +439,7 @@ def _engineer_features_v52(df, sport=""):
                 fix2_applied = True
                 print(f"  ✅ [FIX {patches_applied}] Injected engineering call before return")
     
-    if not fix2_applied and 'v5.2 FIX 2' not in content:
+    if not fix2_applied and 'V5.2 FIX 2' not in content:
         patches_failed.append("FIX 2: Could not inject feature engineering call")
         print(f"  ❌ Could not find injection point for feature engineering call")
     
@@ -686,21 +708,20 @@ def _engineer_features_v52(df, sport=""):
     H2O_CATEGORICAL_FIX = '''
     # === V5.2 FIX 5: COMPREHENSIVE H2O CATEGORICAL HANDLING ===
     # Some numeric columns were auto-detected as Enum by H2O during training
-    # (due to limited unique values). Must convert to string before H2OFrame.
-    import logging as _log52
-    _logger52 = _log52.getLogger(__name__)
+    import logging as _log52h2o
+    _logger52 = _log52h2o.getLogger(__name__)
     
-    # Step A: Get Enum columns from model metadata
     _v52_enum_cols = set()
+    
+    # Step A: Check model metadata for Enum columns
     try:
-        _v52_resp = model.actual_params.get('response_column', {})
-        _v52_resp_col = _v52_resp.get('column_name', '') if isinstance(_v52_resp, dict) else str(_v52_resp)
+        _v52_resp_col = model._model_json.get('output', {}).get('response_column_name', '')
         
         _v52_model_cols = model._model_json.get('output', {}).get('column_types', [])
         _v52_model_names = model._model_json.get('output', {}).get('names', [])
         
         for _cn, _ct in zip(_v52_model_names, _v52_model_cols):
-            if _ct == 'Enum' and _cn != _v52_resp_col and _cn in pred_df.columns:
+            if _ct == 'Enum' and _cn != _v52_resp_col and _cn in df.columns:
                 _v52_enum_cols.add(_cn)
     except Exception:
         pass
@@ -710,20 +731,20 @@ def _engineer_features_v52(df, sport=""):
         'consensus_spread', 'consensus_total', 'no_vig_home_prob',
     }
     for _kc in _v52_known_enums:
-        if _kc in pred_df.columns:
+        if _kc in df.columns:
             _v52_enum_cols.add(_kc)
     
     # Step C: Boolean/indicator columns that H2O auto-detects as Enum
-    for _col in pred_df.columns:
+    for _col in df.columns:
         if _col.startswith(('is_', 'has_', 'away_is_', 'home_is_', 'away_has_', 'home_has_')):
-            if pred_df[_col].dtype in ['bool', 'object'] or pred_df[_col].nunique() <= 3:
+            if df[_col].dtype in ['bool', 'object'] or df[_col].nunique() <= 3:
                 _v52_enum_cols.add(_col)
     
     # Step D: Convert to string for H2O Enum compatibility
     if _v52_enum_cols:
         _logger52.info(f"  v5.2 h2o: Converting {len(_v52_enum_cols)} columns to Enum: {sorted(list(_v52_enum_cols))[:8]}...")
         for _ec in _v52_enum_cols:
-            pred_df[_ec] = pred_df[_ec].fillna('missing').astype(str)
+            df[_ec] = df[_ec].fillna('missing').astype(str)
 '''
     
     # Find the H2OFrame creation line and inject BEFORE it
@@ -775,24 +796,24 @@ def _engineer_features_v52(df, sport=""):
     _logger52ag = _log52ag.getLogger(__name__)
     try:
         _ag_required = set()
-        if hasattr(model, 'original_features') and model.original_features is not None:
-            _ag_required = set(model.original_features)
-        elif hasattr(model, 'feature_metadata') and model.feature_metadata is not None:
-            _ag_required = set(model.feature_metadata.get_features())
+        if hasattr(predictor, 'original_features') and predictor.original_features is not None:
+            _ag_required = set(predictor.original_features)
+        elif hasattr(predictor, 'feature_metadata') and predictor.feature_metadata is not None:
+            _ag_required = set(predictor.feature_metadata.get_features())
         
         if _ag_required:
-            _ag_missing = _ag_required - set(pred_df.columns)
+            _ag_missing = _ag_required - set(df.columns)
             if _ag_missing:
                 _logger52ag.warning(f"  v5.2 autogluon: Padding {len(_ag_missing)} missing features with 0: {sorted(list(_ag_missing))[:5]}...")
                 for _mc in _ag_missing:
-                    pred_df[_mc] = 0
+                    df[_mc] = 0
     except Exception as _ag_err:
         _logger52ag.warning(f"  v5.2 autogluon: Feature padding failed: {_ag_err}")
 '''
     
     # Find _predict_autogluon and inject before the predict call
     ag_predict_pattern = re.compile(
-        r'(def _predict_autogluon\(.*?\n)(.*?)(model\.predict_proba|model\.predict)',
+        r'(def _predict_autogluon\(.*?\n)(.*?)(predictor\.predict_proba|predictor\.predict|model\.predict_proba|model\.predict)',
         re.DOTALL
     )
     

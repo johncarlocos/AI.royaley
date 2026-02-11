@@ -202,10 +202,10 @@ async def save_upcoming_game(
     external_id = event["id"]
     home_team_name = event["home_team"]
     away_team_name = event["away_team"]
-    commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+    commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00")).replace(tzinfo=None)
     
     # Skip games that already started
-    if commence_time < datetime.now(timezone.utc):
+    if commence_time < datetime.utcnow():
         return None
     
     # Get or create team IDs

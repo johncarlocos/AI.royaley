@@ -223,6 +223,7 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
                             })
                             stats["odds_updated"] += 1
                         except Exception as e:
+                            await db.rollback()
                             logger.debug(f"    Odds upsert error: {e}")
 
             stats["sports_fetched"] += 1
@@ -455,9 +456,9 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                                 VALUES
                                     (gen_random_uuid(), :pid, :result, :cl, :co, :clv, :pnl, NOW())
                                 ON CONFLICT (prediction_id) DO UPDATE SET
-                                    actual_result = :result,
-                                    clv = :clv,
-                                    profit_loss = :pnl,
+                                    actual_result = EXCLUDED.actual_result,
+                                    clv = EXCLUDED.clv,
+                                    profit_loss = EXCLUDED.profit_loss,
                                     graded_at = NOW()
                             """), {
                                 "pid": pred.id,
@@ -469,6 +470,7 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                             })
                             stats["predictions_graded"] += 1
                         except Exception as e:
+                            await db.rollback()
                             logger.error(f"    Grade error for {pred.id}: {e}")
 
             except Exception as e:
@@ -633,17 +635,21 @@ async def run_scheduler():
         cycle += 1
         now = datetime.utcnow()
 
+        # --- Closing line capture (most frequent - every 15 min) ---
+        logger.info(f"[Cycle {cycle}] Checking for closing line captures...")
         try:
             async with async_session() as db:
-                # --- Closing line capture (most frequent - every 15 min) ---
-                logger.info(f"[Cycle {cycle}] Checking for closing line captures...")
                 closed = await capture_closing_lines(db)
                 if closed:
                     logger.info(f"  ✅ Captured {closed} closing lines")
+        except Exception as e:
+            logger.error(f"  Closing capture error: {e}")
 
-                # --- Game grading (every 30 min) ---
-                if now - last_grading >= GRADING_INTERVAL:
-                    logger.info(f"[Cycle {cycle}] Running game grading...")
+        # --- Game grading (every 30 min) ---
+        if now - last_grading >= GRADING_INTERVAL:
+            logger.info(f"[Cycle {cycle}] Running game grading...")
+            try:
+                async with async_session() as db:
                     grade_stats = await grade_predictions(db, api_key)
                     if grade_stats["games_graded"] > 0:
                         logger.info(
@@ -651,21 +657,24 @@ async def run_scheduler():
                             f"{grade_stats['predictions_graded']} predictions "
                             f"(API: {grade_stats['api_requests']} requests)"
                         )
-                    last_grading = now
+            except Exception as e:
+                logger.error(f"  Grading error: {e}")
+            last_grading = now
 
-                # --- Odds refresh (every 8 hours) ---
-                if now - last_odds_refresh >= ODDS_INTERVAL:
-                    logger.info(f"[Cycle {cycle}] Running odds refresh...")
+        # --- Odds refresh (every 8 hours) ---
+        if now - last_odds_refresh >= ODDS_INTERVAL:
+            logger.info(f"[Cycle {cycle}] Running odds refresh...")
+            try:
+                async with async_session() as db:
                     odds_stats = await refresh_odds(db, api_key)
                     logger.info(
                         f"  ✅ Refreshed {odds_stats['sports_fetched']} sports, "
                         f"{odds_stats['odds_updated']} odds updated "
                         f"(API: {odds_stats['api_requests']} requests)"
                     )
-                    last_odds_refresh = now
-
-        except Exception as e:
-            logger.error(f"[Cycle {cycle}] Error: {e}")
+            except Exception as e:
+                logger.error(f"  Odds refresh error: {e}")
+            last_odds_refresh = now
 
         # Sleep 15 minutes between cycles
         logger.info(f"[Cycle {cycle}] Sleeping 15 minutes...")
@@ -682,22 +691,36 @@ async def run_once():
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     api_key = settings.ODDS_API_KEY
 
-    async with async_session() as db:
-        logger.info("\n1️⃣  Refreshing odds...")
-        odds_stats = await refresh_odds(db, api_key)
-        logger.info(f"   Sports: {odds_stats['sports_fetched']}, "
-                     f"Odds updated: {odds_stats['odds_updated']}, "
-                     f"API requests: {odds_stats['api_requests']}")
+    # Job 1: Odds refresh (separate session)
+    logger.info("\n1️⃣  Refreshing odds...")
+    try:
+        async with async_session() as db:
+            odds_stats = await refresh_odds(db, api_key)
+            logger.info(f"   Sports: {odds_stats['sports_fetched']}, "
+                         f"Odds updated: {odds_stats['odds_updated']}, "
+                         f"API requests: {odds_stats['api_requests']}")
+    except Exception as e:
+        logger.error(f"   Odds refresh error: {e}")
 
-        logger.info("\n2️⃣  Capturing closing lines...")
-        closed = await capture_closing_lines(db)
-        logger.info(f"   Closing lines captured: {closed}")
+    # Job 2: Closing line capture (separate session)
+    logger.info("\n2️⃣  Capturing closing lines...")
+    try:
+        async with async_session() as db:
+            closed = await capture_closing_lines(db)
+            logger.info(f"   Closing lines captured: {closed}")
+    except Exception as e:
+        logger.error(f"   Closing capture error: {e}")
 
-        logger.info("\n3️⃣  Grading predictions...")
-        grade_stats = await grade_predictions(db, api_key)
-        logger.info(f"   Games graded: {grade_stats['games_graded']}, "
-                     f"Predictions graded: {grade_stats['predictions_graded']}, "
-                     f"API requests: {grade_stats['api_requests']}")
+    # Job 3: Game grading (separate session)
+    logger.info("\n3️⃣  Grading predictions...")
+    try:
+        async with async_session() as db:
+            grade_stats = await grade_predictions(db, api_key)
+            logger.info(f"   Games graded: {grade_stats['games_graded']}, "
+                         f"Predictions graded: {grade_stats['predictions_graded']}, "
+                         f"API requests: {grade_stats['api_requests']}")
+    except Exception as e:
+        logger.error(f"   Grading error: {e}")
 
     await engine.dispose()
     logger.info("\n✅ Done!")

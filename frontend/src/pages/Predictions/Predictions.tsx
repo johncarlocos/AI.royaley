@@ -431,11 +431,9 @@ const Predictions: React.FC = () => {
             </TableHead>
             <TableBody>
               {paginatedGames.map((game) => {
-                const totalBetRows = game.bets.length * 2; // 2 rows (away+home) per bet type
                 return (
                   <React.Fragment key={game.game_id}>
                     {game.bets.map((row, betIdx) => {
-                      const isFirstBet = betIdx === 0;
                       const isLastBet = betIdx === game.bets.length - 1;
                       const gameBorderSx = isLastBet ? { borderBottom: 2, borderColor: 'divider' } : {};
                       const betDivider = !isLastBet ? { borderBottom: 1, borderColor: 'action.hover' } : gameBorderSx;
@@ -444,13 +442,9 @@ const Predictions: React.FC = () => {
                         <React.Fragment key={row.id}>
                           {/* Away Row */}
                           <TableRow>
-                            {isFirstBet && (
-                              <>
-                                <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, borderBottom: 2, borderColor: 'divider' }}>{row.sport}</TableCell>
-                                <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 2, borderColor: 'divider' }}>{row.date}</TableCell>
-                                <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 2, borderColor: 'divider' }}>{row.time}</TableCell>
-                              </>
-                            )}
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, ...betDivider }}>{row.sport}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{row.date}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{row.time}</TableCell>
                             <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, borderBottom: 0 }}>{row.away_rotation}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, fontWeight: row.pick_team === 'away' ? 700 : 400, borderBottom: 0 }}>{row.away_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0 }}>{row.away_record}</TableCell>

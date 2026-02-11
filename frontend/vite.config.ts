@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-    allowedHosts: ['royaley.com', 'www.royaley.com', 'localhost'],
+    allowedHosts: ['frontend', 'royaley.com', 'www.royaley.com', 'localhost'],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

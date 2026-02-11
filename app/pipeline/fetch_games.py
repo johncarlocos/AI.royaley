@@ -356,6 +356,7 @@ async def save_upcoming_odds(
             count += 1
         except Exception as e:
             logger.debug(f"  Odds upsert error for {book_key}/{bet_type}: {e}")
+            await db.rollback()
     
     return count
 
@@ -486,11 +487,11 @@ async def generate_predictions_for_game(
                         INSERT INTO predictions 
                             (id, upcoming_game_id, bet_type, predicted_side, probability,
                              line_at_prediction, odds_at_prediction, edge, signal_tier,
-                             kelly_fraction, recommended_bet_size, prediction_hash, created_at)
+                             kelly_fraction, prediction_hash, created_at)
                         VALUES 
                             (gen_random_uuid(), :game_id, :bet_type, :side, :prob,
                              :line, :odds, :edge, :tier,
-                             :kelly, :bet_size, :hash, NOW())
+                             :kelly, :hash, NOW())
                     """),
                     {
                         "game_id": upcoming_game_id,
@@ -502,13 +503,13 @@ async def generate_predictions_for_game(
                         "edge": round(edge, 6),
                         "tier": tier,
                         "kelly": round(kelly, 6),
-                        "bet_size": round(kelly * 100, 2),  # As percentage
                         "hash": pred_hash,
                     },
                 )
                 count += 1
             except Exception as e:
                 logger.error(f"  Error saving prediction: {e}")
+                await db.rollback()
     
     return count
 

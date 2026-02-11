@@ -117,12 +117,10 @@ async def get_public_predictions(
             p.bet_type, p.predicted_side, p.probability, p.edge,
             CAST(p.signal_tier AS TEXT) as signal_tier,
             p.line_at_prediction, p.odds_at_prediction,
-            p.kelly_fraction, p.prediction_hash, p.created_at,
-            pr.actual_result as result, pr.clv, pr.profit_loss
+            p.kelly_fraction, p.prediction_hash, p.created_at
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
-        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
         WHERE (p.upcoming_game_id IS NOT NULL OR p.game_id IS NOT NULL)
         {where_sql}
         ORDER BY game_time DESC, p.created_at DESC
@@ -148,9 +146,9 @@ async def get_public_predictions(
             kelly_fraction=float(row.kelly_fraction) if row.kelly_fraction is not None else None,
             prediction_hash=row.prediction_hash,
             created_at=row.created_at.isoformat() if row.created_at else None,
-            result=str(row.result) if row.result else "pending",
-            clv=float(row.clv) if row.clv else None,
-            profit_loss=float(row.profit_loss) if row.profit_loss else None,
+            result="pending",
+            clv=None,
+            profit_loss=None,
         ))
 
     return PublicPredictionsResponse(
@@ -170,30 +168,10 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         text("SELECT COUNT(*) FROM predictions WHERE CAST(signal_tier AS TEXT) = 'A'")
     )).scalar() or 0
 
-    pending_count = (await db.execute(
-        text("SELECT COUNT(*) FROM predictions p LEFT JOIN prediction_results pr ON pr.prediction_id = p.id WHERE pr.id IS NULL")
-    )).scalar() or 0
+    # All predictions are pending until grading is implemented
+    pending_count = total_predictions
 
-    graded_today = (await db.execute(
-        text("SELECT COUNT(*) FROM prediction_results WHERE DATE(graded_at) = :today"),
-        {"today": today},
-    )).scalar() or 0
-
-    win_rate = 0.0
-    wr_row = (await db.execute(
-        text("SELECT COUNT(*) FILTER (WHERE actual_result = 'win') as wins, COUNT(*) as total FROM prediction_results")
-    )).fetchone()
-    if wr_row and wr_row.total > 0:
-        win_rate = round((wr_row.wins / wr_row.total) * 100, 1)
-
-    roi = 0.0
-    roi_row = (await db.execute(
-        text("SELECT COALESCE(SUM(profit_loss), 0) as total_pl, COUNT(*) as total_bets FROM prediction_results")
-    )).fetchone()
-    if roi_row and roi_row.total_bets > 0:
-        roi = round((roi_row.total_pl / roi_row.total_bets) * 100, 1)
-
-    # Top picks
+    # Top picks (upcoming, highest probability)
     top_rows = (await db.execute(text(f"""
         SELECT
             p.id, s.code as sport,
@@ -205,9 +183,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
-        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
-        WHERE pr.id IS NULL
-          AND COALESCE(ug.scheduled_at, g.scheduled_at) >= NOW() - INTERVAL '2 hours'
+        WHERE COALESCE(ug.scheduled_at, g.scheduled_at) >= NOW() - INTERVAL '2 hours'
         ORDER BY p.probability DESC
         LIMIT 6
     """))).fetchall()
@@ -232,83 +208,17 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "time": row.game_time.strftime("%-I:%M %p") if row.game_time else "",
         })
 
-    # Recent graded activity
-    recent_rows = (await db.execute(text(f"""
-        SELECT
-            s.code as sport,
-            {TEAM_NAMES}
-            p.bet_type, p.predicted_side, p.line_at_prediction,
-            pr.actual_result, pr.profit_loss, pr.graded_at
-        FROM prediction_results pr
-        JOIN predictions p ON pr.prediction_id = p.id
-        {GAME_JOIN}
-        {TEAM_JOIN_LEGACY}
-        ORDER BY pr.graded_at DESC LIMIT 5
-    """))).fetchall()
-
-    recent_activity = []
-    for row in recent_rows:
-        side = row.predicted_side or ""
-        line = row.line_at_prediction
-        team = row.home_team if side == "home" else row.away_team
-        r = str(row.actual_result).upper() if row.actual_result else "PENDING"
-        pl = row.profit_loss or 0
-        if row.bet_type == "spread" and line:
-            desc = f"{team} {'+' if line > 0 else ''}{line}"
-        elif row.bet_type == "total" and line:
-            desc = f"{'Over' if side == 'over' else 'Under'} {line}"
-        else:
-            desc = f"{team} ML"
-        diff = datetime.utcnow() - row.graded_at if row.graded_at else None
-        if diff:
-            secs = diff.total_seconds()
-            t = f"{int(secs/60)}m ago" if secs < 3600 else (
-                f"{int(secs/3600)}h ago" if secs < 86400 else f"{int(secs/86400)}d ago"
-            )
-        else:
-            t = ""
-        icon = "win" if r == "WIN" else ("loss" if r == "LOSS" else "pending")
-        recent_activity.append({
-            "icon": icon,
-            "text": f"{desc} {r} ({'+' if pl >= 0 else ''}{pl:.1f} units)",
-            "time": t,
-        })
-
-    # Best performers by tier
-    bp_rows = (await db.execute(text("""
-        SELECT CAST(p.signal_tier AS TEXT) as tier,
-            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
-            COUNT(*) as total,
-            ROUND(AVG(pr.profit_loss)::numeric, 2) as avg_pl
-        FROM predictions p JOIN prediction_results pr ON pr.prediction_id = p.id
-        GROUP BY p.signal_tier ORDER BY tier
-    """))).fetchall()
-
-    best_performers = []
-    areas_to_monitor = []
-    for row in bp_rows:
-        wr = round(row.wins / row.total * 100, 1) if row.total > 0 else 0
-        item = {
-            "label": f"Tier {row.tier} Predictions",
-            "value": f"{wr}% Win Rate",
-            "color": "success" if wr >= 55 else ("warning" if wr >= 50 else "error"),
-        }
-        if wr >= 55:
-            best_performers.append(item)
-        else:
-            areas_to_monitor.append(item)
-
     return DashboardStats(
         total_predictions=total_predictions,
         tier_a_count=tier_a_count,
         pending_count=pending_count,
-        graded_today=graded_today,
-        win_rate=win_rate,
-        roi=roi,
+        graded_today=0,
+        win_rate=0.0,
+        roi=0.0,
         top_picks=top_picks,
-        recent_activity=recent_activity,
-        best_performers=best_performers,
-        areas_to_monitor=areas_to_monitor,
+        recent_activity=[],
+        best_performers=[],
+        areas_to_monitor=[],
     )
 
 

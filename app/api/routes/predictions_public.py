@@ -1,7 +1,7 @@
 """
 ROYALEY - Public Predictions API
 No authentication required - read-only access for frontend dashboard.
-Supports both legacy (game_id -> games) and live pipeline (upcoming_game_id -> upcoming_games).
+Returns opening snapshot (from predictions table) + current consensus (from upcoming_odds).
 """
 from datetime import datetime, date
 from typing import Optional, List
@@ -33,6 +33,26 @@ class PublicPrediction(BaseModel):
     result: Optional[str] = "pending"
     clv: Optional[float] = None
     profit_loss: Optional[float] = None
+    # Opening snapshot (both sides, captured at prediction time)
+    home_line_open: Optional[float] = None
+    away_line_open: Optional[float] = None
+    home_odds_open: Optional[int] = None
+    away_odds_open: Optional[int] = None
+    total_open: Optional[float] = None
+    over_odds_open: Optional[int] = None
+    under_odds_open: Optional[int] = None
+    home_ml_open: Optional[int] = None
+    away_ml_open: Optional[int] = None
+    # Current consensus (latest from upcoming_odds, Pinnacle preferred)
+    current_home_line: Optional[float] = None
+    current_away_line: Optional[float] = None
+    current_home_odds: Optional[int] = None
+    current_away_odds: Optional[int] = None
+    current_total: Optional[float] = None
+    current_over_odds: Optional[int] = None
+    current_under_odds: Optional[int] = None
+    current_home_ml: Optional[int] = None
+    current_away_ml: Optional[int] = None
 
 class PublicPredictionsResponse(BaseModel):
     predictions: List[PublicPrediction]
@@ -72,6 +92,72 @@ TEAM_JOIN_LEGACY = """
 
 GAME_TIME = "COALESCE(ug.scheduled_at, g.scheduled_at) as game_time"
 
+# CTE for current consensus odds (Pinnacle preferred, fallback to average)
+CURRENT_ODDS_CTE = """
+WITH current_odds AS (
+    SELECT 
+        upcoming_game_id,
+        bet_type,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN home_line END),
+            AVG(home_line)
+        ) as curr_home_line,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN away_line END),
+            AVG(away_line)
+        ) as curr_away_line,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN home_odds END),
+            AVG(home_odds)
+        ) as curr_home_odds,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN away_odds END),
+            AVG(away_odds)
+        ) as curr_away_odds,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN total END),
+            AVG(total)
+        ) as curr_total,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN over_odds END),
+            AVG(over_odds)
+        ) as curr_over_odds,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN under_odds END),
+            AVG(under_odds)
+        ) as curr_under_odds,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN home_ml END),
+            AVG(home_ml)
+        ) as curr_home_ml,
+        COALESCE(
+            MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN away_ml END),
+            AVG(away_ml)
+        ) as curr_away_ml
+    FROM upcoming_odds
+    GROUP BY upcoming_game_id, bet_type
+)
+"""
+
+
+def _safe_int(val):
+    """Safely convert to int, handling None and float."""
+    if val is None:
+        return None
+    try:
+        return int(round(float(val)))
+    except (ValueError, TypeError):
+        return None
+
+def _safe_float(val):
+    """Safely convert to float, handling None."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
 
 @router.get("/predictions", response_model=PublicPredictionsResponse)
 async def get_public_predictions(
@@ -108,6 +194,7 @@ async def get_public_predictions(
     offset = (page - 1) * per_page
     data_params = {**params, "lim": per_page, "off": offset}
     result = await db.execute(text(f"""
+        {CURRENT_ODDS_CTE}
         SELECT
             p.id,
             COALESCE(p.upcoming_game_id, p.game_id) as game_id,
@@ -117,10 +204,23 @@ async def get_public_predictions(
             p.bet_type, p.predicted_side, p.probability, p.edge,
             CAST(p.signal_tier AS TEXT) as signal_tier,
             p.line_at_prediction, p.odds_at_prediction,
-            p.kelly_fraction, p.prediction_hash, p.created_at
+            p.kelly_fraction, p.prediction_hash, p.created_at,
+            -- Opening snapshot (from predictions table)
+            p.home_line_open, p.away_line_open,
+            p.home_odds_open, p.away_odds_open,
+            p.total_open, p.over_odds_open, p.under_odds_open,
+            p.home_ml_open, p.away_ml_open,
+            -- Current consensus (from upcoming_odds CTE)
+            co.curr_home_line, co.curr_away_line,
+            co.curr_home_odds, co.curr_away_odds,
+            co.curr_total, co.curr_over_odds, co.curr_under_odds,
+            co.curr_home_ml, co.curr_away_ml
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
+        LEFT JOIN current_odds co 
+            ON co.upcoming_game_id = p.upcoming_game_id 
+            AND co.bet_type = p.bet_type
         WHERE (p.upcoming_game_id IS NOT NULL OR p.game_id IS NOT NULL)
         {where_sql}
         ORDER BY game_time DESC, p.created_at DESC
@@ -139,16 +239,36 @@ async def get_public_predictions(
             bet_type=row.bet_type,
             predicted_side=row.predicted_side,
             probability=float(row.probability),
-            edge=float(row.edge) if row.edge is not None else None,
+            edge=_safe_float(row.edge),
             signal_tier=row.signal_tier,
-            line_at_prediction=float(row.line_at_prediction) if row.line_at_prediction is not None else None,
-            odds_at_prediction=int(row.odds_at_prediction) if row.odds_at_prediction is not None else None,
-            kelly_fraction=float(row.kelly_fraction) if row.kelly_fraction is not None else None,
+            line_at_prediction=_safe_float(row.line_at_prediction),
+            odds_at_prediction=_safe_int(row.odds_at_prediction),
+            kelly_fraction=_safe_float(row.kelly_fraction),
             prediction_hash=row.prediction_hash,
             created_at=row.created_at.isoformat() if row.created_at else None,
             result="pending",
             clv=None,
             profit_loss=None,
+            # Opening snapshot
+            home_line_open=_safe_float(row.home_line_open),
+            away_line_open=_safe_float(row.away_line_open),
+            home_odds_open=_safe_int(row.home_odds_open),
+            away_odds_open=_safe_int(row.away_odds_open),
+            total_open=_safe_float(row.total_open),
+            over_odds_open=_safe_int(row.over_odds_open),
+            under_odds_open=_safe_int(row.under_odds_open),
+            home_ml_open=_safe_int(row.home_ml_open),
+            away_ml_open=_safe_int(row.away_ml_open),
+            # Current consensus
+            current_home_line=_safe_float(row.curr_home_line),
+            current_away_line=_safe_float(row.curr_away_line),
+            current_home_odds=_safe_int(row.curr_home_odds),
+            current_away_odds=_safe_int(row.curr_away_odds),
+            current_total=_safe_float(row.curr_total),
+            current_over_odds=_safe_int(row.curr_over_odds),
+            current_under_odds=_safe_int(row.curr_under_odds),
+            current_home_ml=_safe_int(row.curr_home_ml),
+            current_away_ml=_safe_int(row.curr_away_ml),
         ))
 
     return PublicPredictionsResponse(

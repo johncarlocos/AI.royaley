@@ -1,4 +1,4 @@
-// src/pages/Predictions/Predictions.tsx - Original design with real computed data
+// src/pages/Predictions/Predictions.tsx - Original design with real opening/current line data
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableContainer,
@@ -29,13 +29,16 @@ interface FlatRow {
   home_record: string;
   bet_type: string;
   bet_type_label: string;
+  // Opening line (snapshot at prediction time) - "Circa O" + "System O"
   away_circa_open: number | string;
-  away_circa_current: number | string;
-  away_system_open: number | string;
-  away_system_current: number | string;
   home_circa_open: number | string;
+  // Current line (latest from market) - "Circa." + "System."
+  away_circa_current: number | string;
   home_circa_current: number | string;
+  // System columns (will differ from Circa when ML model generates own lines)
+  away_system_open: number | string;
   home_system_open: number | string;
+  away_system_current: number | string;
   home_system_current: number | string;
   system_pick: string;
   pick_team: 'away' | 'home' | null;
@@ -152,49 +155,36 @@ const PerformanceTable: React.FC<{ data: PerformanceRow[]; isDark: boolean }> = 
 };
 
 // Build PerformanceRow from actual prediction rows
-const buildPerf = (rows: FlatRow[], keyFn: (r: FlatRow) => string, labelFn?: (key: string) => string, sortOrder?: string[]): PerformanceRow[] => {
+const buildPerf = (rows: FlatRow[], keyFn: (r: FlatRow) => string, labelFn?: (key: string) => string, order?: string[]): PerformanceRow[] => {
   const groups: Record<string, FlatRow[]> = {};
-  rows.forEach(r => {
-    const key = keyFn(r);
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(r);
-  });
+  rows.forEach(r => { const k = keyFn(r); if (!groups[k]) groups[k] = []; groups[k].push(r); });
   const result = Object.entries(groups).map(([key, items]) => {
-    const wins = items.filter(r => r.result === 'won').length;
-    const losses = items.filter(r => r.result === 'lost').length;
-    const pushes = items.filter(r => r.result === 'push').length;
-    const graded = wins + losses;
-    const avgEdge = items.reduce((s, r) => s + r.edge, 0) / items.length;
-    const gradedWithClv = items.filter(r => r.clv != null);
-    const avgClv = gradedWithClv.length > 0 ? gradedWithClv.reduce((s, r) => s + (r.clv || 0), 0) / gradedWithClv.length : 0;
+    const w = items.filter(r => r.result === 'won').length;
+    const l = items.filter(r => r.result === 'lost').length;
+    const p = items.filter(r => r.result === 'push').length;
+    const g = w + l;
+    const withClv = items.filter(r => r.clv != null);
     return {
       label: labelFn ? labelFn(key) : key,
-      wins,
-      losses,
-      pushes,
-      winPct: graded > 0 ? (wins / graded) * 100 : 0,
-      edge: avgEdge,
-      clv: avgClv,
-      roi: 0, // Will be computed when grading is implemented
+      wins: w, losses: l, pushes: p,
+      winPct: g > 0 ? (w / g) * 100 : 0,
+      edge: items.reduce((s, r) => s + r.edge, 0) / items.length,
+      clv: withClv.length > 0 ? withClv.reduce((s, r) => s + (r.clv || 0), 0) / withClv.length : 0,
+      roi: 0,
       _key: key,
     };
   });
-  if (sortOrder) {
-    result.sort((a, b) => {
-      const ai = sortOrder.indexOf((a as any)._key);
-      const bi = sortOrder.indexOf((b as any)._key);
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    });
-  } else {
-    result.sort((a, b) => (b.wins + b.losses + b.pushes) - (a.wins + a.losses + a.pushes));
-  }
+  if (order) result.sort((a, b) => {
+    const ai = order.indexOf((a as any)._key); const bi = order.indexOf((b as any)._key);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+  else result.sort((a, b) => (b.wins + b.losses + b.pushes) - (a.wins + a.losses + a.pushes));
   return result;
 };
 
 const Predictions: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  
   const [rows, setRows] = useState<FlatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
@@ -204,10 +194,9 @@ const Predictions: React.FC = () => {
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [reasonDialog, setReasonDialog] = useState<{ open: boolean; row: FlatRow | null }>({ open: false, row: null });
-
   const { selectedSport, setSelectedSport, selectedTier, setSelectedTier } = useFilterStore();
 
-  // Summary stats (computed from real data)
+  // Summary stats computed from real data
   const graded = rows.filter(r => r.result !== 'pending');
   const wins = rows.filter(r => r.result === 'won').length;
   const losses = rows.filter(r => r.result === 'lost').length;
@@ -215,116 +204,70 @@ const Predictions: React.FC = () => {
   const pending = rows.filter(r => r.result === 'pending').length;
   const summaryStats = {
     totalPredictions: rows.length,
-    totalWins: wins,
-    totalLosses: losses,
-    totalPushes: pushes,
+    totalWins: wins, totalLosses: losses, totalPushes: pushes,
     winRate: graded.length > 0 ? Math.round(wins / graded.length * 1000) / 10 : 0,
     avgEdge: rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.edge, 0) / rows.length * 10) / 10 : 0,
-    avgCLV: 0,
-    roi: 0,
-    bankrollGrowth: 0
+    avgCLV: 0, roi: 0, bankrollGrowth: 0,
   };
 
-  // Performance data computed from real rows
-  const tierPerformance = useMemo(() =>
-    buildPerf(rows, r => r.signal_tier, key => {
-      const labels: Record<string, string> = { A: 'Tier A (65%+)', B: 'Tier B (60-65%)', C: 'Tier C (55-60%)', D: 'Tier D (<55%)' };
-      return labels[key] || `Tier ${key}`;
-    }, ['A', 'B', 'C', 'D']), [rows]);
+  // Performance data computed from actual rows
+  const tierPerf = useMemo(() => buildPerf(rows, r => r.signal_tier,
+    k => ({ A: 'Tier A (65%+)', B: 'Tier B (60-65%)', C: 'Tier C (55-60%)', D: 'Tier D (<55%)' }[k] || `Tier ${k}`),
+    ['A', 'B', 'C', 'D']), [rows]);
+  const sportPerf = useMemo(() => buildPerf(rows, r => r.sport), [rows]);
+  const periodPerf = useMemo(() => buildPerf(rows, () => 'Full Game'), [rows]);
+  const betTypePerf = useMemo(() => buildPerf(rows, r => r.bet_type,
+    k => ({ spread: 'Spreads', total: 'Totals', moneyline: 'Moneyline' }[k] || k)), [rows]);
+  const combinedPerf = useMemo(() => buildPerf(rows, r => {
+    const bt = r.bet_type === 'spread' ? 'Spread' : r.bet_type === 'total' ? 'Total' : 'ML';
+    return `FG ${bt}`;
+  }), [rows]);
 
-  const sportPerformance = useMemo(() =>
-    buildPerf(rows, r => r.sport), [rows]);
-
-  const periodPerformance = useMemo(() =>
-    buildPerf(rows, () => 'Full Game'), [rows]);
-
-  const betTypePerformance = useMemo(() =>
-    buildPerf(rows, r => r.bet_type, key => {
-      const labels: Record<string, string> = { spread: 'Spreads', total: 'Totals', moneyline: 'Moneyline' };
-      return labels[key] || key;
-    }), [rows]);
-
-  const combinedPerformance = useMemo(() =>
-    buildPerf(rows, r => {
-      const btLabel = r.bet_type === 'spread' ? 'Spread' : r.bet_type === 'total' ? 'Total' : 'ML';
-      return `FG ${btLabel}`;
-    }), [rows]);
-
-  const getPerformanceData = () => {
-    switch (perfTab) {
-      case 0: return tierPerformance;
-      case 1: return sportPerformance;
-      case 2: return periodPerformance;
-      case 3: return betTypePerformance;
-      case 4: return combinedPerformance;
-      default: return tierPerformance;
-    }
-  };
+  const getPerfData = () => [tierPerf, sportPerf, periodPerf, betTypePerf, combinedPerf][perfTab] || tierPerf;
 
   const loadPredictions = async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
       const data = await api.getPublicPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined, per_page: 200 });
-      const preds = data?.predictions || (Array.isArray(data) ? data : []);
-      setRows(transformToFlatRows(preds));
-    } catch (err) {
-      console.error('Load predictions error:', err);
-      setRows([]);
-    }
+      setRows(transformToFlatRows(data?.predictions || (Array.isArray(data) ? data : [])));
+    } catch (err) { console.error('Load predictions error:', err); setRows([]); }
     if (showLoading) setLoading(false);
   };
 
   useEffect(() => { loadPredictions(); }, [selectedSport]);
-  // Auto-refresh every 60 seconds
   useEffect(() => { const iv = setInterval(() => loadPredictions(false), 60000); return () => clearInterval(iv); }, [selectedSport]);
 
   const filteredAndSorted = useMemo(() => {
-    let filtered = [...rows];
-    if (tab === 1) filtered = filtered.filter(r => r.result === 'pending');
-    else if (tab === 2) filtered = filtered.filter(r => r.result !== 'pending');
-    if (selectedTier !== 'all') filtered = filtered.filter(r => r.signal_tier === selectedTier);
-
+    let f = [...rows];
+    if (tab === 1) f = f.filter(r => r.result === 'pending');
+    else if (tab === 2) f = f.filter(r => r.result !== 'pending');
+    if (selectedTier !== 'all') f = f.filter(r => r.signal_tier === selectedTier);
     if (sortField) {
-      const multiplier = sortOrder === 'asc' ? 1 : -1;
-      filtered.sort((a, b) => {
+      const m = sortOrder === 'asc' ? 1 : -1;
+      f.sort((a, b) => {
         switch (sortField) {
-          case 'sport': return multiplier * a.sport.localeCompare(b.sport);
-          case 'datetime': return multiplier * (a.datetime.getTime() - b.datetime.getTime());
-          case 'probability': return multiplier * (a.probability - b.probability);
-          case 'edge': return multiplier * (a.edge - b.edge);
-          case 'clv': return multiplier * ((b.clv || 0) - (a.clv || 0));
-          case 'tier': return multiplier * a.signal_tier.localeCompare(b.signal_tier);
+          case 'sport': return m * a.sport.localeCompare(b.sport);
+          case 'datetime': return m * (a.datetime.getTime() - b.datetime.getTime());
+          case 'probability': return m * (a.probability - b.probability);
+          case 'edge': return m * (a.edge - b.edge);
+          case 'clv': return m * ((b.clv || 0) - (a.clv || 0));
+          case 'tier': return m * a.signal_tier.localeCompare(b.signal_tier);
           default: return 0;
         }
       });
     }
-    return filtered;
+    return f;
   }, [rows, tab, selectedTier, sortField, sortOrder]);
 
   const totalRows = filteredAndSorted.length;
-  const paginated = useMemo(() => {
-    if (rowsPerPage === -1) return filteredAndSorted;
-    return filteredAndSorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
-  }, [filteredAndSorted, page, rowsPerPage]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('desc');
-    }
-  };
-
-  const handleResetSort = () => {
-    setSortField(null);
-    setSortOrder('asc');
-  };
+  const paginated = useMemo(() => rowsPerPage === -1 ? filteredAndSorted : filteredAndSorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filteredAndSorted, page, rowsPerPage]);
+  const handleSort = (field: SortField) => { if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortField(field); setSortOrder('desc'); } };
+  const handleResetSort = () => { setSortField(null); setSortOrder('asc'); };
 
   const formatLine = (value: number | string | undefined | null) => {
-    if (value == null || value === '') return '-';
+    if (value == null || value === '' || value === '-') return '-';
     const num = typeof value === 'string' ? parseFloat(value) : value;
-    if (isNaN(num)) return value;
+    if (isNaN(num)) return String(value);
     return num > 0 ? `+${num}` : `${num}`;
   };
 
@@ -337,7 +280,6 @@ const Predictions: React.FC = () => {
     }
   };
 
-  // Uniform styles - no borders between rows
   const hdr = { fontWeight: 600, fontSize: 11, py: 0.75, bgcolor: isDark ? 'grey.900' : 'grey.100', color: isDark ? 'grey.100' : 'grey.800', whiteSpace: 'nowrap', borderBottom: 1, borderColor: 'divider' };
   const gameCount = useMemo(() => new Set(rows.map(r => r.game_id)).size, [rows]);
 
@@ -380,7 +322,7 @@ const Predictions: React.FC = () => {
           </Tabs>
         </Box>
         <CardContent sx={{ py: 1, px: 1.5, '&:last-child': { pb: 1 } }}>
-          <PerformanceTable data={getPerformanceData()} isDark={isDark} />
+          <PerformanceTable data={getPerfData()} isDark={isDark} />
         </CardContent>
       </Card>
 
@@ -437,17 +379,12 @@ const Predictions: React.FC = () => {
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'tier'} direction={sortField === 'tier' ? sortOrder : 'asc'} onClick={() => handleSort('tier')}>Tier</TableSortLabel></TableCell>
                 <TableCell sx={hdr}>W/L</TableCell>
                 <TableCell sx={hdr}>
-                  <Tooltip title="Reset Sort">
-                    <IconButton size="small" onClick={handleResetSort} sx={{ p: 0.25 }}>
-                      <RestartAlt sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </Tooltip>
+                  <Tooltip title="Reset Sort"><IconButton size="small" onClick={handleResetSort} sx={{ p: 0.25 }}><RestartAlt sx={{ fontSize: 14 }} /></IconButton></Tooltip>
                 </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {paginated.map((row, idx) => {
-                return (
+              {paginated.map((row) => (
                 <React.Fragment key={row.id}>
                   {/* Away Row */}
                   <TableRow>
@@ -480,28 +417,16 @@ const Predictions: React.FC = () => {
                     <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'info.main', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_system_current)}</TableCell>
                   </TableRow>
                 </React.Fragment>
-                );
-              })}
+              ))}
               {paginated.length === 0 && !loading && (
-                <TableRow>
-                  <TableCell colSpan={17} align="center" sx={{ py: 4 }}>
-                    <Typography color="text.secondary">No predictions found</Typography>
-                  </TableCell>
-                </TableRow>
+                <TableRow><TableCell colSpan={17} align="center" sx={{ py: 4 }}><Typography color="text.secondary">No predictions found</Typography></TableCell></TableRow>
               )}
             </TableBody>
           </Table>
         </TableContainer>
-        <TablePagination
-          component="div"
-          count={totalRows}
-          page={page}
-          onPageChange={(_, p) => setPage(p)}
-          rowsPerPage={rowsPerPage}
+        <TablePagination component="div" count={totalRows} page={page} onPageChange={(_, p) => setPage(p)} rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
-          rowsPerPageOptions={[50, 100, 200, 500, { value: -1, label: 'All' }]}
-          labelRowsPerPage="Rows per page:"
-        />
+          rowsPerPageOptions={[50, 100, 200, 500, { value: -1, label: 'All' }]} labelRowsPerPage="Rows per page:" />
       </Card>
 
       <Dialog open={reasonDialog.open} onClose={() => setReasonDialog({ open: false, row: null })} maxWidth="sm" fullWidth>
@@ -529,6 +454,9 @@ const Predictions: React.FC = () => {
   );
 };
 
+// =============================================================================
+// Transform API response → FlatRows with opening vs current line mapping
+// =============================================================================
 const transformToFlatRows = (data: any[]): FlatRow[] => {
   if (!data || data.length === 0) return [];
   return data.map((pred: any, idx: number) => {
@@ -536,10 +464,11 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
     const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
     const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
     const side = pred.predicted_side || '';
+    const bt = pred.bet_type || 'spread';
     const line = pred.line_at_prediction;
     const odds = pred.odds_at_prediction;
-    const bt = pred.bet_type || 'spread';
 
+    // Build pick string
     let pickStr = side;
     let pickTeam: 'away' | 'home' | null = null;
     if (bt === 'spread') {
@@ -561,34 +490,56 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
     else if (pred.result === 'push') result = 'push';
 
     const btLabel = bt === 'spread' ? 'Spread' : bt === 'total' ? 'Total' : bt === 'moneyline' ? 'ML' : bt;
-
-    // Build line columns: spread shows line/inverse, total shows line both sides, ML shows odds
-    let awayCirca: number | string = '-';
-    let homeCirca: number | string = '-';
-    if (bt === 'total' && line != null) {
-      awayCirca = line;
-      homeCirca = line;
-    } else if (bt === 'spread' && line != null) {
-      if (side === 'away') {
-        awayCirca = line;
-        homeCirca = line * -1;
-      } else if (side === 'home') {
-        homeCirca = line;
-        awayCirca = line * -1;
-      }
-    } else if (bt === 'moneyline' && odds != null) {
-      // Show American odds in the Circa columns for ML bets
-      if (side === 'home') {
-        homeCirca = odds;
-        awayCirca = '-';
-      } else if (side === 'away') {
-        awayCirca = odds;
-        homeCirca = '-';
-      }
-    }
-
     const prob = pred.probability || 0.5;
     const edge = pred.edge != null ? pred.edge : 0;
+
+    // ---- MAP LINE COLUMNS: Opening (Circa O) vs Current (Circa.) ----
+    // Circa O / System O = opening snapshot (from predictions table)
+    // Circa. / System. = current consensus (from upcoming_odds via API)
+    let awayOpen: number | string = '-';
+    let homeOpen: number | string = '-';
+    let awayCurrent: number | string = '-';
+    let homeCurrent: number | string = '-';
+
+    if (bt === 'spread') {
+      // Opening: from predictions snapshot columns
+      awayOpen = pred.away_line_open ?? '-';
+      homeOpen = pred.home_line_open ?? '-';
+      // Current: from upcoming_odds consensus
+      awayCurrent = pred.current_away_line ?? '-';
+      homeCurrent = pred.current_home_line ?? '-';
+      // Fallback: if opening snapshot missing, derive from line_at_prediction
+      if (awayOpen === '-' && line != null) {
+        if (side === 'away') { awayOpen = line; homeOpen = line * -1; }
+        else if (side === 'home') { homeOpen = line; awayOpen = line * -1; }
+      }
+      // Fallback: if current missing, use opening
+      if (awayCurrent === '-') awayCurrent = awayOpen;
+      if (homeCurrent === '-') homeCurrent = homeOpen;
+    } else if (bt === 'total') {
+      // Opening
+      awayOpen = pred.total_open ?? line ?? '-';
+      homeOpen = awayOpen;
+      // Current
+      awayCurrent = pred.current_total ?? awayOpen;
+      homeCurrent = awayCurrent;
+    } else if (bt === 'moneyline') {
+      // Opening: ML odds for each side
+      awayOpen = pred.away_ml_open ?? '-';
+      homeOpen = pred.home_ml_open ?? '-';
+      // Current
+      awayCurrent = pred.current_away_ml ?? awayOpen;
+      homeCurrent = pred.current_home_ml ?? homeOpen;
+      // Fallback: if opening missing, use odds_at_prediction for predicted side
+      if (awayOpen === '-' && side === 'away' && odds != null) awayOpen = odds;
+      if (homeOpen === '-' && side === 'home' && odds != null) homeOpen = odds;
+    }
+
+    // System columns = same as Circa for now (until ML model generates own projected lines)
+    const awaySystemOpen = awayOpen;
+    const homeSystemOpen = homeOpen;
+    const awaySystemCurrent = awayCurrent;
+    const homeSystemCurrent = homeCurrent;
 
     return {
       id: pred.id || `pred_${idx}`,
@@ -605,22 +556,23 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
       home_record: '',
       bet_type: bt,
       bet_type_label: btLabel,
-      // All 4 line columns show same value for now (no open vs current distinction yet)
-      away_circa_open: awayCirca,
-      away_circa_current: awayCirca,
-      away_system_open: awayCirca,
-      away_system_current: awayCirca,
-      home_circa_open: homeCirca,
-      home_circa_current: homeCirca,
-      home_system_open: homeCirca,
-      home_system_current: homeCirca,
+      // Circa columns (market)
+      away_circa_open: awayOpen,
+      away_circa_current: awayCurrent,
+      home_circa_open: homeOpen,
+      home_circa_current: homeCurrent,
+      // System columns (model-projected, same as Circa for now)
+      away_system_open: awaySystemOpen,
+      away_system_current: awaySystemCurrent,
+      home_system_open: homeSystemOpen,
+      home_system_current: homeSystemCurrent,
       system_pick: pickStr,
       pick_team: pickTeam,
       probability: prob,
-      edge: edge,
+      edge,
       clv: pred.clv != null ? pred.clv : null,
       signal_tier: (pred.signal_tier || 'D') as 'A' | 'B' | 'C' | 'D',
-      result: result,
+      result,
       reason: `Model probability: ${Math.round(prob * 100)}% | Edge: ${edge.toFixed(1)}%`,
     };
   });

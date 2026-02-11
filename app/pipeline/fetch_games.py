@@ -454,6 +454,30 @@ async def generate_predictions_for_game(
                 else:
                     predictions_to_make.append(("away", away_prob_fair, None, away_ml))
         
+        # Build opening snapshot from consensus (both sides, for all 4 frontend columns)
+        open_home_line = None
+        open_away_line = None
+        open_home_odds = None
+        open_away_odds = None
+        open_total = None
+        open_over_odds = None
+        open_under_odds = None
+        open_home_ml = None
+        open_away_ml = None
+
+        if bet_type == "spread":
+            open_home_line = row.pin_home_line or row.avg_home_line
+            open_away_line = -open_home_line if open_home_line is not None else None
+            open_home_odds = int(row.pin_home_odds or row.avg_home_odds) if (row.pin_home_odds or row.avg_home_odds) else None
+            open_away_odds = int(row.pin_away_odds or row.avg_away_odds) if (row.pin_away_odds or row.avg_away_odds) else None
+        elif bet_type == "total":
+            open_total = row.pin_total or row.avg_total
+            open_over_odds = int(row.pin_over_odds or row.avg_over_odds) if (row.pin_over_odds or row.avg_over_odds) else None
+            open_under_odds = int(row.pin_under_odds or row.avg_under_odds) if (row.pin_under_odds or row.avg_under_odds) else None
+        elif bet_type == "moneyline":
+            open_home_ml = int(row.pin_home_ml or row.avg_home_ml) if (row.pin_home_ml or row.avg_home_ml) else None
+            open_away_ml = int(row.pin_away_ml or row.avg_away_ml) if (row.pin_away_ml or row.avg_away_ml) else None
+
         for predicted_side, probability, line_val, odds_val in predictions_to_make:
             # Calculate edge (model prob vs market implied, simplified for now)
             market_prob = probability  # Will be replaced with actual model output
@@ -487,11 +511,19 @@ async def generate_predictions_for_game(
                         INSERT INTO predictions 
                             (id, upcoming_game_id, bet_type, predicted_side, probability,
                              line_at_prediction, odds_at_prediction, edge, signal_tier,
-                             kelly_fraction, prediction_hash, created_at)
+                             kelly_fraction, prediction_hash,
+                             home_line_open, away_line_open, home_odds_open, away_odds_open,
+                             total_open, over_odds_open, under_odds_open,
+                             home_ml_open, away_ml_open,
+                             created_at)
                         VALUES 
                             (gen_random_uuid(), :game_id, :bet_type, :side, :prob,
                              :line, :odds, :edge, :tier,
-                             :kelly, :hash, NOW())
+                             :kelly, :hash,
+                             :home_line_open, :away_line_open, :home_odds_open, :away_odds_open,
+                             :total_open, :over_odds_open, :under_odds_open,
+                             :home_ml_open, :away_ml_open,
+                             NOW())
                     """),
                     {
                         "game_id": upcoming_game_id,
@@ -504,6 +536,15 @@ async def generate_predictions_for_game(
                         "tier": tier,
                         "kelly": round(kelly, 6),
                         "hash": pred_hash,
+                        "home_line_open": open_home_line,
+                        "away_line_open": open_away_line,
+                        "home_odds_open": open_home_odds,
+                        "away_odds_open": open_away_odds,
+                        "total_open": open_total,
+                        "over_odds_open": open_over_odds,
+                        "under_odds_open": open_under_odds,
+                        "home_ml_open": open_home_ml,
+                        "away_ml_open": open_away_ml,
                     },
                 )
                 count += 1

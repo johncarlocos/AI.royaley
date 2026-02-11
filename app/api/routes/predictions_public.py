@@ -1,6 +1,8 @@
 """
 ROYALEY - Public Predictions API
 No authentication required - read-only access for frontend dashboard.
+
+Reads from: upcoming_games, upcoming_odds, predictions (with upcoming_game_id)
 """
 from datetime import datetime, date
 from typing import Optional, List
@@ -51,6 +53,7 @@ class DashboardStats(BaseModel):
     best_performers: list = []
     areas_to_monitor: list = []
 
+
 @router.get("/predictions", response_model=PublicPredictionsResponse)
 async def get_public_predictions(
     sport: Optional[str] = Query(None),
@@ -60,6 +63,11 @@ async def get_public_predictions(
     per_page: int = Query(100, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Get predictions from the live pipeline.
+    Queries upcoming_games (not training games table).
+    Falls back to legacy games table if upcoming_game_id is null.
+    """
     where_clauses = []
     params = {}
     if sport:
@@ -73,22 +81,43 @@ async def get_public_predictions(
         params["signal_tier"] = signal_tier.upper()
     where_sql = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    count_result = await db.execute(text(f"SELECT COUNT(*) FROM predictions p JOIN games g ON p.game_id = g.id JOIN sports s ON g.sport_id = s.id WHERE 1=1 {where_sql}"), params)
+    count_result = await db.execute(text(f"""
+        SELECT COUNT(*) FROM predictions p
+        LEFT JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+        LEFT JOIN games g ON p.game_id = g.id
+        JOIN sports s ON COALESCE(ug.sport_id, g.sport_id) = s.id
+        WHERE 1=1 {where_sql}
+    """), params)
     total = count_result.scalar() or 0
+
     offset = (page - 1) * per_page
     data_params = {**params, "lim": per_page, "off": offset}
+
     result = await db.execute(text(f"""
-        SELECT p.id, p.game_id, s.code as sport_code, ht.name as home_team, at2.name as away_team,
-            g.scheduled_at as game_time, p.bet_type, p.predicted_side, p.probability, p.edge,
-            CAST(p.signal_tier AS TEXT) as signal_tier, p.line_at_prediction, p.odds_at_prediction,
+        SELECT 
+            p.id, 
+            COALESCE(p.upcoming_game_id, p.game_id) as game_id,
+            s.code as sport_code, 
+            COALESCE(ug.home_team_name, ht.name) as home_team, 
+            COALESCE(ug.away_team_name, at2.name) as away_team,
+            COALESCE(ug.scheduled_at, g.scheduled_at) as game_time, 
+            p.bet_type, p.predicted_side, p.probability, p.edge,
+            CAST(p.signal_tier AS TEXT) as signal_tier, 
+            p.line_at_prediction, p.odds_at_prediction,
             p.kelly_fraction, p.prediction_hash, p.created_at,
             pr.actual_result as result, pr.clv, pr.profit_loss
-        FROM predictions p JOIN games g ON p.game_id = g.id JOIN sports s ON g.sport_id = s.id
-        JOIN teams ht ON g.home_team_id = ht.id JOIN teams at2 ON g.away_team_id = at2.id
+        FROM predictions p
+        LEFT JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+        LEFT JOIN games g ON p.game_id = g.id
+        JOIN sports s ON COALESCE(ug.sport_id, g.sport_id) = s.id
+        LEFT JOIN teams ht ON COALESCE(ug.home_team_id, g.home_team_id) = ht.id 
+        LEFT JOIN teams at2 ON COALESCE(ug.away_team_id, g.away_team_id) = at2.id
         LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
         WHERE 1=1 {where_sql}
-        ORDER BY g.scheduled_at DESC, p.created_at DESC LIMIT :lim OFFSET :off
+        ORDER BY COALESCE(ug.scheduled_at, g.scheduled_at) DESC, p.created_at DESC 
+        LIMIT :lim OFFSET :off
     """), data_params)
+
     predictions = []
     for row in result.fetchall():
         predictions.append(PublicPrediction(
@@ -110,6 +139,7 @@ async def get_public_predictions(
         ))
     return PublicPredictionsResponse(predictions=predictions, total=total, page=page, per_page=per_page)
 
+
 @router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     today = date.today()
@@ -128,17 +158,26 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     if roi_row and roi_row.total_bets > 0:
         roi = round((roi_row.total_pl / roi_row.total_bets) * 100, 1)
 
-    # Top picks (upcoming, highest edge)
+    # Top picks from upcoming games
     top_rows = (await db.execute(text("""
-        SELECT p.id, s.code as sport, ht.name as home_team, at2.name as away_team,
+        SELECT p.id, s.code as sport, 
+            COALESCE(ug.home_team_name, ht.name) as home_team,
+            COALESCE(ug.away_team_name, at2.name) as away_team,
             p.bet_type, p.predicted_side, p.probability, p.edge,
-            CAST(p.signal_tier AS TEXT) as signal_tier, p.line_at_prediction, g.scheduled_at as game_time
-        FROM predictions p JOIN games g ON p.game_id = g.id JOIN sports s ON g.sport_id = s.id
-        JOIN teams ht ON g.home_team_id = ht.id JOIN teams at2 ON g.away_team_id = at2.id
+            CAST(p.signal_tier AS TEXT) as signal_tier, p.line_at_prediction, 
+            COALESCE(ug.scheduled_at, g.scheduled_at) as game_time
+        FROM predictions p 
+        LEFT JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+        LEFT JOIN games g ON p.game_id = g.id
+        JOIN sports s ON COALESCE(ug.sport_id, g.sport_id) = s.id
+        LEFT JOIN teams ht ON COALESCE(ug.home_team_id, g.home_team_id) = ht.id
+        LEFT JOIN teams at2 ON COALESCE(ug.away_team_id, g.away_team_id) = at2.id
         LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
-        WHERE pr.id IS NULL AND g.scheduled_at >= NOW() - INTERVAL '2 hours'
+        WHERE pr.id IS NULL 
+        AND COALESCE(ug.scheduled_at, g.scheduled_at) >= NOW() - INTERVAL '2 hours'
         ORDER BY p.edge DESC NULLS LAST, p.probability DESC LIMIT 6
     """))).fetchall()
+
     top_picks = []
     for row in top_rows:
         side, line = row.predicted_side or "", row.line_at_prediction
@@ -152,15 +191,21 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         top_picks.append({"sport": row.sport, "game": f"{row.away_team} vs {row.home_team}", "pick": pick_str,
             "tier": row.signal_tier or "D", "time": row.game_time.strftime("%-I:%M %p") if row.game_time else ""})
 
-    # Recent graded activity
+    # Recent graded
     recent_rows = (await db.execute(text("""
-        SELECT s.code as sport, ht.name as home_team, at2.name as away_team,
+        SELECT s.code as sport, 
+            COALESCE(ug.home_team_name, ht.name) as home_team,
+            COALESCE(ug.away_team_name, at2.name) as away_team,
             p.bet_type, p.predicted_side, p.line_at_prediction, pr.actual_result, pr.profit_loss, pr.graded_at
         FROM prediction_results pr JOIN predictions p ON pr.prediction_id = p.id
-        JOIN games g ON p.game_id = g.id JOIN sports s ON g.sport_id = s.id
-        JOIN teams ht ON g.home_team_id = ht.id JOIN teams at2 ON g.away_team_id = at2.id
+        LEFT JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+        LEFT JOIN games g ON p.game_id = g.id
+        JOIN sports s ON COALESCE(ug.sport_id, g.sport_id) = s.id
+        LEFT JOIN teams ht ON COALESCE(ug.home_team_id, g.home_team_id) = ht.id
+        LEFT JOIN teams at2 ON COALESCE(ug.away_team_id, g.away_team_id) = at2.id
         ORDER BY pr.graded_at DESC LIMIT 5
     """))).fetchall()
+
     recent_activity = []
     for row in recent_rows:
         side, line = row.predicted_side or "", row.line_at_prediction
@@ -173,15 +218,15 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         icon = "win" if r == "WIN" else ("loss" if r == "LOSS" else "pending")
         recent_activity.append({"icon": icon, "text": f"{desc} {r} ({'+' if pl >= 0 else ''}{pl:.1f} units)", "time": t})
 
-    # Best performers by tier (tier A win rate, etc.)
+    # Best performers by tier
     bp_rows = (await db.execute(text("""
         SELECT CAST(p.signal_tier AS TEXT) as tier,
-            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
-            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins, COUNT(*) as total,
             ROUND(AVG(pr.profit_loss)::numeric, 2) as avg_pl
         FROM predictions p JOIN prediction_results pr ON pr.prediction_id = p.id
         GROUP BY p.signal_tier ORDER BY tier
     """))).fetchall()
+
     best_performers = []
     areas_to_monitor = []
     for row in bp_rows:
@@ -198,3 +243,50 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         top_picks=top_picks, recent_activity=recent_activity,
         best_performers=best_performers, areas_to_monitor=areas_to_monitor,
     )
+
+
+@router.get("/upcoming")
+async def get_upcoming_games(
+    sport: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """List upcoming games with best available odds."""
+    where_clauses = []
+    params = {}
+    if sport:
+        where_clauses.append("s.code = :sport")
+        params["sport"] = sport.upper()
+    where_sql = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    result = await db.execute(text(f"""
+        SELECT 
+            ug.id, s.code as sport, ug.home_team_name, ug.away_team_name,
+            ug.scheduled_at, ug.status,
+            (SELECT o.home_line FROM upcoming_odds o WHERE o.upcoming_game_id = ug.id AND o.bet_type = 'spread' 
+             ORDER BY CASE WHEN o.sportsbook_key = 'pinnacle' THEN 0 ELSE 1 END LIMIT 1) as spread,
+            (SELECT o.total FROM upcoming_odds o WHERE o.upcoming_game_id = ug.id AND o.bet_type = 'total' 
+             ORDER BY CASE WHEN o.sportsbook_key = 'pinnacle' THEN 0 ELSE 1 END LIMIT 1) as total,
+            (SELECT o.home_ml FROM upcoming_odds o WHERE o.upcoming_game_id = ug.id AND o.bet_type = 'moneyline' 
+             ORDER BY CASE WHEN o.sportsbook_key = 'pinnacle' THEN 0 ELSE 1 END LIMIT 1) as home_ml,
+            (SELECT o.away_ml FROM upcoming_odds o WHERE o.upcoming_game_id = ug.id AND o.bet_type = 'moneyline' 
+             ORDER BY CASE WHEN o.sportsbook_key = 'pinnacle' THEN 0 ELSE 1 END LIMIT 1) as away_ml,
+            (SELECT COUNT(*) FROM predictions p WHERE p.upcoming_game_id = ug.id) as prediction_count,
+            (SELECT COUNT(DISTINCT sportsbook_key) FROM upcoming_odds WHERE upcoming_game_id = ug.id) as book_count
+        FROM upcoming_games ug
+        JOIN sports s ON ug.sport_id = s.id
+        WHERE ug.status = 'scheduled' AND ug.scheduled_at >= NOW() - INTERVAL '1 hour'
+        {where_sql}
+        ORDER BY ug.scheduled_at ASC LIMIT 200
+    """), params)
+
+    games = []
+    for row in result.fetchall():
+        games.append({
+            "id": str(row.id), "sport": row.sport,
+            "home_team": row.home_team_name, "away_team": row.away_team_name,
+            "game_time": row.scheduled_at.isoformat() if row.scheduled_at else None,
+            "status": row.status, "spread": row.spread, "total": row.total,
+            "home_ml": row.home_ml, "away_ml": row.away_ml,
+            "prediction_count": row.prediction_count, "book_count": row.book_count,
+        })
+    return {"games": games, "total": len(games)}

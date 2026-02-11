@@ -102,6 +102,12 @@ from app.models.master_data_models import (
     MLTrainingDataset,
 )
 
+# Import upcoming/live pipeline models (58-59)
+from app.models.upcoming_models import (
+    UpcomingGame,
+    UpcomingOdds,
+)
+
 __all__ = [
     # Base
     "Base",
@@ -194,4 +200,8 @@ __all__ = [
     "MasterOdds",
     "OddsMapping",
     "MLTrainingDataset",
+
+    # Live Pipeline Tables (58-59)
+    "UpcomingGame",
+    "UpcomingOdds",
 ]

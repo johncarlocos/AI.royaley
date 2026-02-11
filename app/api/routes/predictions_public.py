@@ -223,13 +223,20 @@ async def get_public_predictions(
             co.curr_home_line, co.curr_away_line,
             co.curr_home_odds, co.curr_away_odds,
             co.curr_total, co.curr_over_odds, co.curr_under_odds,
-            co.curr_home_ml, co.curr_away_ml
+            co.curr_home_ml, co.curr_away_ml,
+            -- Grading results (from prediction_results)
+            CAST(pr.actual_result AS TEXT) as actual_result,
+            pr.clv as result_clv,
+            pr.profit_loss,
+            pr.closing_line as result_closing_line,
+            pr.closing_odds as result_closing_odds
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
         LEFT JOIN current_odds co 
             ON co.upcoming_game_id = p.upcoming_game_id 
             AND co.bet_type = p.bet_type
+        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
         WHERE (p.upcoming_game_id IS NOT NULL OR p.game_id IS NOT NULL)
         {where_sql}
         ORDER BY game_time ASC, p.created_at DESC
@@ -255,9 +262,9 @@ async def get_public_predictions(
             kelly_fraction=_safe_float(row.kelly_fraction),
             prediction_hash=row.prediction_hash,
             created_at=row.created_at.isoformat() if row.created_at else None,
-            result="pending",
-            clv=None,
-            profit_loss=None,
+            result=row.actual_result if row.actual_result and row.actual_result != 'pending' else "pending",
+            clv=_safe_float(row.result_clv),
+            profit_loss=_safe_float(row.profit_loss),
             # Opening snapshot
             home_line_open=_snap_line(row.home_line_open),
             away_line_open=_snap_line(row.away_line_open),
@@ -298,7 +305,32 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     )).scalar() or 0
 
     # All predictions are pending until grading is implemented
-    pending_count = total_predictions
+    graded_count = (await db.execute(
+        text("SELECT COUNT(*) FROM prediction_results WHERE actual_result != 'pending'")
+    )).scalar() or 0
+    pending_count = total_predictions - graded_count
+
+    wins = (await db.execute(
+        text("SELECT COUNT(*) FROM prediction_results WHERE actual_result = 'win'")
+    )).scalar() or 0
+    losses = (await db.execute(
+        text("SELECT COUNT(*) FROM prediction_results WHERE actual_result = 'loss'")
+    )).scalar() or 0
+
+    win_rate = round(wins / (wins + losses) * 100, 1) if (wins + losses) > 0 else 0.0
+
+    graded_today = (await db.execute(
+        text("SELECT COUNT(*) FROM prediction_results WHERE actual_result != 'pending' AND graded_at::date = CURRENT_DATE")
+    )).scalar() or 0
+
+    avg_clv = (await db.execute(
+        text("SELECT AVG(clv) FROM prediction_results WHERE clv IS NOT NULL")
+    )).scalar()
+
+    total_pnl = (await db.execute(
+        text("SELECT SUM(profit_loss) FROM prediction_results WHERE profit_loss IS NOT NULL")
+    )).scalar()
+    roi = round((total_pnl or 0) / max(graded_count * 100, 1) * 100, 1) if graded_count > 0 else 0.0
 
     # Top picks (upcoming, highest probability)
     top_rows = (await db.execute(text(f"""
@@ -341,9 +373,9 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         total_predictions=total_predictions,
         tier_a_count=tier_a_count,
         pending_count=pending_count,
-        graded_today=0,
-        win_rate=0.0,
-        roi=0.0,
+        graded_today=graded_today,
+        win_rate=win_rate,
+        roi=roi,
         top_picks=top_picks,
         recent_activity=[],
         best_performers=[],

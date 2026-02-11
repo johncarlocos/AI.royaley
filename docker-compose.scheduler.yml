@@ -1,0 +1,42 @@
+# docker-compose.scheduler.yml
+# Add this to your existing docker-compose with:
+#   docker compose -f docker-compose.yml -f docker-compose.scheduler.yml up -d
+#
+# Or merge the 'scheduler' service block into your main docker-compose.yml
+
+services:
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: "false"
+        INSTALL_QUANTUM: "false"
+        INSTALL_GPU: "false"
+    container_name: royaley_scheduler
+    restart: unless-stopped
+    command: python -m app.pipeline.scheduler
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Royaley
+      - DATABASE_URL=postgresql+asyncpg://royaley:${POSTGRES_PASSWORD}@postgres:5432/royaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ODDS_API_KEY=${ODDS_API_KEY}
+    volumes:
+      - /nvme0n1-disk/royaley/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - royaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M

@@ -1,5 +1,5 @@
 // src/components/Dashboard/Dashboard.tsx - Dashboard (Performance moved to Predictions)
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Card, CardContent, Typography, Grid, Chip, useTheme, LinearProgress
 } from '@mui/material';
@@ -8,6 +8,7 @@ import {
   SportsTennis, CheckCircle, Schedule, EmojiEvents, Warning
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../../api/client';
 
 interface TodayPrediction {
   sport: string;
@@ -17,56 +18,100 @@ interface TodayPrediction {
   time: string;
 }
 
+const REFRESH_MS = 60000; // 1-minute auto-refresh
+
 const Dashboard: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    setTimeout(() => setLoading(false), 300);
+  // Live data state (replaces hardcoded arrays)
+  const [todayPredictions, setTodayPredictions] = useState<TodayPrediction[]>([]);
+  const [quickStats, setQuickStats] = useState([
+    { label: 'Today\'s Picks', value: '0', color: 'primary' },
+    { label: 'Tier A Picks', value: '0', color: 'success' },
+    { label: 'Pending', value: '0', color: 'warning' },
+    { label: 'Graded Today', value: '0', color: 'info' },
+  ]);
+  const [bestPerformers, setBestPerformers] = useState<Array<{ label: string; value: string; color: string }>>([]);
+  const [areasToMonitor, setAreasToMonitor] = useState<Array<{ label: string; value: string; color: string }>>([]);
+  const [recentActivity, setRecentActivity] = useState<Array<{ icon: React.ReactNode; text: string; time: string }>>([]);
+
+  const getActivityIcon = (iconType: string) => {
+    switch (iconType) {
+      case 'win': return <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />;
+      case 'loss': return <Warning sx={{ fontSize: 18, color: 'error.main' }} />;
+      default: return <Schedule sx={{ fontSize: 18, color: 'info.main' }} />;
+    }
+  };
+
+  const fetchDashboard = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const stats = await api.getDashboardStats();
+
+      // Quick stats
+      setQuickStats([
+        { label: 'Today\'s Picks', value: String(stats.total_predictions || 0), color: 'primary' },
+        { label: 'Tier A Picks', value: String(stats.tier_a_count || 0), color: 'success' },
+        { label: 'Pending', value: String(stats.pending_count || 0), color: 'warning' },
+        { label: 'Graded Today', value: String(stats.graded_today || 0), color: 'info' },
+      ]);
+
+      // Today's predictions (top picks)
+      setTodayPredictions(
+        (stats.top_picks || []).map((p: any) => ({
+          sport: p.sport || '',
+          game: p.game || '',
+          pick: p.pick || '',
+          tier: p.tier || 'D',
+          time: p.time || '',
+        }))
+      );
+
+      // Best performers
+      setBestPerformers(
+        (stats.best_performers || []).map((p: any) => ({
+          label: p.label || '',
+          value: p.value || '',
+          color: p.color || 'success',
+        }))
+      );
+
+      // Areas to monitor
+      setAreasToMonitor(
+        (stats.areas_to_monitor || []).map((p: any) => ({
+          label: p.label || '',
+          value: p.value || '',
+          color: p.color || 'warning',
+        }))
+      );
+
+      // Recent activity
+      setRecentActivity(
+        (stats.recent_activity || []).map((a: any) => ({
+          icon: getActivityIcon(a.icon || 'pending'),
+          text: a.text || '',
+          time: a.time || '',
+        }))
+      );
+    } catch (err) {
+      console.error('Dashboard fetch error:', err);
+    }
+    if (showLoading) setLoading(false);
   }, []);
 
-  // Today's predictions
-  const todayPredictions: TodayPrediction[] = [
-    { sport: 'NBA', game: 'Celtics vs Lakers', pick: 'Boston -6', tier: 'A', time: '5:00 PM' },
-    { sport: 'NBA', game: 'Warriors vs Suns', pick: 'Phoenix -4', tier: 'A', time: '7:30 PM' },
-    { sport: 'NFL', game: 'Chiefs vs Bills', pick: 'Bills -3.5', tier: 'A', time: '1:00 PM' },
-    { sport: 'NHL', game: 'Maple Leafs vs Bruins', pick: 'Under 6', tier: 'B', time: '7:00 PM' },
-  ];
+  // Initial load
+  useEffect(() => {
+    fetchDashboard(true);
+  }, [fetchDashboard]);
 
-  // Quick stats
-  const quickStats = [
-    { label: 'Today\'s Picks', value: '24', color: 'primary' },
-    { label: 'Tier A Picks', value: '6', color: 'success' },
-    { label: 'Pending', value: '18', color: 'warning' },
-    { label: 'Graded Today', value: '12', color: 'info' },
-  ];
-
-  // Best performers
-  const bestPerformers = [
-    { label: 'Tier A Predictions', value: '68.5% Win Rate', color: 'success' },
-    { label: 'CFL Games', value: '75.0% Win Rate', color: 'success' },
-    { label: 'NFL Full Game', value: '+9.8% ROI', color: 'success' },
-    { label: '2H Spreads', value: '60.3% Win Rate', color: 'success' },
-  ];
-
-  // Areas to monitor
-  const areasToMonitor = [
-    { label: 'Tier D Predictions', value: '51.1% Win Rate', color: 'warning' },
-    { label: '2H Totals', value: '55.6% Win Rate', color: 'warning' },
-    { label: 'Tier D ROI', value: '-1.8% ROI', color: 'error' },
-    { label: 'Tier D CLV', value: '-0.2% CLV', color: 'error' },
-  ];
-
-  // Recent activity
-  const recentActivity = [
-    { icon: <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />, text: 'Bills -3 WON (+2.1 units)', time: '2h ago' },
-    { icon: <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />, text: 'Lakers Under 224.5 WON (+1.8 units)', time: '3h ago' },
-    { icon: <Warning sx={{ fontSize: 18, color: 'error.main' }} />, text: 'Celtics -5.5 LOST (-1.0 units)', time: '4h ago' },
-    { icon: <Schedule sx={{ fontSize: 18, color: 'info.main' }} />, text: 'New Tier A: Warriors +3', time: '5h ago' },
-    { icon: <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />, text: 'Bruins ML WON (+1.5 units)', time: '6h ago' },
-  ];
+  // Auto-refresh every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => fetchDashboard(false), REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [fetchDashboard]);
 
   const getSportIcon = (sport: string) => {
     switch (sport) {
@@ -126,7 +171,7 @@ const Dashboard: React.FC = () => {
                 </Box>
                 <Chip label="View All" size="small" sx={{ fontSize: 11, height: 24, cursor: 'pointer' }} onClick={() => navigate('/predictions')} />
               </Box>
-              {todayPredictions.map((pred, idx) => (
+              {todayPredictions.length > 0 ? todayPredictions.map((pred, idx) => (
                 <Box key={idx} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.25, borderBottom: idx < todayPredictions.length - 1 ? 1 : 0, borderColor: 'divider' }}>
                   <Box display="flex" alignItems="center" gap={1.5}>
                     <Box sx={{ color: 'text.secondary' }}>{getSportIcon(pred.sport)}</Box>
@@ -140,7 +185,13 @@ const Dashboard: React.FC = () => {
                     <Chip label={pred.tier} size="small" color={getTierColor(pred.tier) as any} sx={{ fontSize: 11, height: 22, minWidth: 28, fontWeight: 700 }} />
                   </Box>
                 </Box>
-              ))}
+              )) : (
+                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                  <Schedule sx={{ fontSize: 40, mb: 1, opacity: 0.4 }} />
+                  <Typography sx={{ fontSize: 14 }}>No predictions yet</Typography>
+                  <Typography sx={{ fontSize: 12, mt: 0.5 }}>Predictions will appear once generated</Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -153,13 +204,17 @@ const Dashboard: React.FC = () => {
                 <Schedule sx={{ fontSize: 22, color: 'info.main' }} />
                 <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 16 }}>Recent Activity</Typography>
               </Box>
-              {recentActivity.map((activity, idx) => (
+              {recentActivity.length > 0 ? recentActivity.map((activity, idx) => (
                 <Box key={idx} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
                   {activity.icon}
                   <Typography sx={{ fontSize: 13, flex: 1 }}>{activity.text}</Typography>
                   <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{activity.time}</Typography>
                 </Box>
-              ))}
+              )) : (
+                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                  <Typography sx={{ fontSize: 14 }}>No graded predictions yet</Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -172,12 +227,16 @@ const Dashboard: React.FC = () => {
                 <Typography sx={{ fontSize: 20 }}>🔥</Typography>
                 <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 16 }}>Best Performers</Typography>
               </Box>
-              {bestPerformers.map((item, idx) => (
+              {bestPerformers.length > 0 ? bestPerformers.map((item, idx) => (
                 <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.75 }}>
                   <Typography sx={{ fontSize: 13 }}>{item.label}</Typography>
                   <Chip label={item.value} size="small" color={item.color as any} sx={{ fontSize: 11, height: 22 }} />
                 </Box>
-              ))}
+              )) : (
+                <Box sx={{ textAlign: 'center', py: 2, color: 'text.secondary' }}>
+                  <Typography sx={{ fontSize: 13 }}>No graded data yet</Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -190,12 +249,16 @@ const Dashboard: React.FC = () => {
                 <Typography sx={{ fontSize: 20 }}>⚠️</Typography>
                 <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 16 }}>Areas to Monitor</Typography>
               </Box>
-              {areasToMonitor.map((item, idx) => (
+              {areasToMonitor.length > 0 ? areasToMonitor.map((item, idx) => (
                 <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.75 }}>
                   <Typography sx={{ fontSize: 13 }}>{item.label}</Typography>
                   <Chip label={item.value} size="small" color={item.color as any} sx={{ fontSize: 11, height: 22 }} />
                 </Box>
-              ))}
+              )) : (
+                <Box sx={{ textAlign: 'center', py: 2, color: 'text.secondary' }}>
+                  <Typography sx={{ fontSize: 13 }}>No data to monitor yet</Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>

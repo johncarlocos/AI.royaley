@@ -26,7 +26,18 @@ export const api = {
     return data;
   },
 
-  // Predictions
+  // Public API (no auth required) - for frontend live data
+  getPublicPredictions: async (params?: { sport?: string; signal_tier?: string; per_page?: number }) => {
+    const { data } = await axiosClient.get('/public/predictions', { params });
+    return data;
+  },
+
+  getDashboardStats: async () => {
+    const { data } = await axiosClient.get('/public/dashboard/stats');
+    return data;
+  },
+
+  // Predictions (authenticated)
   getPredictions: async (params?: { sport?: string }) => {
     const { data } = await axiosClient.get('/predictions', { params });
     return data;

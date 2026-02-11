@@ -50,6 +50,7 @@ from app.api.routes import (
     player_props_router,
 )
 from app.api.routes.reports import router as reports_router
+from app.api.routes.predictions_public import router as public_router
 
 # Configure logging
 logging.basicConfig(
@@ -486,6 +487,13 @@ app.include_router(
     reports_router,
     prefix=f"{API_V1_PREFIX}/reports",
     tags=["Reports"]
+)
+
+# Public API (no auth required - for frontend live data)
+app.include_router(
+    public_router,
+    prefix=f"{API_V1_PREFIX}/public",
+    tags=["Public"]
 )
 
 

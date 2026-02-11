@@ -159,13 +159,24 @@ const Predictions: React.FC = () => {
 
   const { selectedSport, setSelectedSport, selectedTier, setSelectedTier } = useFilterStore();
 
-  // Summary stats
+  // Summary stats (computed from real data)
+  const graded = rows.filter(r => r.result !== 'pending');
+  const wins = rows.filter(r => r.result === 'won').length;
+  const losses = rows.filter(r => r.result === 'lost').length;
+  const pushes = rows.filter(r => r.result === 'push').length;
   const summaryStats = {
-    totalPredictions: 1247, totalWins: 712, totalLosses: 498, totalPushes: 37,
-    winRate: 58.9, avgEdge: 2.8, avgCLV: 1.2, roi: 8.7, bankrollGrowth: 12.4
+    totalPredictions: rows.length,
+    totalWins: wins,
+    totalLosses: losses,
+    totalPushes: pushes,
+    winRate: graded.length > 0 ? Math.round(wins / graded.length * 1000) / 10 : 0,
+    avgEdge: rows.length > 0 ? Math.round(rows.reduce((s, r) => s + (r.edge || 0), 0) / rows.length * 10) / 10 : 0,
+    avgCLV: 0,
+    roi: 0,
+    bankrollGrowth: 0
   };
 
-  // Performance data
+  // Performance data (kept as reference - will be replaced by live aggregation later)
   const tierPerformance: PerformanceRow[] = [
     { label: 'Tier A (65%+)', wins: 189, losses: 87, pushes: 12, winPct: 68.5, edge: 4.2, clv: 2.1, roi: 14.2 },
     { label: 'Tier B (60-65%)', wins: 234, losses: 156, pushes: 10, winPct: 60.0, edge: 2.8, clv: 1.4, roi: 8.5 },
@@ -215,16 +226,22 @@ const Predictions: React.FC = () => {
     }
   };
 
-  const loadPredictions = async () => {
-    setLoading(true);
+  const loadPredictions = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
-      const data = await api.getPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined });
-      setRows(Array.isArray(data) && data.length > 0 ? transformToFlatRows(data) : generateDemoRows());
-    } catch { setRows(generateDemoRows()); }
-    setLoading(false);
+      const data = await api.getPublicPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined, per_page: 200 });
+      const preds = data?.predictions || (Array.isArray(data) ? data : []);
+      setRows(transformToFlatRows(preds));
+    } catch (err) {
+      console.error('Load predictions error:', err);
+      setRows([]);
+    }
+    if (showLoading) setLoading(false);
   };
 
   useEffect(() => { loadPredictions(); }, [selectedSport]);
+  // Auto-refresh every 60 seconds
+  useEffect(() => { const iv = setInterval(() => loadPredictions(false), 60000); return () => clearInterval(iv); }, [selectedSport]);
 
   const filteredAndSorted = useMemo(() => {
     let filtered = [...rows];
@@ -294,7 +311,7 @@ const Predictions: React.FC = () => {
       {/* Header */}
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
         <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>Predictions</Typography>
-        <Button variant="contained" size="small" startIcon={<Refresh sx={{ fontSize: 14 }} />} onClick={loadPredictions} sx={{ fontSize: 11 }}>Refresh</Button>
+        <Button variant="contained" size="small" startIcon={<Refresh sx={{ fontSize: 14 }} />} onClick={() => loadPredictions()} sx={{ fontSize: 11 }}>Refresh</Button>
       </Box>
 
       {/* System Performance Dashboard */}
@@ -471,90 +488,70 @@ const Predictions: React.FC = () => {
 };
 
 const transformToFlatRows = (data: any[]): FlatRow[] => {
-  return [];
-};
+  if (!data || data.length === 0) return [];
+  return data.map((pred: any, idx: number) => {
+    const gameTime = pred.game_time ? new Date(pred.game_time) : new Date();
+    const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+    const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const side = pred.predicted_side || '';
+    const line = pred.line_at_prediction;
+    const bt = pred.bet_type || 'spread';
 
-const generateDemoRows = (): FlatRow[] => {
-  const games = [
-    {
-      game_id: 'game1', sport: 'NBA', date: '1/17/2026', time: '5:00 PM', datetime: new Date('2026-01-17T17:00:00'),
-      away_rotation: 501, away_team: 'Boston Celtics', away_record: '25-22',
-      home_rotation: 502, home_team: 'Los Angeles Lakers', home_record: '23-24',
-      bet_types: [
-        { bt: 'fg_spread', label: 'Spread', away_co: 4.5, away_cc: 5.5, away_so: 3.5, away_sc: 6, home_co: -4.5, home_cc: -5.5, home_so: -3.5, home_sc: -6, pick: 'Boston -6', pick_team: 'away' as const, prob: 0.67, edge: 3.2, clv: 1.5, tier: 'A' as const, result: 'pending' as const, reason: 'Boston covered 7 of last 9 home games.' },
-        { bt: 'fg_total', label: 'Total', away_co: 224.5, away_cc: 225, away_so: 223, away_sc: 226, home_co: 224.5, home_cc: 225, home_so: 223, home_sc: 226, pick: 'Under Total 226', pick_team: null, prob: 0.62, edge: 2.8, clv: 0.8, tier: 'B' as const, result: 'pending' as const, reason: 'Both teams rank top 10 in pace.' },
-        { bt: '1h_spread', label: '1H Spread', away_co: 2.5, away_cc: 3, away_so: 2, away_sc: 3.5, home_co: -2.5, home_cc: -3, home_so: -2, home_sc: -3.5, pick: 'Boston 1H +3.5', pick_team: 'away' as const, prob: 0.64, edge: 2.5, clv: undefined, tier: 'B' as const, result: 'pending' as const, reason: 'Boston +4.2 in first half.' },
-        { bt: '1h_total', label: '1H Total', away_co: 112, away_cc: 113, away_so: 110, away_sc: 114, home_co: 112, home_cc: 113, home_so: 110, home_sc: 114, pick: 'Over 1H 114', pick_team: null, prob: 0.56, edge: 1.1, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Both teams average 58+ in first half.' },
-        { bt: '2h_spread', label: '2H Spread', away_co: 2, away_cc: 2.5, away_so: 1.5, away_sc: 3, home_co: -2, home_cc: -2.5, home_so: -1.5, home_sc: -3, pick: 'Lakers 2H -3', pick_team: 'home' as const, prob: 0.53, edge: 0.8, clv: undefined, tier: 'D' as const, result: 'pending' as const, reason: 'Lakers coach makes 2nd half adjustments.' },
-        { bt: '2h_total', label: '2H Total', away_co: 110, away_cc: 111, away_so: 108, away_sc: 112, home_co: 110, home_cc: 111, home_so: 108, home_sc: 112, pick: 'Under 2H 112', pick_team: null, prob: 0.54, edge: 0.9, clv: undefined, tier: 'D' as const, result: 'pending' as const, reason: 'Both teams tighten defense.' },
-      ],
-    },
-    {
-      game_id: 'game2', sport: 'NBA', date: '1/17/2026', time: '7:30 PM', datetime: new Date('2026-01-17T19:30:00'),
-      away_rotation: 503, away_team: 'Golden State Warriors', away_record: '22-25',
-      home_rotation: 504, home_team: 'Phoenix Suns', home_record: '24-22',
-      bet_types: [
-        { bt: 'fg_spread', label: 'Spread', away_co: 3, away_cc: 3.5, away_so: 2.5, away_sc: 4, home_co: -3, home_cc: -3.5, home_so: -2.5, home_sc: -4, pick: 'Phoenix -4', pick_team: 'home' as const, prob: 0.66, edge: 3.8, clv: 2.1, tier: 'A' as const, result: 'pending' as const, reason: 'Suns 12-3 at home.' },
-        { bt: 'fg_total', label: 'Total', away_co: 228, away_cc: 229.5, away_so: 226, away_sc: 231, home_co: 228, home_cc: 229.5, home_so: 226, home_sc: 231, pick: 'Over Total 231', pick_team: null, prob: 0.63, edge: 2.9, clv: 1.2, tier: 'B' as const, result: 'pending' as const, reason: 'High pace matchup.' },
-        { bt: '1h_spread', label: '1H Spread', away_co: 1.5, away_cc: 2, away_so: 1, away_sc: 2.5, home_co: -1.5, home_cc: -2, home_so: -1, home_sc: -2.5, pick: 'Phoenix 1H -2.5', pick_team: 'home' as const, prob: 0.61, edge: 2.2, clv: undefined, tier: 'B' as const, result: 'pending' as const, reason: 'Phoenix fast starters.' },
-        { bt: '1h_total', label: '1H Total', away_co: 115, away_cc: 116, away_so: 113, away_sc: 117, home_co: 115, home_cc: 116, home_so: 113, home_sc: 117, pick: 'Over 1H 117', pick_team: null, prob: 0.58, edge: 1.5, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Both teams score 60+.' },
-        { bt: '2h_spread', label: '2H Spread', away_co: 1.5, away_cc: 1.5, away_so: 1, away_sc: 2, home_co: -1.5, home_cc: -1.5, home_so: -1, home_sc: -2, pick: 'Warriors 2H +2', pick_team: 'away' as const, prob: 0.55, edge: 1.0, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Warriors adjustments work.' },
-        { bt: '2h_total', label: '2H Total', away_co: 113, away_cc: 113.5, away_so: 111, away_sc: 114, home_co: 113, home_cc: 113.5, home_so: 111, home_sc: 114, pick: 'Over 2H 114', pick_team: null, prob: 0.57, edge: 1.3, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Up-tempo second half.' },
-      ],
-    },
-    {
-      game_id: 'game3', sport: 'NFL', date: '1/18/2026', time: '1:00 PM', datetime: new Date('2026-01-18T13:00:00'),
-      away_rotation: 507, away_team: 'Kansas City Chiefs', away_record: '14-3',
-      home_rotation: 508, home_team: 'Buffalo Bills', home_record: '13-4',
-      bet_types: [
-        { bt: 'fg_spread', label: 'Spread', away_co: 2.5, away_cc: 3, away_so: 2, away_sc: 3.5, home_co: -2.5, home_cc: -3, home_so: -2, home_sc: -3.5, pick: 'Bills -3.5', pick_team: 'home' as const, prob: 0.68, edge: 4.1, clv: 2.5, tier: 'A' as const, result: 'pending' as const, reason: 'Bills dominant at home.' },
-        { bt: 'fg_total', label: 'Total', away_co: 47.5, away_cc: 48, away_so: 46, away_sc: 49, home_co: 47.5, home_cc: 48, home_so: 46, home_sc: 49, pick: 'Under Total 49', pick_team: null, prob: 0.61, edge: 2.4, clv: 1.0, tier: 'B' as const, result: 'pending' as const, reason: 'Playoff defenses step up.' },
-        { bt: '1h_spread', label: '1H Spread', away_co: 1, away_cc: 1.5, away_so: 0.5, away_sc: 2, home_co: -1, home_cc: -1.5, home_so: -0.5, home_sc: -2, pick: 'Bills 1H -2', pick_team: 'home' as const, prob: 0.64, edge: 2.8, clv: undefined, tier: 'B' as const, result: 'pending' as const, reason: 'Bills fast starters.' },
-        { bt: '1h_total', label: '1H Total', away_co: 23.5, away_cc: 24, away_so: 22, away_sc: 24.5, home_co: 23.5, home_cc: 24, home_so: 22, home_sc: 24.5, pick: 'Under 1H 24.5', pick_team: null, prob: 0.59, edge: 1.8, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Slow starts typical.' },
-        { bt: '2h_spread', label: '2H Spread', away_co: 1.5, away_cc: 1.5, away_so: 1, away_sc: 2, home_co: -1.5, home_cc: -1.5, home_so: -1, home_sc: -2, pick: 'Chiefs 2H +2', pick_team: 'away' as const, prob: 0.56, edge: 1.2, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Chiefs adjustments strong.' },
-        { bt: '2h_total', label: '2H Total', away_co: 24, away_cc: 24, away_so: 23, away_sc: 24.5, home_co: 24, home_cc: 24, home_so: 23, home_sc: 24.5, pick: 'Over 2H 24.5', pick_team: null, prob: 0.58, edge: 1.4, clv: undefined, tier: 'C' as const, result: 'pending' as const, reason: 'Second half higher scoring.' },
-      ],
-    },
-  ];
+    let pickStr = side;
+    let pickTeam: 'away' | 'home' | null = null;
+    if (bt === 'spread') {
+      const team = side === 'home' ? pred.home_team : pred.away_team;
+      pickStr = line != null ? `${team} ${line > 0 ? '+' : ''}${line}` : (team || side);
+      pickTeam = side === 'home' ? 'home' : side === 'away' ? 'away' : null;
+    } else if (bt === 'total') {
+      pickStr = line != null ? `${side === 'over' ? 'Over' : 'Under'} ${line}` : (side === 'over' ? 'Over' : 'Under');
+      pickTeam = null;
+    } else if (bt === 'moneyline') {
+      const team = side === 'home' ? pred.home_team : pred.away_team;
+      pickStr = `${team} ML`;
+      pickTeam = side === 'home' ? 'home' : side === 'away' ? 'away' : null;
+    }
 
-  const flatRows: FlatRow[] = [];
-  games.forEach((game) => {
-    game.bet_types.forEach((bt) => {
-      flatRows.push({
-        id: `${game.game_id}_${bt.bt}`,
-        game_id: game.game_id,
-        sport: game.sport,
-        date: game.date,
-        time: game.time,
-        datetime: game.datetime,
-        away_rotation: game.away_rotation,
-        away_team: game.away_team,
-        away_record: game.away_record,
-        home_rotation: game.home_rotation,
-        home_team: game.home_team,
-        home_record: game.home_record,
-        bet_type: bt.bt,
-        bet_type_label: bt.label,
-        away_circa_open: bt.away_co,
-        away_circa_current: bt.away_cc,
-        away_system_open: bt.away_so,
-        away_system_current: bt.away_sc,
-        home_circa_open: bt.home_co,
-        home_circa_current: bt.home_cc,
-        home_system_open: bt.home_so,
-        home_system_current: bt.home_sc,
-        system_pick: bt.pick,
-        pick_team: bt.pick_team,
-        probability: bt.prob,
-        edge: bt.edge,
-        clv: bt.clv,
-        signal_tier: bt.tier,
-        result: bt.result,
-        reason: bt.reason,
-      });
-    });
+    let result: 'pending' | 'won' | 'lost' | 'push' = 'pending';
+    if (pred.result === 'win') result = 'won';
+    else if (pred.result === 'loss') result = 'lost';
+    else if (pred.result === 'push') result = 'push';
+
+    const btLabel = bt === 'spread' ? 'Spread' : bt === 'total' ? 'Total' : bt === 'moneyline' ? 'ML' : bt;
+
+    return {
+      id: pred.id || `pred_${idx}`,
+      game_id: pred.game_id || `game_${idx}`,
+      sport: pred.sport || pred.sport_code || 'UNK',
+      date: dateStr,
+      time: timeStr,
+      datetime: gameTime,
+      away_rotation: 0,
+      away_team: pred.away_team || 'TBD',
+      away_record: '',
+      home_rotation: 0,
+      home_team: pred.home_team || 'TBD',
+      home_record: '',
+      bet_type: bt,
+      bet_type_label: btLabel,
+      away_circa_open: bt === 'total' && line ? line : (side === 'away' && line ? line : '-'),
+      away_circa_current: bt === 'total' && line ? line : (side === 'away' && line ? line : '-'),
+      away_system_open: bt === 'total' && line ? line : (side === 'away' && line ? line : '-'),
+      away_system_current: bt === 'total' && line ? line : (side === 'away' && line ? line : '-'),
+      home_circa_open: bt === 'total' && line ? line : (side === 'home' && line ? line : (bt === 'spread' && side === 'away' && line ? line * -1 : '-')),
+      home_circa_current: bt === 'total' && line ? line : (side === 'home' && line ? line : (bt === 'spread' && side === 'away' && line ? line * -1 : '-')),
+      home_system_open: bt === 'total' && line ? line : (side === 'home' && line ? line : (bt === 'spread' && side === 'away' && line ? line * -1 : '-')),
+      home_system_current: bt === 'total' && line ? line : (side === 'home' && line ? line : (bt === 'spread' && side === 'away' && line ? line * -1 : '-')),
+      system_pick: pickStr,
+      pick_team: pickTeam,
+      probability: pred.probability || 0.5,
+      edge: pred.edge || 0,
+      clv: pred.clv,
+      signal_tier: (pred.signal_tier || 'D') as 'A' | 'B' | 'C' | 'D',
+      result: result,
+      reason: `Model probability: ${Math.round((pred.probability || 0.5) * 100)}% | Edge: ${pred.edge ? pred.edge.toFixed(1) : '0'}%`,
+    };
   });
-  return flatRows;
 };
 
 export default Predictions;

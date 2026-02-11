@@ -191,7 +191,7 @@ const Predictions: React.FC = () => {
   const [perfTab, setPerfTab] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
-  const [sortField, setSortField] = useState<SortField>(null);
+  const [sortField, setSortField] = useState<SortField>('datetime');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [reasonDialog, setReasonDialog] = useState<{ open: boolean; row: FlatRow | null }>({ open: false, row: null });
   const { selectedSport, setSelectedSport, selectedTier, setSelectedTier } = useFilterStore();
@@ -262,7 +262,7 @@ const Predictions: React.FC = () => {
   const totalRows = filteredAndSorted.length;
   const paginated = useMemo(() => rowsPerPage === -1 ? filteredAndSorted : filteredAndSorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filteredAndSorted, page, rowsPerPage]);
   const handleSort = (field: SortField) => { if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortField(field); setSortOrder('desc'); } };
-  const handleResetSort = () => { setSortField(null); setSortOrder('asc'); };
+  const handleResetSort = () => { setSortField('datetime'); setSortOrder('asc'); };
 
   const formatLine = (value: number | string | undefined | null) => {
     if (value == null || value === '' || value === '-') return '-';
@@ -281,6 +281,8 @@ const Predictions: React.FC = () => {
   };
 
   const hdr = { fontWeight: 600, fontSize: 11, py: 0.75, bgcolor: isDark ? 'grey.900' : 'grey.100', color: isDark ? 'grey.100' : 'grey.800', whiteSpace: 'nowrap', borderBottom: 1, borderColor: 'divider' };
+  const lineHdr = { ...hdr, minWidth: 60, textAlign: 'center' };
+  const lineCell = { py: 0.75, fontSize: 11, fontFamily: 'monospace', textAlign: 'center', minWidth: 60 };
   const gameCount = useMemo(() => new Set(rows.map(r => r.game_id)).size, [rows]);
 
   return (
@@ -368,10 +370,10 @@ const Predictions: React.FC = () => {
                 <TableCell sx={hdr} align="center">Game #</TableCell>
                 <TableCell sx={hdr}>Team</TableCell>
                 <TableCell sx={hdr}>Record</TableCell>
-                <TableCell sx={hdr} align="center">Circa O</TableCell>
-                <TableCell sx={hdr} align="center">Circa.</TableCell>
-                <TableCell sx={hdr} align="center">System O</TableCell>
-                <TableCell sx={hdr} align="center">System.</TableCell>
+                <TableCell sx={lineHdr}>Circa O</TableCell>
+                <TableCell sx={lineHdr}>Circa.</TableCell>
+                <TableCell sx={lineHdr}>System O</TableCell>
+                <TableCell sx={lineHdr}>System.</TableCell>
                 <TableCell sx={hdr}>Pick</TableCell>
                 <TableCell sx={hdr} align="center"><TableSortLabel active={sortField === 'probability'} direction={sortField === 'probability' ? sortOrder : 'asc'} onClick={() => handleSort('probability')}>%</TableSortLabel></TableCell>
                 <TableCell sx={hdr} align="center"><TableSortLabel active={sortField === 'edge'} direction={sortField === 'edge' ? sortOrder : 'asc'} onClick={() => handleSort('edge')}>Edge</TableSortLabel></TableCell>
@@ -394,10 +396,10 @@ const Predictions: React.FC = () => {
                     <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, borderBottom: 0 }}>{row.away_rotation}</TableCell>
                     <TableCell sx={{ py: 0.75, fontSize: 11, fontWeight: row.pick_team === 'away' ? 700 : 400, borderBottom: 0 }}>{row.away_team}</TableCell>
                     <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0 }}>{row.away_record}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, borderBottom: 0 }}>{formatLine(row.away_circa_open)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_circa_current)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'info.main', borderBottom: 0 }}>{formatLine(row.away_system_open)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_circa_current)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, color: 'info.main', borderBottom: 0 }}>{formatLine(row.away_system_open)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current)}</TableCell>
                     <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}><Typography sx={{ fontSize: 11, fontWeight: 600, color: 'success.main', lineHeight: 1.3 }}>{row.system_pick}</Typography><Typography sx={{ fontSize: 10, color: 'text.secondary' }}>{row.bet_type_label}</Typography></TableCell>
                     <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>{formatPercent(row.probability)}</TableCell>
                     <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider', color: row.edge >= 3 ? 'success.main' : row.edge >= 1 ? 'warning.main' : 'text.secondary' }}>+{row.edge.toFixed(1)}%</TableCell>
@@ -411,10 +413,10 @@ const Predictions: React.FC = () => {
                     <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{row.home_rotation}</TableCell>
                     <TableCell sx={{ py: 0.75, fontSize: 11, fontWeight: row.pick_team === 'home' ? 700 : 400, borderBottom: 1, borderColor: 'divider' }}>{row.home_team}</TableCell>
                     <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 1, borderColor: 'divider' }}>{row.home_record}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_circa_open)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_circa_current)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'info.main', borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_system_open)}</TableCell>
-                    <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'info.main', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_system_current)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_circa_open)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_circa_current)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, color: 'info.main', borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_system_open)}</TableCell>
+                    <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}>{formatLine(row.home_system_current)}</TableCell>
                   </TableRow>
                 </React.Fragment>
               ))}

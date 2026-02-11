@@ -223,7 +223,7 @@ async def get_public_predictions(
             AND co.bet_type = p.bet_type
         WHERE (p.upcoming_game_id IS NOT NULL OR p.game_id IS NOT NULL)
         {where_sql}
-        ORDER BY game_time DESC, p.created_at DESC
+        ORDER BY game_time ASC, p.created_at DESC
         LIMIT :lim OFFSET :off
     """), data_params)
 

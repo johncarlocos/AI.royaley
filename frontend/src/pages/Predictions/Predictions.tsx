@@ -268,7 +268,10 @@ const Predictions: React.FC = () => {
     if (value == null || value === '' || value === '-') return '-';
     const num = typeof value === 'string' ? parseFloat(value) : value;
     if (isNaN(num)) return String(value);
-    return num > 0 ? `+${num}` : `${num}`;
+    // Round to clean number: integers stay integer, halves stay .5
+    const rounded = Math.round(num * 2) / 2;  // Snap to nearest 0.5
+    const display = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(1);
+    return rounded > 0 ? `+${display}` : display;
   };
 
   const getStatusChip = (result: string) => {
@@ -470,15 +473,24 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
     const line = pred.line_at_prediction;
     const odds = pred.odds_at_prediction;
 
+    // Helper: snap to nearest 0.5 for clean display
+    const snapLine = (v: number | null | undefined): number | null => {
+      if (v == null) return null;
+      return Math.round(v * 2) / 2;
+    };
+    const fmtNum = (v: number) => Number.isInteger(v) ? v.toString() : v.toFixed(1);
+
     // Build pick string
     let pickStr = side;
     let pickTeam: 'away' | 'home' | null = null;
     if (bt === 'spread') {
       const team = side === 'home' ? pred.home_team : pred.away_team;
-      pickStr = line != null ? `${team} ${line > 0 ? '+' : ''}${line}` : (team || side);
+      const snapped = snapLine(line);
+      pickStr = snapped != null ? `${team} ${snapped > 0 ? '+' : ''}${fmtNum(snapped)}` : (team || side);
       pickTeam = side === 'home' ? 'home' : side === 'away' ? 'away' : null;
     } else if (bt === 'total') {
-      pickStr = line != null ? `${side === 'over' ? 'Over' : 'Under'} ${line}` : (side === 'over' ? 'Over' : 'Under');
+      const snapped = snapLine(line);
+      pickStr = snapped != null ? `${side === 'over' ? 'Over' : 'Under'} ${fmtNum(snapped)}` : (side === 'over' ? 'Over' : 'Under');
       pickTeam = null;
     } else if (bt === 'moneyline') {
       const team = side === 'home' ? pred.home_team : pred.away_team;

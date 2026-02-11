@@ -416,6 +416,8 @@ async def generate_predictions_for_game(
         
         if bet_type == "spread":
             line = row.pin_home_line or row.avg_home_line
+            if line is not None:
+                line = round(line * 2) / 2  # Snap to nearest 0.5
             home_price = row.pin_home_odds or row.avg_home_odds
             away_price = row.pin_away_odds or row.avg_away_odds
             if line is not None and home_price is not None:
@@ -429,6 +431,8 @@ async def generate_predictions_for_game(
                     
         elif bet_type == "total":
             total = row.pin_total or row.avg_total
+            if total is not None:
+                total = round(total * 2) / 2  # Snap to nearest 0.5
             over_price = row.pin_over_odds or row.avg_over_odds
             under_price = row.pin_under_odds or row.avg_under_odds
             if total is not None and over_price is not None:
@@ -467,6 +471,8 @@ async def generate_predictions_for_game(
 
         if bet_type == "spread":
             open_home_line = row.pin_home_line or row.avg_home_line
+            if open_home_line is not None:
+                open_home_line = round(open_home_line * 2) / 2
             open_away_line = -open_home_line if open_home_line is not None else None
             open_home_odds = int(row.pin_home_odds or row.avg_home_odds) if (row.pin_home_odds or row.avg_home_odds) else None
             open_away_odds = int(row.pin_away_odds or row.avg_away_odds) if (row.pin_away_odds or row.avg_away_odds) else None

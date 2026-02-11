@@ -158,6 +158,15 @@ def _safe_float(val):
     except (ValueError, TypeError):
         return None
 
+def _snap_line(val):
+    """Round line to nearest 0.5 (standard sportsbook precision)."""
+    if val is None:
+        return None
+    try:
+        return round(float(val) * 2) / 2
+    except (ValueError, TypeError):
+        return None
+
 
 @router.get("/predictions", response_model=PublicPredictionsResponse)
 async def get_public_predictions(
@@ -241,7 +250,7 @@ async def get_public_predictions(
             probability=float(row.probability),
             edge=_safe_float(row.edge),
             signal_tier=row.signal_tier,
-            line_at_prediction=_safe_float(row.line_at_prediction),
+            line_at_prediction=_snap_line(row.line_at_prediction),
             odds_at_prediction=_safe_int(row.odds_at_prediction),
             kelly_fraction=_safe_float(row.kelly_fraction),
             prediction_hash=row.prediction_hash,
@@ -250,21 +259,21 @@ async def get_public_predictions(
             clv=None,
             profit_loss=None,
             # Opening snapshot
-            home_line_open=_safe_float(row.home_line_open),
-            away_line_open=_safe_float(row.away_line_open),
+            home_line_open=_snap_line(row.home_line_open),
+            away_line_open=_snap_line(row.away_line_open),
             home_odds_open=_safe_int(row.home_odds_open),
             away_odds_open=_safe_int(row.away_odds_open),
-            total_open=_safe_float(row.total_open),
+            total_open=_snap_line(row.total_open),
             over_odds_open=_safe_int(row.over_odds_open),
             under_odds_open=_safe_int(row.under_odds_open),
             home_ml_open=_safe_int(row.home_ml_open),
             away_ml_open=_safe_int(row.away_ml_open),
             # Current consensus
-            current_home_line=_safe_float(row.curr_home_line),
-            current_away_line=_safe_float(row.curr_away_line),
+            current_home_line=_snap_line(row.curr_home_line),
+            current_away_line=_snap_line(row.curr_away_line),
             current_home_odds=_safe_int(row.curr_home_odds),
             current_away_odds=_safe_int(row.curr_away_odds),
-            current_total=_safe_float(row.curr_total),
+            current_total=_snap_line(row.curr_total),
             current_over_odds=_safe_int(row.curr_over_odds),
             current_under_odds=_safe_int(row.curr_under_odds),
             current_home_ml=_safe_int(row.curr_home_ml),

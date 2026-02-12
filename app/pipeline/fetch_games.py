@@ -580,6 +580,9 @@ async def generate_predictions_for_game(
                              :total_open, :over_odds_open, :under_odds_open,
                              :home_ml_open, :away_ml_open,
                              NOW())
+                        ON CONFLICT (upcoming_game_id, bet_type, predicted_side)
+                            WHERE upcoming_game_id IS NOT NULL
+                        DO NOTHING
                     """),
                     {
                         "game_id": upcoming_game_id,

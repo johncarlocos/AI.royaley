@@ -212,41 +212,41 @@ const Betting: React.FC = () => {
       </Box>
 
       {/* Stats Cards */}
-      <Grid container spacing={2} mb={2}>
+      <Grid container spacing={2} mb={2} sx={{ alignItems: 'stretch' }}>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>Bankroll</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700, color: 'primary.main' }}>{formatCurrency(stats.current_bankroll)}</Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>Total Bets</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700 }}>{stats.total_bets}</Typography>
             {stats.pending_bets > 0 && <Typography sx={{ fontSize: 9, color: 'text.secondary' }}>{stats.graded_bets} graded • {stats.pending_bets} pending</Typography>}
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>Win Rate</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700, color: 'success.main' }}>{stats.graded_bets > 0 ? `${stats.win_rate}%` : '-'}</Typography>
             {stats.graded_bets > 0 && <Typography sx={{ fontSize: 9, color: 'text.secondary' }}>{stats.wins}W-{stats.losses}L-{stats.pushes}P</Typography>}
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>ROI</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700, color: stats.roi >= 0 ? 'success.main' : 'error.main' }}>{stats.roi >= 0 ? '+' : ''}{stats.roi}%</Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>Avg CLV</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700, color: stats.avg_clv >= 0 ? 'success.main' : 'error.main' }}>{stats.avg_clv >= 0 ? '+' : ''}{stats.avg_clv}%</Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Card sx={{ height: '100%' }}><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>P/L</Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 700, color: stats.total_pnl >= 0 ? 'success.main' : 'error.main' }}>{stats.total_pnl >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(stats.total_pnl)}</Typography>
           </CardContent></Card>

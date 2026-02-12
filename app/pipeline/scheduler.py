@@ -126,9 +126,15 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
 
             # Update odds for each game
             for eid, event_data in all_events.items():
-                # Find the upcoming_game by external_id
+                # Find the upcoming_game by external_id, get home/away team names
                 game_row = await db.execute(
-                    text("SELECT id FROM upcoming_games WHERE external_id = :eid"),
+                    text("""
+                        SELECT ug.id, ht.name as home_name, at.name as away_name
+                        FROM upcoming_games ug
+                        JOIN teams ht ON ug.home_team_id = ht.id
+                        JOIN teams at ON ug.away_team_id = at.id
+                        WHERE ug.external_id = :eid
+                    """),
                     {"eid": eid},
                 )
                 game = game_row.fetchone()
@@ -136,6 +142,8 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
                     continue
 
                 game_id = game[0]
+                db_home_name = game[1]  # Home team name from our DB
+                db_away_name = game[2]  # Away team name from our DB
 
                 # Deduplicate bookmakers
                 seen = set()
@@ -159,16 +167,24 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
                             price = outcome.get("price")
                             point = outcome.get("point")
 
+                            # Match outcome to home/away using DB team names
+                            is_home = (name == db_home_name)
+                            is_away = (name == db_away_name)
+                            # Fuzzy fallback: check if name contains key part of team name
+                            if not is_home and not is_away:
+                                home_lower = db_home_name.lower()
+                                away_lower = db_away_name.lower()
+                                name_lower = name.lower()
+                                is_home = name_lower in home_lower or home_lower in name_lower
+                                is_away = name_lower in away_lower or away_lower in name_lower
+
                             if bet_type == "spread":
-                                if name == outcomes[0].get("name"):
+                                if is_home:
                                     home_line = point
                                     home_odds = price
-                                    away_line = -point if point else None
-                                else:
+                                elif is_away:
                                     away_line = point
                                     away_odds = price
-                                    if home_line is None:
-                                        home_line = -point if point else None
                             elif bet_type == "total":
                                 if name.lower() == "over":
                                     total_val = point
@@ -177,10 +193,17 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
                                     total_val = point
                                     under_odds = price
                             elif bet_type == "moneyline":
-                                if name == outcomes[0].get("name"):
+                                if is_home:
                                     home_ml = price
-                                else:
+                                elif is_away:
                                     away_ml = price
+
+                        # Derive missing lines from counterpart
+                        if bet_type == "spread":
+                            if home_line is not None and away_line is None:
+                                away_line = -home_line
+                            elif away_line is not None and home_line is None:
+                                home_line = -away_line
 
                         try:
                             await db.execute(text("""

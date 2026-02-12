@@ -246,8 +246,23 @@ async def save_upcoming_odds(
     db: AsyncSession,
     upcoming_game_id: UUID,
     bookmakers: List[dict],
+    home_team_name: str = "",
+    away_team_name: str = "",
 ) -> int:
     """Save odds from all bookmakers for an upcoming game. Returns count saved."""
+    
+    # If team names not provided, look them up
+    if not home_team_name or not away_team_name:
+        team_row = await db.execute(text("""
+            SELECT ht.name, at.name
+            FROM upcoming_games ug
+            JOIN teams ht ON ug.home_team_id = ht.id
+            JOIN teams at ON ug.away_team_id = at.id
+            WHERE ug.id = :gid
+        """), {"gid": upcoming_game_id})
+        names = team_row.fetchone()
+        if names:
+            home_team_name, away_team_name = names[0], names[1]
     
     # Deduplicate bookmakers by key+market (API returns duplicates across market calls)
     seen = set()
@@ -282,20 +297,23 @@ async def save_upcoming_odds(
             price = outcome.get("price")
             point = outcome.get("point")
             
+            # Match outcome to home/away using team names
+            is_home = (name == home_team_name)
+            is_away = (name == away_team_name)
+            # Fuzzy fallback
+            if not is_home and not is_away:
+                name_l = name.lower()
+                is_home = name_l in home_team_name.lower() or home_team_name.lower() in name_l
+                is_away = name_l in away_team_name.lower() or away_team_name.lower() in name_l
+            
             if bet_type == "spread":
-                # Spread: outcomes have point (e.g., -3.5) and price (e.g., -110)
-                if name == outcomes[0].get("name"):  # First outcome = usually home
+                if is_home:
                     home_line = point
                     home_odds = price
-                    away_line = -point if point else None
-                else:
+                elif is_away:
                     away_line = point
                     away_odds = price
-                    if home_line is None:
-                        home_line = -point if point else None
-                # Fix: Odds API may not always put home first
-                # Check by matching team names if available
-                
+                    
             elif bet_type == "total":
                 if name.lower() == "over":
                     total = point
@@ -305,10 +323,17 @@ async def save_upcoming_odds(
                     under_odds = price
                     
             elif bet_type == "moneyline":
-                if name == outcomes[0].get("name"):
+                if is_home:
                     home_ml = price
-                else:
+                elif is_away:
                     away_ml = price
+        
+        # Derive missing spread lines
+        if bet_type == "spread":
+            if home_line is not None and away_line is None:
+                away_line = -home_line
+            elif away_line is not None and home_line is None:
+                home_line = -away_line
         
         # Upsert odds
         try:
@@ -668,7 +693,11 @@ async def run_pipeline(
                 total_games += 1
                 
                 # Save odds
-                odds_count = await save_upcoming_odds(db, game_id, event.get("bookmakers", []))
+                odds_count = await save_upcoming_odds(
+                    db, game_id, event.get("bookmakers", []),
+                    home_team_name=event.get("home_team", ""),
+                    away_team_name=event.get("away_team", ""),
+                )
                 total_odds += odds_count
                 
                 # Generate predictions

@@ -88,8 +88,18 @@ export const api = {
   },
 
   // Models
-  getModels: async () => {
-    const { data } = await axiosClient.get('/models');
+  getModels: async (params?: { sport_code?: string; production_only?: boolean }) => {
+    const { data } = await axiosClient.get('/models', { params });
+    return data;
+  },
+
+  getTrainingRuns: async (params?: { sport_code?: string; limit?: number }) => {
+    const { data } = await axiosClient.get('/models/training', { params });
+    return data;
+  },
+
+  trainModel: async (config: { sport_code: string; bet_type: string; framework?: string }) => {
+    const { data } = await axiosClient.post('/models/train', config);
     return data;
   },
 

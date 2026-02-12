@@ -81,7 +81,7 @@ const Analytics: React.FC = () => {
   const [edgeFilter, setEdgeFilter] = useState('all');
 
   // Sort & pagination
-  const [sortField, setSortField] = useState<SortField>('edge');
+  const [sortField, setSortField] = useState<SortField | 'default'>('default');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -193,6 +193,12 @@ const Analytics: React.FC = () => {
 
   // ─── Sort & paginate ───────────────────────────────────────────
   const sorted = useMemo(() => [...filtered].sort((a, b) => {
+    // Primary: graded first, pending last
+    const aPending = a.result === 'pending';
+    const bPending = b.result === 'pending';
+    if (aPending !== bPending) return aPending ? 1 : -1;
+
+    // Secondary: column sort for same group
     let aV: string | number, bV: string | number;
     switch (sortField) {
       case 'sport': aV = a.sport || ''; bV = b.sport || ''; break;
@@ -201,7 +207,12 @@ const Analytics: React.FC = () => {
       case 'edge': aV = a.edge || 0; bV = b.edge || 0; break;
       case 'clv': aV = a.clv || 0; bV = b.clv || 0; break;
       case 'profit_loss': aV = a.profit_loss || 0; bV = b.profit_loss || 0; break;
-      default: aV = a.edge || 0; bV = b.edge || 0;
+      default: {
+        // Default: graded = most recent first, pending = soonest first
+        const aTime = a.game_time ? new Date(a.game_time).getTime() : 0;
+        const bTime = b.game_time ? new Date(b.game_time).getTime() : 0;
+        return aPending ? aTime - bTime : bTime - aTime;
+      }
     }
     if (typeof aV === 'string') return sortOrder === 'asc' ? aV.localeCompare(bV as string) : (bV as string).localeCompare(aV);
     return sortOrder === 'asc' ? (aV as number) - (bV as number) : (bV as number) - (aV as number);

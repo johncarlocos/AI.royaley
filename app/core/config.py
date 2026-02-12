@@ -291,7 +291,7 @@ def get_settings() -> Settings:
 settings = get_settings()
 
 
-# Sport code mapping for TheOddsAPI
+# Sport code mapping for TheOddsAPI — 10 supported sports
 ODDS_API_SPORT_KEYS = {
     "NFL": "americanfootball_nfl",
     "NCAAF": "americanfootball_ncaaf",
@@ -301,11 +301,22 @@ ODDS_API_SPORT_KEYS = {
     "WNBA": "basketball_wnba",
     "NHL": "icehockey_nhl",
     "MLB": "baseball_mlb",
-    # Tennis - tournament-specific keys (API only returns data during active tournaments)
-    # Remove ATP/WTA from main collection since they require tournament-specific keys
+    # ATP/WTA resolved dynamically via /v4/sports (tournament keys rotate)
 }
 
-# Tennis tournaments (use separately with collect_tennis method)
+# Reverse mapping: API key → our code
+ODDS_API_KEY_TO_CODE = {v: k for k, v in ODDS_API_SPORT_KEYS.items()}
+
+# Human-readable names for auto-creating sports in DB
+SPORT_DISPLAY_NAMES = {
+    "NFL": "National Football League", "NCAAF": "NCAA Football",
+    "CFL": "Canadian Football League", "NBA": "National Basketball Association",
+    "NCAAB": "NCAA Basketball", "WNBA": "Women's NBA",
+    "NHL": "National Hockey League", "MLB": "Major League Baseball",
+    "ATP": "ATP Tennis", "WTA": "WTA Tennis",
+}
+
+# Tennis tournaments (discovered dynamically, listed for reference)
 ODDS_API_TENNIS_TOURNAMENTS = {
     "ATP": [
         "tennis_atp_aus_open_singles",

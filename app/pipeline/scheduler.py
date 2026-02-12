@@ -50,28 +50,30 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
 
     # Find which sports have upcoming games
     active_sports = await db.execute(text("""
-        SELECT DISTINCT s.code
+        SELECT DISTINCT s.code, s.api_key
         FROM upcoming_games ug
         JOIN sports s ON ug.sport_id = s.id
         WHERE ug.status = 'scheduled'
           AND ug.scheduled_at >= NOW()
           AND ug.scheduled_at <= NOW() + INTERVAL '48 hours'
     """))
-    sport_codes = [row[0] for row in active_sports.fetchall()]
+    sport_rows = active_sports.fetchall()
 
-    if not sport_codes:
+    if not sport_rows:
         logger.info("  No sports with upcoming games in next 48h, skipping odds refresh")
         return stats
 
-    logger.info(f"  Active sports with upcoming games: {sport_codes}")
+    logger.info(f"  Active sports with upcoming games: {[r[0] for r in sport_rows]}")
 
     markets = ["h2h", "spreads", "totals"]
     sharp_books = {"pinnacle", "pinnacle_alt"}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for sport_code in sport_codes:
-            api_sport_key = ODDS_API_SPORT_KEYS.get(sport_code)
+        for sport_code, db_api_key in sport_rows:
+            # Resolve API key: DB first, then static mapping fallback
+            api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
             if not api_sport_key:
+                logger.warning(f"    No API key for {sport_code}, skipping")
                 continue
 
             # Get sport_id
@@ -365,24 +367,25 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
 
     # Find sports with ungraded games (game time has passed but no score yet)
     ungraded_sports = await db.execute(text("""
-        SELECT DISTINCT s.code
+        SELECT DISTINCT s.code, s.api_key
         FROM upcoming_games ug
         JOIN sports s ON ug.sport_id = s.id
         WHERE ug.status = 'scheduled'
           AND ug.scheduled_at < NOW() - INTERVAL '3 hours'
     """))
-    sport_codes = [row[0] for row in ungraded_sports.fetchall()]
+    sport_rows = ungraded_sports.fetchall()
 
-    if not sport_codes:
+    if not sport_rows:
         return stats
 
-    logger.info(f"  Sports with ungraded games: {sport_codes}")
+    logger.info(f"  Sports with ungraded games: {[r[0] for r in sport_rows]}")
 
     # Fetch scores from Odds API
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for sport_code in sport_codes:
-            api_sport_key = ODDS_API_SPORT_KEYS.get(sport_code)
+        for sport_code, db_api_key in sport_rows:
+            api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
             if not api_sport_key:
+                logger.warning(f"    No API key for {sport_code}, skipping grading")
                 continue
 
             try:

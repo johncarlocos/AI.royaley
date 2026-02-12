@@ -34,7 +34,7 @@ from sqlalchemy import select, text, and_
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.core.config import settings, ODDS_API_SPORT_KEYS
+from app.core.config import settings, ODDS_API_SPORT_KEYS, SPORT_DISPLAY_NAMES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -126,6 +126,31 @@ class OddsAPIClient:
                     logger.error(f"Error fetching {sport_key}/{market}: {e}")
         
         return list(all_events.values())
+
+    async def discover_active_sports(self) -> List[dict]:
+        """
+        Call GET /v4/sports to discover all currently active sports.
+        Returns list of {key, title, group, active, has_outrights}.
+        Costs 0 API requests (free endpoint).
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    f"{self.BASE_URL}/sports",
+                    params={"apiKey": self.api_key},
+                )
+                resp.raise_for_status()
+                all_sports = resp.json()
+                # Filter: active + match-based (not outrights/futures)
+                active = [
+                    s for s in all_sports
+                    if s.get("active") and not s.get("has_outrights")
+                ]
+                logger.info(f"  🔍 Discovered {len(active)} active sports from API")
+                return active
+            except Exception as e:
+                logger.error(f"  Failed to discover sports: {e}")
+                return []
 
 
 # =============================================================================
@@ -635,16 +660,29 @@ async def run_pipeline(
     )
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     
-    # Determine which sports to fetch
-    sport_keys = ODDS_API_SPORT_KEYS
+    # Determine which sports to fetch — 10 supported sports
+    sport_keys = dict(ODDS_API_SPORT_KEYS)  # copy
+    
     if sports:
+        # User specified specific sports
         sport_keys = {k: v for k, v in sport_keys.items() if k in [s.upper() for s in sports]}
+    else:
+        # Discover active tennis tournaments (API key rotates by tournament)
+        active_api_sports = await api_client.discover_active_sports()
+        for s in active_api_sports:
+            key = s.get("key", "")
+            if key.startswith("tennis_atp_"):
+                sport_keys["ATP"] = key
+                logger.info(f"  🎾 Active ATP: {s.get('title')}")
+            elif key.startswith("tennis_wta_"):
+                sport_keys["WTA"] = key
+                logger.info(f"  🎾 Active WTA: {s.get('title')}")
     
     if not sport_keys:
         logger.error("No valid sports specified")
         return
     
-    logger.info(f"Sports to fetch: {list(sport_keys.keys())}")
+    logger.info(f"Sports to fetch: {list(sport_keys.keys())} ({len(sport_keys)} total)")
     logger.info(f"Odds API quota: {api_client.requests_remaining} requests remaining")
     logger.info(f"Generate predictions: {generate_predictions}")
     logger.info("")
@@ -658,15 +696,26 @@ async def run_pipeline(
             logger.info(f"{'─' * 40}")
             logger.info(f"Fetching {sport_code} ({api_key})...")
             
-            # Get sport_id from DB
+            # Get or create sport in DB
             sport_row = await db.execute(
                 text("SELECT id FROM sports WHERE code = :code"),
                 {"code": sport_code},
             )
             sport = sport_row.fetchone()
             if not sport:
-                logger.warning(f"  Sport {sport_code} not found in DB, skipping")
-                continue
+                sport_name = SPORT_DISPLAY_NAMES.get(sport_code, sport_code)
+                await db.execute(text("""
+                    INSERT INTO sports (id, code, name, api_key, is_active, config, created_at)
+                    VALUES (gen_random_uuid(), :code, :name, :api_key, true, '{}', NOW())
+                    ON CONFLICT (code) DO NOTHING
+                """), {"code": sport_code, "name": sport_name, "api_key": api_key})
+                await db.commit()
+                sport_row = await db.execute(
+                    text("SELECT id FROM sports WHERE code = :code"),
+                    {"code": sport_code},
+                )
+                sport = sport_row.fetchone()
+                logger.info(f"  ✅ Created sport: {sport_code} ({sport_name})")
             sport_id = sport[0]
             
             # Fetch from Odds API

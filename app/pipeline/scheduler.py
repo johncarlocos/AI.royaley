@@ -37,6 +37,31 @@ logger = logging.getLogger("royaley.scheduler")
 
 
 # =============================================================================
+# HELPER: Resolve tennis tournament keys (they rotate by tournament)
+# =============================================================================
+
+async def resolve_tennis_keys(api_key: str) -> dict:
+    """Discover active ATP/WTA tournament keys from Odds API."""
+    tennis_keys = {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://api.the-odds-api.com/v4/sports",
+                params={"apiKey": api_key},
+            )
+            if resp.status_code == 200:
+                for s in resp.json():
+                    key = s.get("key", "")
+                    if key.startswith("tennis_atp_") and s.get("active"):
+                        tennis_keys["ATP"] = key
+                    elif key.startswith("tennis_wta_") and s.get("active"):
+                        tennis_keys["WTA"] = key
+    except Exception as e:
+        logger.warning(f"  Failed to discover tennis keys: {e}")
+    return tennis_keys
+
+
+# =============================================================================
 # JOB 1: ODDS REFRESH - Updates upcoming_odds with latest market lines
 # =============================================================================
 
@@ -65,13 +90,19 @@ async def refresh_odds(db: AsyncSession, api_key: str) -> dict:
 
     logger.info(f"  Active sports with upcoming games: {[r[0] for r in sport_rows]}")
 
+    # Resolve tennis tournament keys
+    tennis_keys = await resolve_tennis_keys(api_key)
+
     markets = ["h2h", "spreads", "totals"]
     sharp_books = {"pinnacle", "pinnacle_alt"}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for sport_code, db_api_key in sport_rows:
-            # Resolve API key: DB first, then static mapping fallback
-            api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
+            # Tennis needs tournament-specific key
+            if sport_code in tennis_keys:
+                api_sport_key = tennis_keys[sport_code]
+            else:
+                api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
             if not api_sport_key:
                 logger.warning(f"    No API key for {sport_code}, skipping")
                 continue
@@ -380,10 +411,19 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
 
     logger.info(f"  Sports with ungraded games: {[r[0] for r in sport_rows]}")
 
+    # Resolve tennis tournament keys (they rotate by tournament)
+    tennis_keys = await resolve_tennis_keys(api_key)
+    if tennis_keys:
+        logger.info(f"  Active tennis tournaments: {tennis_keys}")
+
     # Fetch scores from Odds API
     async with httpx.AsyncClient(timeout=30.0) as client:
         for sport_code, db_api_key in sport_rows:
-            api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
+            # Tennis needs tournament-specific key for scores API
+            if sport_code in tennis_keys:
+                api_sport_key = tennis_keys[sport_code]
+            else:
+                api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
             if not api_sport_key:
                 logger.warning(f"    No API key for {sport_code}, skipping grading")
                 continue

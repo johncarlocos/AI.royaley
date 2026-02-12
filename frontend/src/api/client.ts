@@ -27,9 +27,31 @@ export const api = {
   },
 
   // Public API (no auth required) - for frontend live data
-  getPublicPredictions: async (params?: { sport?: string; signal_tier?: string; per_page?: number }) => {
+  getPublicPredictions: async (params?: { sport?: string; signal_tier?: string; per_page?: number; page?: number }) => {
     const { data } = await axiosClient.get('/public/predictions', { params });
     return data;
+  },
+
+  // Fetch ALL predictions across pages
+  getAllPublicPredictions: async (params?: { sport?: string; signal_tier?: string }) => {
+    const perPage = 200;
+    let page = 1;
+    let allPredictions: any[] = [];
+    
+    while (true) {
+      const { data } = await axiosClient.get('/public/predictions', {
+        params: { ...params, per_page: perPage, page },
+      });
+      const predictions = data?.predictions || [];
+      allPredictions = allPredictions.concat(predictions);
+      
+      // Stop if we got everything or no more data
+      const total = data?.total || 0;
+      if (allPredictions.length >= total || predictions.length === 0) break;
+      page++;
+    }
+    
+    return { predictions: allPredictions, total: allPredictions.length };
   },
 
   getDashboardStats: async () => {

@@ -228,7 +228,7 @@ const Predictions: React.FC = () => {
   const loadPredictions = async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
-      const data = await api.getPublicPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined, per_page: 200 });
+      const data = await api.getAllPublicPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined });
       setRows(transformToFlatRows(data?.predictions || (Array.isArray(data) ? data : [])));
     } catch (err) { console.error('Load predictions error:', err); setRows([]); }
     if (showLoading) setLoading(false);

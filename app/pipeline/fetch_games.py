@@ -485,18 +485,18 @@ async def generate_predictions_for_game(
     odds_data = {"num_books": game.num_books or 0}
     for row in all_odds:
         if row.bet_type == "spread":
-            spread = row.pin_home_line or row.avg_home_line or 0
+            spread = _f(row.pin_home_line or row.avg_home_line, 0)
             odds_data["consensus_spread"] = round(spread * 2) / 2 if spread else 0
             odds_data["spread_open"] = odds_data["consensus_spread"]
             odds_data["spread_close"] = odds_data["consensus_spread"]
         elif row.bet_type == "total":
-            total = row.pin_total or row.avg_total or 0
+            total = _f(row.pin_total or row.avg_total, 0)
             odds_data["consensus_total"] = round(total * 2) / 2 if total else 0
             odds_data["total_open"] = odds_data["consensus_total"]
             odds_data["total_close"] = odds_data["consensus_total"]
         elif row.bet_type == "moneyline":
-            odds_data["moneyline_home_close"] = row.pin_home_ml or row.avg_home_ml or -110
-            odds_data["moneyline_away_close"] = row.pin_away_ml or row.avg_away_ml or -110
+            odds_data["moneyline_home_close"] = _f(row.pin_home_ml or row.avg_home_ml, -110)
+            odds_data["moneyline_away_close"] = _f(row.pin_away_ml or row.avg_away_ml, -110)
             odds_data["moneyline_home_open"] = odds_data["moneyline_home_close"]
     
     # Fill defaults for odds not present
@@ -544,12 +544,12 @@ async def generate_predictions_for_game(
                 model_prob = result  # (positive_prob, negative_prob)
         
         if bet_type == "spread":
-            line = row.pin_home_line or row.avg_home_line
-            if line is not None:
+            line = _f(row.pin_home_line or row.avg_home_line)
+            if line:
                 line = round(line * 2) / 2
-            home_price = row.pin_home_odds or row.avg_home_odds
-            away_price = row.pin_away_odds or row.avg_away_odds
-            if line is not None and home_price is not None:
+            home_price = _f(row.pin_home_odds or row.avg_home_odds)
+            away_price = _f(row.pin_away_odds or row.avg_away_odds)
+            if line and home_price:
                 # Market-implied probabilities
                 mkt_home = _implied_prob(home_price)
                 mkt_away = _implied_prob(away_price) if away_price else (1 - mkt_home)
@@ -573,12 +573,12 @@ async def generate_predictions_for_game(
                         predictions_to_make.append(("away", mkt_away, -line if line else None, away_price, 0.0))
                     
         elif bet_type == "total":
-            total = row.pin_total or row.avg_total
-            if total is not None:
+            total = _f(row.pin_total or row.avg_total)
+            if total:
                 total = round(total * 2) / 2
-            over_price = row.pin_over_odds or row.avg_over_odds
-            under_price = row.pin_under_odds or row.avg_under_odds
-            if total is not None and over_price is not None:
+            over_price = _f(row.pin_over_odds or row.avg_over_odds)
+            under_price = _f(row.pin_under_odds or row.avg_under_odds)
+            if total and over_price:
                 mkt_over = _implied_prob(over_price)
                 mkt_under = _implied_prob(under_price) if under_price else (1 - mkt_over)
                 
@@ -599,9 +599,9 @@ async def generate_predictions_for_game(
                         predictions_to_make.append(("under", mkt_under, total, under_price, 0.0))
                     
         elif bet_type == "moneyline":
-            home_ml = row.pin_home_ml or row.avg_home_ml
-            away_ml = row.pin_away_ml or row.avg_away_ml
-            if home_ml is not None and away_ml is not None:
+            home_ml = _f(row.pin_home_ml or row.avg_home_ml)
+            away_ml = _f(row.pin_away_ml or row.avg_away_ml)
+            if home_ml and away_ml:
                 mkt_home = _implied_prob(home_ml)
                 mkt_away = _implied_prob(away_ml)
                 total_prob = mkt_home + mkt_away
@@ -726,22 +726,31 @@ async def generate_predictions_for_game(
     return count
 
 
-def _implied_prob(american_odds: int) -> float:
+def _implied_prob(american_odds) -> float:
     """Convert American odds to implied probability."""
     if american_odds is None:
         return 0.5
+    american_odds = float(american_odds)
     if american_odds > 0:
         return 100 / (american_odds + 100)
     else:
         return abs(american_odds) / (abs(american_odds) + 100)
 
 
-def _american_to_decimal(american_odds: int) -> float:
+def _american_to_decimal(american_odds) -> float:
     """Convert American odds to decimal odds."""
+    american_odds = float(american_odds)
     if american_odds > 0:
         return (american_odds / 100) + 1
     else:
         return (100 / abs(american_odds)) + 1
+
+
+def _f(val, default=0.0) -> float:
+    """Safely convert Decimal/None to float."""
+    if val is None:
+        return default
+    return float(val)
 
 
 # =============================================================================

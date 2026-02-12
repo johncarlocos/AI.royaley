@@ -106,35 +106,27 @@ def predict_probability(
     try:
         # Build feature array from dict using scaler's expected feature order
         if feature_dict is not None and scaler is not None and hasattr(scaler, "feature_names_in_"):
+            import pandas as pd
             expected_features = list(scaler.feature_names_in_)
-            feature_values = [feature_dict.get(f, 0.0) for f in expected_features]
-            features = np.array([feature_values])
+            feature_values = [float(feature_dict.get(f, 0.0)) for f in expected_features]
+            features = pd.DataFrame([feature_values], columns=expected_features)
         elif feature_dict is not None:
             # No scaler with feature names — use the full 87-feature order
             from app.pipeline.live_feature_builder import FEATURE_NAMES_87
-            feature_values = [feature_dict.get(f, 0.0) for f in FEATURE_NAMES_87]
+            feature_values = [float(feature_dict.get(f, 0.0)) for f in FEATURE_NAMES_87]
             features = np.array([feature_values])
         
         if features is None:
             logger.error(f"No features provided for {sport_code}/{bet_type}")
             return None
         
-        # Check feature count matches
-        expected_n = entry.get("n_features")
-        actual_n = features.shape[1]
-        
-        if expected_n and actual_n != expected_n:
-            if actual_n < expected_n:
-                padding = np.zeros((features.shape[0], expected_n - actual_n))
-                features = np.hstack([features, padding])
-                logger.warning(f"Padded features from {actual_n} to {expected_n}")
-            else:
-                features = features[:, :expected_n]
-                logger.warning(f"Truncated features from {actual_n} to {expected_n}")
-        
         # Scale features
         if scaler is not None:
             features = scaler.transform(features)
+        
+        # Ensure numpy array for predict
+        if not isinstance(features, np.ndarray):
+            features = np.array(features)
         
         # Predict
         proba = model.predict_proba(features)

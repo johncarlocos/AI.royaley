@@ -256,7 +256,7 @@ async def _get_team_rolling_stats(
                 FROM games g
                 WHERE g.sport_id = :sport_id
                   AND (g.home_team_id = :team_id OR g.away_team_id = :team_id)
-                  AND g.status = 'completed'
+                  AND g.status = 'final'
                   AND g.scheduled_at < :before
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
@@ -358,6 +358,10 @@ async def _get_team_rolling_stats(
         
     except Exception as e:
         logger.error(f"Team stats failed for {team_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return _default_team_stats()
 
 
@@ -377,7 +381,7 @@ async def _get_h2h_stats(
                 WHERE sport_id = :sport_id
                   AND ((home_team_id = :home AND away_team_id = :away)
                     OR (home_team_id = :away AND away_team_id = :home))
-                  AND status = 'completed'
+                  AND status = 'final'
                   AND scheduled_at < :before
                   AND home_score IS NOT NULL
                 ORDER BY scheduled_at DESC
@@ -417,6 +421,10 @@ async def _get_h2h_stats(
         
     except Exception as e:
         logger.error(f"H2H stats failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return {"home_wins_last5": 2.5, "home_avg_margin": 0, "total_avg": 0}
 
 

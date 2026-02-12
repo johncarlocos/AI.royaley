@@ -146,11 +146,11 @@ team_records AS (
         SUM(CASE WHEN NOT won THEN 1 ELSE 0 END) as losses
     FROM (
         SELECT home_team_id as team_id, sport_id, home_score > away_score as won
-        FROM games WHERE status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
+        FROM games WHERE home_score IS NOT NULL AND away_score IS NOT NULL
             AND scheduled_at >= NOW() - INTERVAL '365 days'
         UNION ALL
         SELECT away_team_id as team_id, sport_id, away_score > home_score as won
-        FROM games WHERE status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
+        FROM games WHERE home_score IS NOT NULL AND away_score IS NOT NULL
             AND scheduled_at >= NOW() - INTERVAL '365 days'
     ) t
     GROUP BY team_id, sport_id

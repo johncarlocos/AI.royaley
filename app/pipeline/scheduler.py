@@ -388,6 +388,16 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 logger.warning(f"    No API key for {sport_code}, skipping grading")
                 continue
 
+            # Get sport_id for team name matching
+            sport_id_row = await db.execute(
+                text("SELECT id FROM sports WHERE code = :code"),
+                {"code": sport_code},
+            )
+            sport_id_result = sport_id_row.fetchone()
+            if not sport_id_result:
+                continue
+            sport_id = sport_id_result[0]
+
             try:
                 resp = await client.get(
                     f"https://api.the-odds-api.com/v4/sports/{api_sport_key}/scores",
@@ -427,13 +437,27 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                         continue
 
                     # Update upcoming_game with scores
+                    # Match by home_team_name + sport_id + scheduled_at (within 2 hours)
+                    # because scores API returns different external_ids than odds API
+                    home_name = game.get("home_team", "")
+                    commence_time = game.get("commence_time", "")
+
                     result = await db.execute(text("""
                         UPDATE upcoming_games
                         SET home_score = :hs, away_score = :as_score,
                             status = 'completed', updated_at = NOW()
-                        WHERE external_id = :eid AND status = 'scheduled'
+                        WHERE sport_id = :sport_id
+                          AND home_team_name = :home_name
+                          AND status = 'scheduled'
+                          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :commence::timestamptz))) < 7200
                         RETURNING id
-                    """), {"hs": home_score, "as_score": away_score, "eid": ext_id})
+                    """), {
+                        "hs": home_score,
+                        "as_score": away_score,
+                        "sport_id": sport_id,
+                        "home_name": home_name,
+                        "commence": commence_time if commence_time else "2000-01-01T00:00:00Z",
+                    })
 
                     updated = result.fetchone()
                     if not updated:

@@ -53,6 +53,9 @@ class PublicPrediction(BaseModel):
     current_under_odds: Optional[int] = None
     current_home_ml: Optional[int] = None
     current_away_ml: Optional[int] = None
+    # Team records (season W-L)
+    home_record: Optional[str] = None
+    away_record: Optional[str] = None
 
 class PublicPredictionsResponse(BaseModel):
     predictions: List[PublicPrediction]
@@ -136,6 +139,21 @@ WITH current_odds AS (
         ) as curr_away_ml
     FROM upcoming_odds
     GROUP BY upcoming_game_id, bet_type
+),
+team_records AS (
+    SELECT team_id, sport_id,
+        SUM(CASE WHEN won THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN NOT won THEN 1 ELSE 0 END) as losses
+    FROM (
+        SELECT home_team_id as team_id, sport_id, home_score > away_score as won
+        FROM games WHERE status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
+            AND scheduled_at >= NOW() - INTERVAL '365 days'
+        UNION ALL
+        SELECT away_team_id as team_id, sport_id, away_score > home_score as won
+        FROM games WHERE status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
+            AND scheduled_at >= NOW() - INTERVAL '365 days'
+    ) t
+    GROUP BY team_id, sport_id
 )
 """
 
@@ -229,7 +247,10 @@ async def get_public_predictions(
             pr.clv as result_clv,
             pr.profit_loss,
             pr.closing_line as result_closing_line,
-            pr.closing_odds as result_closing_odds
+            pr.closing_odds as result_closing_odds,
+            -- Team records
+            htr.wins as home_wins, htr.losses as home_losses,
+            atr.wins as away_wins, atr.losses as away_losses
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
@@ -237,6 +258,8 @@ async def get_public_predictions(
             ON co.upcoming_game_id = p.upcoming_game_id 
             AND co.bet_type = p.bet_type
         LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+        LEFT JOIN team_records htr ON htr.team_id = COALESCE(ug.home_team_id, g.home_team_id) AND htr.sport_id = COALESCE(ug.sport_id, g.sport_id)
+        LEFT JOIN team_records atr ON atr.team_id = COALESCE(ug.away_team_id, g.away_team_id) AND atr.sport_id = COALESCE(ug.sport_id, g.sport_id)
         WHERE (p.upcoming_game_id IS NOT NULL OR p.game_id IS NOT NULL)
         {where_sql}
         ORDER BY game_time ASC, p.created_at DESC
@@ -285,6 +308,8 @@ async def get_public_predictions(
             current_under_odds=_safe_int(row.curr_under_odds),
             current_home_ml=_safe_int(row.curr_home_ml),
             current_away_ml=_safe_int(row.curr_away_ml),
+            home_record=f"{row.home_wins}-{row.home_losses}" if row.home_wins is not None else None,
+            away_record=f"{row.away_wins}-{row.away_losses}" if row.away_wins is not None else None,
         ))
 
     return PublicPredictionsResponse(

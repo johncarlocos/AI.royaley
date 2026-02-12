@@ -206,7 +206,7 @@ const Predictions: React.FC = () => {
     totalPredictions: rows.length,
     totalWins: wins, totalLosses: losses, totalPushes: pushes,
     winRate: graded.length > 0 ? Math.round(wins / graded.length * 1000) / 10 : 0,
-    avgEdge: rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.edge, 0) / rows.length * 10) / 10 : 0,
+    avgEdge: rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.edge, 0) / rows.length * 1000) / 10 : 0,
     avgCLV: 0, roi: 0, bankrollGrowth: 0,
   };
 
@@ -359,7 +359,7 @@ const Predictions: React.FC = () => {
               <StatCard title="Win Rate" value={graded.length > 0 ? `${summaryStats.winRate}%` : '0%'} subtitle="Across all tiers" icon={<EmojiEvents sx={{ fontSize: 18 }} />} color="success" />
             </Grid>
             <Grid item xs={6} sm={3}>
-              <StatCard title="Average Edge" value={`+${summaryStats.avgEdge}%`} subtitle={`CLV: +${summaryStats.avgCLV}%`} icon={<TrendingUp sx={{ fontSize: 18 }} />} color="info" />
+              <StatCard title="Average Edge" value={`${summaryStats.avgEdge >= 0 ? '+' : ''}${summaryStats.avgEdge}%`} subtitle={`CLV: +${summaryStats.avgCLV}%`} icon={<TrendingUp sx={{ fontSize: 18 }} />} color="info" />
             </Grid>
             <Grid item xs={6} sm={3}>
               <StatCard title="ROI" value={`+${summaryStats.roi}%`} subtitle={`Bankroll: +${summaryStats.bankrollGrowth}%`} icon={<Casino sx={{ fontSize: 18 }} />} color="warning" />
@@ -441,7 +441,8 @@ const Predictions: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {paginatedGames.map((game) => {
+              {paginatedGames.map((game, gameIdx) => {
+                const gameNum = page * rowsPerPage + gameIdx + 1;
                 return (
                   <React.Fragment key={game.game_id}>
                     {game.bets.map((row, betIdx) => {
@@ -456,7 +457,7 @@ const Predictions: React.FC = () => {
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, ...betDivider }}>{row.sport}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{row.date}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{row.time}</TableCell>
-                            <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, borderBottom: 0 }}>{row.away_rotation}</TableCell>
+                            <TableCell align="center" rowSpan={2} sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, verticalAlign: 'middle', ...betDivider }}>{gameNum}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, fontWeight: row.pick_team === 'away' ? 700 : 400, borderBottom: 0 }}>{row.away_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0 }}>{row.away_record}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open)}</TableCell>
@@ -473,7 +474,6 @@ const Predictions: React.FC = () => {
                           </TableRow>
                           {/* Home Row */}
                           <TableRow>
-                            <TableCell align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, ...betDivider }}>{row.home_rotation}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, fontWeight: row.pick_team === 'home' ? 700 : 400, ...betDivider }}>{row.home_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, ...betDivider }}>{row.home_record}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, ...betDivider }}>{formatLine(row.home_circa_open)}</TableCell>
@@ -693,10 +693,10 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
       datetime: gameTime,
       away_rotation: '',
       away_team: pred.away_team || 'TBD',
-      away_record: '',
+      away_record: pred.away_record || '',
       home_rotation: '',
       home_team: pred.home_team || 'TBD',
-      home_record: '',
+      home_record: pred.home_record || '',
       bet_type: bt,
       bet_type_label: btLabel,
       // Circa columns (market)
@@ -716,7 +716,22 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
       clv: pred.clv != null ? pred.clv : null,
       signal_tier: (pred.signal_tier || 'D') as 'A' | 'B' | 'C' | 'D',
       result,
-      reason: `Model probability: ${Math.round(prob * 100)}% | Edge: ${(edge * 100).toFixed(1)}%`,
+      reason: (() => {
+        const edgePct = (edge * 100).toFixed(1);
+        const probPct = Math.round(prob * 100);
+        const marketProb = Math.round((prob - edge) * 100);
+        if (bt === 'moneyline') {
+          return `Model assigns ${probPct}% win probability vs market-implied ${marketProb}%. Edge: ${edgePct}% → System fair odds: ${typeof homeSystemCurrent === 'number' ? homeSystemCurrent : '?'} / ${typeof awaySystemCurrent === 'number' ? awaySystemCurrent : '?'}`;
+        } else if (bt === 'spread') {
+          const marketLine = side === 'home' ? homeOpen : awayOpen;
+          const systemLine = side === 'home' ? homeSystemCurrent : awaySystemCurrent;
+          return `Model gives ${probPct}% to cover ${typeof marketLine === 'number' ? (marketLine > 0 ? '+' : '') + marketLine : '?'} (market implies ${marketProb}%). System fair line: ${typeof systemLine === 'number' ? (systemLine > 0 ? '+' : '') + systemLine : '?'}. Edge: ${edgePct}%`;
+        } else {
+          const marketTotal = typeof homeOpen === 'number' ? homeOpen : 0;
+          const systemTotal = typeof homeSystemCurrent === 'number' ? homeSystemCurrent : 0;
+          return `Model gives ${probPct}% for ${side === 'over' ? 'Over' : 'Under'} ${marketTotal} (market implies ${marketProb}%). System fair total: ${systemTotal}. Edge: ${edgePct}%`;
+        }
+      })(),
     };
   });
 };

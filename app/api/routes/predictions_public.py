@@ -3,7 +3,7 @@ ROYALEY - Public Predictions API
 No authentication required - read-only access for frontend dashboard.
 Returns opening snapshot (from predictions table) + current consensus (from upcoming_odds).
 """
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -563,8 +563,8 @@ async def get_betting_summary(
             p.line_at_prediction, p.odds_at_prediction,
             -- Determine pick_team from predicted_side
             CASE
-                WHEN p.predicted_side ILIKE '%%' || COALESCE(ug.home_team_name, ht.name) || '%%' THEN 'home'
-                WHEN p.predicted_side ILIKE '%%' || COALESCE(ug.away_team_name, at.name) || '%%' THEN 'away'
+                WHEN p.predicted_side ILIKE '%%' || COALESCE(ug.home_team_name, ht_legacy.name) || '%%' THEN 'home'
+                WHEN p.predicted_side ILIKE '%%' || COALESCE(ug.away_team_name, at_legacy.name) || '%%' THEN 'away'
                 WHEN p.predicted_side ILIKE 'over%%' THEN 'over'
                 WHEN p.predicted_side ILIKE 'under%%' THEN 'under'
                 ELSE NULL
@@ -673,7 +673,7 @@ async def get_betting_summary(
     if not equity_curve:
         today = date.today()
         for i in range(30, -1, -1):
-            d = today - __import__('datetime').timedelta(days=i)
+            d = today - timedelta(days=i)
             equity_curve.append({"date": d.strftime("%b %d"), "value": initial_bankroll})
 
     stats = BettingSummaryStats(

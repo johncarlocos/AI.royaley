@@ -178,7 +178,7 @@ const Betting: React.FC = () => {
     if (!gt) return { date: '-', time: '-' };
     const d = new Date(gt);
     return {
-      date: d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' }),
+      date: d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' }),
       time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }),
     };
   };

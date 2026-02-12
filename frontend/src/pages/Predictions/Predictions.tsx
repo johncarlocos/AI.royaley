@@ -279,7 +279,18 @@ const Predictions: React.FC = () => {
       games.sort((a, b) => {
         switch (sortField) {
           case 'sport': return m * a.sport.localeCompare(b.sport);
-          case 'datetime': return m * (a.datetime.getTime() - b.datetime.getTime());
+          case 'datetime': {
+            if (sortOrder === 'asc') {
+              // Smart sort: upcoming games (soonest first) at top, then past games (most recent first)
+              const now = Date.now();
+              const aFuture = a.datetime.getTime() >= now;
+              const bFuture = b.datetime.getTime() >= now;
+              if (aFuture !== bFuture) return aFuture ? -1 : 1;
+              if (aFuture) return a.datetime.getTime() - b.datetime.getTime();
+              return b.datetime.getTime() - a.datetime.getTime();
+            }
+            return m * (a.datetime.getTime() - b.datetime.getTime());
+          }
           case 'probability': return m * (Math.max(...a.bets.map(x => x.probability)) - Math.max(...b.bets.map(x => x.probability)));
           case 'edge': return m * (Math.max(...a.bets.map(x => x.edge)) - Math.max(...b.bets.map(x => x.edge)));
           case 'clv': {
@@ -410,7 +421,7 @@ const Predictions: React.FC = () => {
               <TableRow>
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'sport'} direction={sortField === 'sport' ? sortOrder : 'asc'} onClick={() => handleSort('sport')}>Sport</TableSortLabel></TableCell>
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'datetime'} direction={sortField === 'datetime' ? sortOrder : 'asc'} onClick={() => handleSort('datetime')}>Date</TableSortLabel></TableCell>
-                <TableCell sx={hdr}>Time</TableCell>
+                <TableCell sx={hdr}>Time (PST)</TableCell>
                 <TableCell sx={hdr} align="center">Game #</TableCell>
                 <TableCell sx={hdr}>Team</TableCell>
                 <TableCell sx={hdr}>Record</TableCell>
@@ -519,8 +530,8 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
   if (!data || data.length === 0) return [];
   return data.map((pred: any, idx: number) => {
     const gameTime = pred.game_time ? new Date(pred.game_time) : new Date();
-    const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
-    const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' });
+    const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' });
     const side = pred.predicted_side || '';
     const bt = pred.bet_type || 'spread';
     const line = pred.line_at_prediction;

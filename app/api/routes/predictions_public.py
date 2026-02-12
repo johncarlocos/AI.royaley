@@ -145,13 +145,41 @@ team_records AS (
         SUM(CASE WHEN won THEN 1 ELSE 0 END) as wins,
         SUM(CASE WHEN NOT won THEN 1 ELSE 0 END) as losses
     FROM (
-        SELECT home_team_id as team_id, sport_id, home_score > away_score as won
-        FROM games WHERE home_score IS NOT NULL AND away_score IS NOT NULL
-            AND scheduled_at >= NOW() - INTERVAL '365 days'
+        SELECT home_team_id as team_id, g.sport_id, home_score > away_score as won
+        FROM games g
+        JOIN sports s ON s.id = g.sport_id
+        WHERE home_score IS NOT NULL AND away_score IS NOT NULL
+            AND scheduled_at >= CASE s.code
+                WHEN 'NFL' THEN DATE '2025-09-01'
+                WHEN 'NCAAF' THEN DATE '2025-08-15'
+                WHEN 'NBA' THEN DATE '2025-10-15'
+                WHEN 'NCAAB' THEN DATE '2025-11-01'
+                WHEN 'NHL' THEN DATE '2025-10-01'
+                WHEN 'MLB' THEN DATE '2025-03-20'
+                WHEN 'WNBA' THEN DATE '2025-05-01'
+                WHEN 'CFL' THEN DATE '2025-06-01'
+                WHEN 'ATP' THEN DATE '2025-01-01'
+                WHEN 'WTA' THEN DATE '2025-01-01'
+                ELSE NOW() - INTERVAL '180 days'
+            END
         UNION ALL
-        SELECT away_team_id as team_id, sport_id, away_score > home_score as won
-        FROM games WHERE home_score IS NOT NULL AND away_score IS NOT NULL
-            AND scheduled_at >= NOW() - INTERVAL '365 days'
+        SELECT away_team_id as team_id, g.sport_id, away_score > home_score as won
+        FROM games g
+        JOIN sports s ON s.id = g.sport_id
+        WHERE home_score IS NOT NULL AND away_score IS NOT NULL
+            AND scheduled_at >= CASE s.code
+                WHEN 'NFL' THEN DATE '2025-09-01'
+                WHEN 'NCAAF' THEN DATE '2025-08-15'
+                WHEN 'NBA' THEN DATE '2025-10-15'
+                WHEN 'NCAAB' THEN DATE '2025-11-01'
+                WHEN 'NHL' THEN DATE '2025-10-01'
+                WHEN 'MLB' THEN DATE '2025-03-20'
+                WHEN 'WNBA' THEN DATE '2025-05-01'
+                WHEN 'CFL' THEN DATE '2025-06-01'
+                WHEN 'ATP' THEN DATE '2025-01-01'
+                WHEN 'WTA' THEN DATE '2025-01-01'
+                ELSE NOW() - INTERVAL '180 days'
+            END
     ) t
     GROUP BY team_id, sport_id
 )

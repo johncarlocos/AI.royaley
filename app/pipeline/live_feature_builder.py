@@ -221,7 +221,18 @@ async def build_features_for_game(
         features["has_spread_odds"] = 1 if consensus_spread != 0 else 0
         features["has_total_odds"] = 1 if consensus_total != 0 else 0
         
-        # Validate we have all 87 features
+        # === TENNIS-SPECIFIC FEATURES (WTA=38, ATP=39) ===
+        # These are simplified diffs used by tennis models (no spread/total)
+        features["power_diff"] = features["power_rating_diff"]
+        features["wins_diff"] = features["home_wins_last10"] - features["away_wins_last10"]
+        features["wins5_diff"] = features["home_wins_last5"] - features["away_wins_last5"]
+        features["winpct_diff"] = features["win_pct_diff"]
+        features["rest_diff"] = features["rest_advantage"]
+        features["pts_diff"] = features["scoring_diff"]
+        features["streak_diff"] = features["momentum_diff"]
+        features["games_diff"] = features["home_season_game_num"] - features["away_season_game_num"]
+        
+        # Validate we have all 87 base features
         missing = [f for f in FEATURE_NAMES_87 if f not in features]
         if missing:
             logger.warning(f"Missing features (defaulting to 0): {missing}")

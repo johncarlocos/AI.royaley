@@ -512,7 +512,11 @@ async def generate_predictions_for_game(
     
     # 4. Build features for ML model
     features = None
-    has_model = load_model(sport_code, "spread") is not None  # Check if any model exists
+    # Check if ANY model exists for this sport (spread, total, or moneyline)
+    has_model = any(
+        load_model(sport_code, bt) is not None
+        for bt in ["spread", "total", "moneyline"]
+    )
     
     if has_model:
         try:

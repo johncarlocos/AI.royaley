@@ -707,48 +707,71 @@ async def public_models(
 ):
     """
     Public read-only list of ML models.
-    Joins ml_models with sports to get sport_code.
-    Extracts accuracy/auc from performance_metrics JSONB.
+    Filters out placeholder models (empty performance_metrics).
+    Prefers wfv_accuracy over raw accuracy (avoids data leakage inflation).
     """
     conditions = []
     if sport_code:
-        conditions.append(f"AND s.code = '{sport_code.upper()}'")
+        conditions.append(f"AND s.code = :sport_code")
     if production_only:
         conditions.append("AND m.is_production = true")
 
     where_clause = " ".join(conditions)
 
-    result = await db.execute(text(f"""
+    query = text(f"""
         SELECT
             m.id::text                                    AS id,
             s.code                                        AS sport_code,
             m.bet_type,
             m.framework::text                             AS framework,
             m.version,
-            CASE WHEN m.is_production THEN 'production' ELSE 'ready' END AS status,
-            (m.performance_metrics->>'accuracy')::float   AS accuracy,
-            (m.performance_metrics->>'auc')::float        AS auc,
-            (m.performance_metrics->>'log_loss')::float   AS log_loss,
+            m.is_production,
+            m.performance_metrics                         AS metrics,
             m.created_at,
             m.training_samples
         FROM ml_models m
         JOIN sports s ON s.id = m.sport_id
-        WHERE 1=1 {where_clause}
+        WHERE m.performance_metrics != '{{}}'::jsonb
+          AND m.performance_metrics IS NOT NULL
+          {where_clause}
         ORDER BY m.is_production DESC, m.created_at DESC
-    """))
+    """)
+
+    params = {}
+    if sport_code:
+        params["sport_code"] = sport_code.upper()
+
+    result = await db.execute(query, params)
 
     models = []
     for row in result.fetchall():
+        pm = row.metrics or {}
+
+        # Prefer walk-forward validation accuracy (real) over raw accuracy (inflated)
+        raw_acc = pm.get("accuracy")
+        wfv_acc = pm.get("wfv_accuracy")
+        display_acc = wfv_acc if wfv_acc and wfv_acc > 0 else raw_acc
+
+        raw_auc = pm.get("auc")
+        wfv_auc = pm.get("wfv_auc")
+        display_auc = wfv_auc if wfv_auc and wfv_auc > 0 else raw_auc
+
         models.append({
             "id": row.id,
             "sport_code": row.sport_code,
             "bet_type": row.bet_type,
             "framework": row.framework,
             "version": row.version,
-            "status": row.status,
-            "accuracy": row.accuracy,
-            "auc": row.auc,
-            "log_loss": row.log_loss,
+            "status": "production" if row.is_production else "ready",
+            "accuracy": display_acc,
+            "raw_accuracy": raw_acc,
+            "wfv_accuracy": wfv_acc,
+            "auc": display_auc,
+            "raw_auc": raw_auc,
+            "wfv_auc": wfv_auc,
+            "log_loss": pm.get("log_loss"),
+            "wfv_roi": pm.get("wfv_roi"),
+            "wfv_n_folds": pm.get("wfv_n_folds"),
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "training_samples": row.training_samples,
         })
@@ -764,11 +787,10 @@ async def public_training_runs(
 ):
     """
     Public read-only list of recent training runs.
-    Joins with ml_models and sports to get sport_code/bet_type.
     """
     conditions = []
     if sport_code:
-        conditions.append(f"AND s.code = '{sport_code.upper()}'")
+        conditions.append("AND s.code = :sport_code")
 
     where_clause = " ".join(conditions)
     safe_limit = min(max(limit, 1), 100)
@@ -790,8 +812,8 @@ async def public_training_runs(
         JOIN sports s ON s.id = m.sport_id
         WHERE 1=1 {where_clause}
         ORDER BY t.started_at DESC
-        LIMIT {safe_limit}
-    """))
+        LIMIT :lim
+    """), {"sport_code": sport_code.upper() if sport_code else None, "lim": safe_limit})
 
     runs = []
     for row in result.fetchall():
@@ -809,3 +831,107 @@ async def public_training_runs(
         })
 
     return runs
+
+
+@router.post("/models/{model_id}/promote")
+async def public_promote_model(model_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Promote a model to production.
+    Demotes any existing production model for the same sport/bet_type.
+    """
+    # Get model
+    result = await db.execute(text("""
+        SELECT m.id, m.sport_id, m.bet_type, m.is_production
+        FROM ml_models m WHERE m.id = :mid
+    """), {"mid": model_id})
+    model = result.fetchone()
+    if not model:
+        return {"error": "Model not found"}
+
+    # Demote current production model for same sport/bet_type
+    await db.execute(text("""
+        UPDATE ml_models SET is_production = false
+        WHERE sport_id = :sid AND bet_type = :bt AND is_production = true AND id != :mid
+    """), {"sid": model.sport_id, "bt": model.bet_type, "mid": model_id})
+
+    # Promote
+    await db.execute(text("""
+        UPDATE ml_models SET is_production = true WHERE id = :mid
+    """), {"mid": model_id})
+    await db.commit()
+
+    return {"message": "Model promoted to production", "model_id": model_id}
+
+
+@router.post("/models/{model_id}/deprecate")
+async def public_deprecate_model(model_id: str, db: AsyncSession = Depends(get_db)):
+    """Deprecate (un-promote) a model."""
+    await db.execute(text("""
+        UPDATE ml_models SET is_production = false WHERE id = :mid
+    """), {"mid": model_id})
+    await db.commit()
+    return {"message": "Model deprecated", "model_id": model_id}
+
+
+@router.post("/models/training-runs/{run_id}/cancel")
+async def cancel_training_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    """Cancel a stuck training run by setting status to failed."""
+    await db.execute(text("""
+        UPDATE training_runs SET status = 'failed', error_message = 'Cancelled by user',
+               completed_at = NOW()
+        WHERE id = :rid AND status = 'running'
+    """), {"rid": run_id})
+    await db.commit()
+    return {"message": "Training run cancelled", "run_id": run_id}
+
+
+@router.post("/models/reinforce")
+async def reinforce_model(
+    sport_code: str = Query(...),
+    bet_type: str = Query(...),
+    framework: str = Query("meta_ensemble"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Trigger model reinforcement (retraining with latest data).
+    Creates a new training run that will use updated data.
+    The new model can then be compared and promoted if better.
+    """
+    from app.services.ml.training_service import get_training_service
+    import asyncio
+
+    # Get sport
+    result = await db.execute(text("SELECT id FROM sports WHERE code = :sc"), {"sc": sport_code.upper()})
+    sport = result.fetchone()
+    if not sport:
+        return {"error": f"Sport {sport_code} not found"}
+
+    # Check for running training
+    result = await db.execute(text("""
+        SELECT t.id FROM training_runs t
+        JOIN ml_models m ON m.id = t.model_id
+        JOIN sports s ON s.id = m.sport_id
+        WHERE s.code = :sc AND m.bet_type = :bt AND t.status = 'running'
+    """), {"sc": sport_code.upper(), "bt": bet_type.lower()})
+    if result.fetchone():
+        return {"error": "Training already in progress for this sport/bet_type"}
+
+    try:
+        service = get_training_service()
+        # Fire and forget - training runs in background
+        asyncio.create_task(
+            service.train_model(
+                sport_code=sport_code.upper(),
+                bet_type=bet_type.lower(),
+                framework=framework,
+                save_to_db=True,
+            )
+        )
+        return {
+            "message": f"Reinforcement training started for {sport_code} {bet_type}",
+            "sport_code": sport_code.upper(),
+            "bet_type": bet_type.lower(),
+            "framework": framework,
+        }
+    except Exception as e:
+        return {"error": str(e)}

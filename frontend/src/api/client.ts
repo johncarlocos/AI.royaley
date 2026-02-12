@@ -103,6 +103,26 @@ export const api = {
     return data;
   },
 
+  promoteModel: async (modelId: string) => {
+    const { data } = await axiosClient.post(`/public/models/${modelId}/promote`);
+    return data;
+  },
+
+  deprecateModel: async (modelId: string) => {
+    const { data } = await axiosClient.post(`/public/models/${modelId}/deprecate`);
+    return data;
+  },
+
+  cancelTrainingRun: async (runId: string) => {
+    const { data } = await axiosClient.post(`/public/models/training-runs/${runId}/cancel`);
+    return data;
+  },
+
+  reinforceModel: async (params: { sport_code: string; bet_type: string; framework?: string }) => {
+    const { data } = await axiosClient.post('/public/models/reinforce', null, { params });
+    return data;
+  },
+
   // Analytics
   getAnalytics: async () => {
     const { data } = await axiosClient.get('/analytics');

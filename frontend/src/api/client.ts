@@ -59,6 +59,11 @@ export const api = {
     return data;
   },
 
+  getBettingSummary: async (params?: { sport?: string; tiers?: string; stake?: number; initial_bankroll?: number }) => {
+    const { data } = await axiosClient.get('/public/betting-summary', { params });
+    return data;
+  },
+
   // Predictions (authenticated)
   getPredictions: async (params?: { sport?: string }) => {
     const { data } = await axiosClient.get('/predictions', { params });

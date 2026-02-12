@@ -66,7 +66,7 @@ const Dashboard: React.FC = () => {
           game: p.game || '',
           pick: p.pick || '',
           tier: p.tier || 'D',
-          time: p.time || '',
+          time: p.time ? new Date(p.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }) : '',
         }))
       );
 

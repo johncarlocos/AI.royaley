@@ -137,9 +137,11 @@ const Betting: React.FC = () => {
   const sortedBets = [...filteredBets].sort((a, b) => {
     const aPending = a.result === 'pending';
     const bPending = b.result === 'pending';
-    if (aPending !== bPending) return aPending ? -1 : 1;
+    // Graded bets first, then pending
+    if (aPending !== bPending) return aPending ? 1 : -1;
     const aTime = a.game_time ? new Date(a.game_time).getTime() : 0;
     const bTime = b.game_time ? new Date(b.game_time).getTime() : 0;
+    // Graded: most recent first. Pending: soonest first.
     return aPending ? aTime - bTime : bTime - aTime;
   });
 
@@ -317,7 +319,7 @@ const Betting: React.FC = () => {
                 <Tab label={`Graded (${stats.graded_bets})`} sx={{ fontSize: 12, minHeight: 36, py: 0.5 }} />
               </Tabs>
               <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11 }}>
-                Avg Edge: <span style={{ color: stats.avg_edge >= 0 ? '#4caf50' : '#ef5350', fontWeight: 600 }}>+{stats.avg_edge}%</span>
+                Avg Edge: <span style={{ color: stats.avg_edge >= 0 ? '#4caf50' : '#ef5350', fontWeight: 600 }}>{stats.avg_edge >= 0 ? '+' : ''}{stats.avg_edge}%</span>
               </Typography>
             </Box>
             {loading && <LinearProgress />}

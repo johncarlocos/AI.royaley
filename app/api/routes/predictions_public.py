@@ -419,7 +419,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "pick": pick_str,
             "tier": row.signal_tier or "D",
             "probability": float(row.probability),
-            "time": row.game_time.strftime("%-I:%M %p") if row.game_time else "",
+            "time": (row.game_time.isoformat() + 'Z') if row.game_time else "",  # ISO for frontend PST conversion
         })
 
     return DashboardStats(

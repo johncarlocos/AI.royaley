@@ -138,7 +138,7 @@ const PerformanceTable: React.FC<{ data: PerformanceRow[]; isDark: boolean }> = 
                 {row.wins + row.losses > 0 ? `${row.winPct.toFixed(1)}%` : '-'}
               </TableCell>
               <TableCell align="center" sx={{ color: row.edge > 0 ? 'success.main' : row.edge < 0 ? 'error.main' : 'text.secondary' }}>
-                {row.edge > 0 ? '+' : ''}{row.edge.toFixed(1)}%
+                {row.edge > 0 ? '+' : ''}{(row.edge * 100).toFixed(1)}%
               </TableCell>
               <TableCell align="center" sx={{ color: row.clv > 0 ? 'success.main' : row.clv < 0 ? 'error.main' : 'text.secondary' }}>
                 {row.clv > 0 ? '+' : ''}{row.clv.toFixed(1)}%
@@ -465,7 +465,7 @@ const Predictions: React.FC = () => {
                             <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current)}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}><Typography sx={{ fontSize: 11, fontWeight: 600, color: 'success.main', lineHeight: 1.3 }}>{row.system_pick}</Typography><Typography sx={{ fontSize: 10, color: 'text.secondary' }}>{row.bet_type_label}</Typography></TableCell>
                             <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{formatPercent(row.probability)}</TableCell>
-                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider, color: row.edge >= 3 ? 'success.main' : row.edge >= 1 ? 'warning.main' : 'text.secondary' }}>+{row.edge.toFixed(1)}%</TableCell>
+                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider, color: (row.edge * 100) >= 3 ? 'success.main' : (row.edge * 100) >= 1 ? 'warning.main' : 'text.secondary' }}>{row.edge >= 0 ? '+' : ''}{(row.edge * 100).toFixed(1)}%</TableCell>
                             <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider, color: row.clv != null ? (row.clv > 0 ? 'success.main' : row.clv < 0 ? 'error.main' : 'inherit') : 'inherit' }}>{row.clv != null ? `${row.clv > 0 ? '+' : ''}${row.clv.toFixed(1)}%` : '-'}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}><TierBadge tier={row.signal_tier} /></TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{getStatusChip(row.result)}</TableCell>
@@ -509,7 +509,7 @@ const Predictions: React.FC = () => {
               </Box>
               <Grid container spacing={2} sx={{ mb: 2 }}>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Probability</Typography><Typography variant="h6" fontWeight={700}>{formatPercent(reasonDialog.row.probability)}</Typography></Grid>
-                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Edge</Typography><Typography variant="h6" fontWeight={700} color="success.main">+{reasonDialog.row.edge.toFixed(1)}%</Typography></Grid>
+                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Edge</Typography><Typography variant="h6" fontWeight={700} color={reasonDialog.row.edge >= 0 ? 'success.main' : 'error.main'}>{reasonDialog.row.edge >= 0 ? '+' : ''}{(reasonDialog.row.edge * 100).toFixed(1)}%</Typography></Grid>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">CLV</Typography><Typography variant="h6" fontWeight={700}>{reasonDialog.row.clv != null ? `${reasonDialog.row.clv > 0 ? '+' : ''}${reasonDialog.row.clv.toFixed(1)}%` : '-'}</Typography></Grid>
               </Grid>
               <Typography variant="subtitle2" fontWeight={700} gutterBottom>Why this pick?</Typography>
@@ -613,11 +613,76 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
       if (homeOpen === '-' && side === 'home' && odds != null) homeOpen = odds;
     }
 
-    // System columns = same as Circa for now (until ML model generates own projected lines)
-    const awaySystemOpen = awayOpen;
-    const homeSystemOpen = homeOpen;
-    const awaySystemCurrent = awayCurrent;
-    const homeSystemCurrent = homeCurrent;
+    // ---- SYSTEM COLUMNS: Model-projected fair lines/odds ----
+    // Convert model probability → system-implied lines/odds
+    // Moneyline: probability → American odds directly
+    // Spread: shift market line by model edge (each ~3% edge ≈ 1 point)
+    // Total: shift market total by model edge
+    const probToAmerican = (p: number): number => {
+      if (p <= 0 || p >= 1) return 0;
+      if (p >= 0.5) return Math.round(-100 * p / (1 - p));
+      else return Math.round(100 * (1 - p) / p);
+    };
+
+    let awaySystemOpen: number | string = awayOpen;
+    let homeSystemOpen: number | string = homeOpen;
+    let awaySystemCurrent: number | string = awayCurrent;
+    let homeSystemCurrent: number | string = homeCurrent;
+
+    if (edge !== 0 && prob > 0 && prob < 1) {
+      if (bt === 'moneyline') {
+        // Predicted side gets model prob, other side gets 1-prob
+        const predictedOdds = probToAmerican(prob);
+        const otherOdds = probToAmerican(1 - prob);
+        if (side === 'home') {
+          homeSystemOpen = predictedOdds;
+          homeSystemCurrent = predictedOdds;
+          awaySystemOpen = otherOdds;
+          awaySystemCurrent = otherOdds;
+        } else {
+          awaySystemOpen = predictedOdds;
+          awaySystemCurrent = predictedOdds;
+          homeSystemOpen = otherOdds;
+          homeSystemCurrent = otherOdds;
+        }
+      } else if (bt === 'spread') {
+        // Shift spread: positive edge for predicted side = line moves in their favor
+        // ~3% probability per point of spread
+        let lineShift = Math.round((edge * 100 / 3) * 2) / 2; // snap to 0.5
+        lineShift = Math.max(-5, Math.min(5, lineShift)); // cap ±5 points
+        const hOpen = typeof homeOpen === 'number' ? homeOpen : 0;
+        const aOpen = typeof awayOpen === 'number' ? awayOpen : 0;
+        if (side === 'home') {
+          // Model thinks home is stronger → home spread more negative
+          homeSystemOpen = hOpen - lineShift;
+          awaySystemOpen = -(homeSystemOpen as number);
+        } else {
+          // Model thinks away is stronger → away spread more negative (home more positive)
+          awaySystemOpen = aOpen - lineShift;
+          homeSystemOpen = -(awaySystemOpen as number);
+        }
+        homeSystemCurrent = homeSystemOpen;
+        awaySystemCurrent = awaySystemOpen;
+      } else if (bt === 'total') {
+        // Shift total: over edge = model thinks total should be higher
+        let totalShift = Math.round((edge * 100 / 3) * 2) / 2; // snap to 0.5
+        totalShift = Math.max(-5, Math.min(5, totalShift)); // cap ±5 points
+        const tOpen = typeof homeOpen === 'number' ? homeOpen : 0;
+        if (side === 'over') {
+          // Model thinks over → fair total is higher
+          const systemTotal = tOpen + totalShift;
+          awaySystemOpen = systemTotal;
+          homeSystemOpen = systemTotal;
+        } else {
+          // Model thinks under → fair total is lower
+          const systemTotal = tOpen - totalShift;
+          awaySystemOpen = systemTotal;
+          homeSystemOpen = systemTotal;
+        }
+        awaySystemCurrent = awaySystemOpen;
+        homeSystemCurrent = homeSystemOpen;
+      }
+    }
 
     return {
       id: pred.id || `pred_${idx}`,
@@ -651,7 +716,7 @@ const transformToFlatRows = (data: any[]): FlatRow[] => {
       clv: pred.clv != null ? pred.clv : null,
       signal_tier: (pred.signal_tier || 'D') as 'A' | 'B' | 'C' | 'D',
       result,
-      reason: `Model probability: ${Math.round(prob * 100)}% | Edge: ${edge.toFixed(1)}%`,
+      reason: `Model probability: ${Math.round(prob * 100)}% | Edge: ${(edge * 100).toFixed(1)}%`,
     };
   });
 };

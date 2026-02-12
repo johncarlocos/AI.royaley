@@ -22,12 +22,9 @@ interface Model {
   version: string;
   status: string;
   accuracy: number | null;
-  raw_accuracy: number | null;
-  wfv_accuracy: number | null;
   auc: number | null;
-  raw_auc: number | null;
+  wfv_accuracy: number | null;
   wfv_auc: number | null;
-  log_loss: number | null;
   wfv_roi: number | null;
   wfv_n_folds: number | null;
   created_at: string;
@@ -164,8 +161,8 @@ const Models: React.FC = () => {
   const stats = useMemo(() => {
     const prod = productionModels;
     const all = models;
-    const accs = all.map(m => fmtAcc(m.wfv_accuracy) ?? fmtAcc(m.accuracy)).filter(v => v != null && v > 0 && v < 100) as number[];
-    const aucs = all.map(m => m.wfv_auc ?? m.auc).filter(v => v != null && v > 0 && v < 1) as number[];
+    const accs = all.map(m => fmtAcc(m.accuracy)).filter(v => v != null && v > 0) as number[];
+    const aucs = all.map(m => m.auc).filter(v => v != null && v > 0) as number[];
     return {
       total: all.length,
       production: prod.length,
@@ -191,9 +188,9 @@ const Models: React.FC = () => {
       case 'sport_code': aV = a.sport_code; bV = b.sport_code; break;
       case 'bet_type': aV = a.bet_type; bV = b.bet_type; break;
       case 'framework': aV = a.framework; bV = b.framework; break;
-      case 'accuracy': aV = fmtAcc(a.wfv_accuracy) ?? fmtAcc(a.accuracy) ?? 0; bV = fmtAcc(b.wfv_accuracy) ?? fmtAcc(b.accuracy) ?? 0; break;
-      case 'wfv_accuracy': aV = fmtAcc(a.wfv_accuracy) ?? 0; bV = fmtAcc(b.wfv_accuracy) ?? 0; break;
-      case 'auc': aV = a.wfv_auc ?? a.auc ?? 0; bV = b.wfv_auc ?? b.auc ?? 0; break;
+      case 'accuracy': aV = fmtAcc(a.accuracy) ?? 0; bV = fmtAcc(b.accuracy) ?? 0; break;
+      case 'wfv_accuracy': aV = fmtAcc(a.accuracy) ?? 0; bV = fmtAcc(b.accuracy) ?? 0; break;
+      case 'auc': aV = a.auc ?? 0; bV = b.auc ?? 0; break;
       case 'created_at': aV = a.created_at || ''; bV = b.created_at || ''; break;
       case 'status': aV = a.status === 'production' ? 0 : 1; bV = b.status === 'production' ? 0 : 1; break;
       case 'training_samples': aV = a.training_samples ?? 0; bV = b.training_samples ?? 0; break;
@@ -270,28 +267,19 @@ const Models: React.FC = () => {
   const ccsx = { textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' };
 
   const AccuracyCell: React.FC<{ model: Model }> = ({ model }) => {
-    const wfv = fmtAcc(model.wfv_accuracy);
-    const raw = fmtAcc(model.raw_accuracy);
-    const display = wfv ?? raw;
-    if (!display) return <Typography fontSize={11}>-</Typography>;
+    const acc = fmtAcc(model.accuracy);
+    if (!acc) return <Typography fontSize={11} color="text.secondary">-</Typography>;
 
-    const isWfv = wfv != null && wfv > 0;
-    const color = display >= 65 ? 'success.main' : display >= 58 ? 'warning.main' : display >= 52 ? 'text.primary' : 'error.main';
+    const color = acc >= 62 ? 'success.main' : acc >= 55 ? 'warning.main' : acc >= 50 ? 'text.primary' : 'error.main';
 
     return (
       <Tooltip title={
         <Box>
-          <Typography fontSize={10}>WFV Accuracy: {wfv != null ? `${wfv.toFixed(1)}%` : 'N/A'}</Typography>
-          <Typography fontSize={10}>Raw Accuracy: {raw != null ? `${raw.toFixed(1)}%` : 'N/A'}</Typography>
           {model.wfv_n_folds != null && <Typography fontSize={10}>WFV Folds: {model.wfv_n_folds}</Typography>}
           {model.wfv_roi != null && <Typography fontSize={10}>WFV ROI: {(model.wfv_roi * 100).toFixed(1)}%</Typography>}
-          {raw != null && raw > 90 && <Typography fontSize={10} color="warning.main">⚠️ Raw accuracy inflated (data leakage)</Typography>}
         </Box>
       } arrow>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'center' }}>
-          <Typography sx={{ fontSize: 11, color, fontWeight: 600 }}>{display.toFixed(1)}%</Typography>
-          {isWfv && <Chip label="WFV" size="small" sx={{ height: 14, fontSize: 8, bgcolor: 'success.main', color: '#fff' }} />}
-        </Box>
+        <Typography sx={{ fontSize: 11, color, fontWeight: 600 }}>{acc.toFixed(1)}%</Typography>
       </Tooltip>
     );
   };
@@ -481,11 +469,9 @@ const Models: React.FC = () => {
                     <TableCell sx={{ py: 0.75, fontSize: 10, fontFamily: 'monospace', color: 'text.secondary' }}>{model.version || '-'}</TableCell>
                     <TableCell align="center" sx={{ py: 0.75 }}><AccuracyCell model={model} /></TableCell>
                     <TableCell align="center" sx={{ py: 0.75, fontSize: 11 }}>
-                      {(model.wfv_auc ?? model.auc) != null ? (
-                        <Tooltip title={`Raw: ${model.raw_auc?.toFixed(3) || 'N/A'} | WFV: ${model.wfv_auc?.toFixed(3) || 'N/A'}`}>
-                          <Typography fontSize={11} fontWeight={500}>{((model.wfv_auc ?? model.auc) as number).toFixed(3)}</Typography>
-                        </Tooltip>
-                      ) : '-'}
+                      {model.auc != null ? (
+                        <Typography fontSize={11} fontWeight={500}>{model.auc.toFixed(3)}</Typography>
+                      ) : <Typography fontSize={11} color="text.secondary">-</Typography>}
                     </TableCell>
                     <TableCell align="center" sx={{ py: 0.75, fontSize: 11, color: 'text.secondary' }}>
                       {model.training_samples != null ? model.training_samples.toLocaleString() : '-'}
@@ -582,10 +568,10 @@ const Models: React.FC = () => {
           {(() => {
             const current = productionModels.find(m => m.sport_code === reinforceSport && m.bet_type === reinforceBetType);
             if (!current) return null;
-            const acc = fmtAcc(current.wfv_accuracy) ?? fmtAcc(current.accuracy);
+            const acc = fmtAcc(current.accuracy);
             return (
               <Alert severity="info" sx={{ mt: 2, fontSize: 10 }}>
-                Current production: {frameworkLabel(current.framework)}{acc ? ` • ${acc.toFixed(1)}% acc` : ''}{current.wfv_auc ? ` • ${current.wfv_auc.toFixed(3)} AUC` : ''}
+                Current production: {frameworkLabel(current.framework)}{acc ? ` • ${acc.toFixed(1)}% acc` : ''}{current.auc ? ` • ${current.auc.toFixed(3)} AUC` : ''}
               </Alert>
             );
           })()}

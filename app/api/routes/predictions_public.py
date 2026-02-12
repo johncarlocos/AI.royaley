@@ -747,14 +747,20 @@ async def public_models(
     for row in result.fetchall():
         pm = row.metrics or {}
 
-        # Prefer walk-forward validation accuracy (real) over raw accuracy (inflated)
-        raw_acc = pm.get("accuracy")
+        # ONLY use walk-forward validation metrics (real predictive accuracy)
+        # Raw accuracy is inflated by data leakage - never display it
         wfv_acc = pm.get("wfv_accuracy")
-        display_acc = wfv_acc if wfv_acc and wfv_acc > 0 else raw_acc
+        wfv_auc_val = pm.get("wfv_auc")
 
-        raw_auc = pm.get("auc")
-        wfv_auc = pm.get("wfv_auc")
-        display_auc = wfv_auc if wfv_auc and wfv_auc > 0 else raw_auc
+        # Normalize: some values stored as 0-1, some as 0-100
+        if wfv_acc is not None and wfv_acc > 1:
+            wfv_acc = wfv_acc / 100.0
+        if wfv_auc_val is not None and wfv_auc_val > 1:
+            wfv_auc_val = wfv_auc_val / 100.0
+
+        # Only show if in realistic range (0.40 - 0.72)
+        display_acc = wfv_acc if wfv_acc and 0.40 <= wfv_acc <= 0.72 else None
+        display_auc = wfv_auc_val if wfv_auc_val and 0.40 <= wfv_auc_val <= 0.80 else None
 
         models.append({
             "id": row.id,
@@ -764,12 +770,9 @@ async def public_models(
             "version": row.version,
             "status": "production" if row.is_production else "ready",
             "accuracy": display_acc,
-            "raw_accuracy": raw_acc,
-            "wfv_accuracy": wfv_acc,
             "auc": display_auc,
-            "raw_auc": raw_auc,
-            "wfv_auc": wfv_auc,
-            "log_loss": pm.get("log_loss"),
+            "wfv_accuracy": wfv_acc if wfv_acc and 0.40 <= wfv_acc <= 0.72 else None,
+            "wfv_auc": wfv_auc_val if wfv_auc_val and 0.40 <= wfv_auc_val <= 0.80 else None,
             "wfv_roi": pm.get("wfv_roi"),
             "wfv_n_folds": pm.get("wfv_n_folds"),
             "created_at": row.created_at.isoformat() if row.created_at else None,

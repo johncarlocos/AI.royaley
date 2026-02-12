@@ -833,14 +833,41 @@ def main():
     parser = argparse.ArgumentParser(description="ROYALEY Prediction Scheduler")
     parser.add_argument("--once", action="store_true", help="Run all jobs once and exit")
     parser.add_argument("--status", action="store_true", help="Show current status")
+    parser.add_argument("--grade", action="store_true", help="Run only the grading job")
     args = parser.parse_args()
 
     if args.status:
         asyncio.run(show_status())
+    elif args.grade:
+        asyncio.run(run_grade_only())
     elif args.once:
         asyncio.run(run_once())
     else:
         asyncio.run(run_scheduler())
+
+
+async def run_grade_only():
+    """Run only the grading job. Useful for manual grading without using odds API quota."""
+    logger.info("=" * 60)
+    logger.info("ROYALEY Scheduler - Grade Only")
+    logger.info("=" * 60)
+
+    engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    api_key = settings.ODDS_API_KEY
+
+    logger.info("\n3️⃣  Grading predictions...")
+    try:
+        async with async_session() as db:
+            grade_stats = await grade_predictions(db, api_key)
+            logger.info(f"   Games graded: {grade_stats['games_graded']}, "
+                         f"Predictions graded: {grade_stats['predictions_graded']}, "
+                         f"API requests: {grade_stats['api_requests']}")
+    except Exception as e:
+        logger.error(f"   Grading error: {e}", exc_info=True)
+
+    await engine.dispose()
+    logger.info("\n✅ Done!")
 
 
 if __name__ == "__main__":

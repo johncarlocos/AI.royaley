@@ -73,7 +73,7 @@ const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
   return <Chip label={tier} size="small" sx={{ bgcolor: style.bg, color: style.color, fontWeight: 700, minWidth: 28 }} />;
 };
 
-const formatPnL = (v: number) => `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`;
+const formatPnL = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`;
 const formatBetType = (bt: string) => bt === 'spread' ? 'Spread' : bt === 'total' ? 'Total' : bt === 'moneyline' ? 'ML' : bt;
 
 const formatGameTime = (gt: string | null) => {

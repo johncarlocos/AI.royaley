@@ -51,7 +51,7 @@ const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
 const TIER_COLORS: Record<string, string> = { A: '#4caf50', B: '#2196f3', C: '#ff9800', D: '#9e9e9e' };
 
 const formatPnL = (v: number) => {
-  const sign = v > 0 ? '+' : '';
+  const sign = v >= 0 ? '+' : '-';
   return `${sign}$${Math.abs(v).toFixed(2)}`;
 };
 

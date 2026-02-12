@@ -35,6 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings, ODDS_API_SPORT_KEYS, SPORT_DISPLAY_NAMES
+from app.pipeline.model_loader import predict_probability, load_model
+from app.pipeline.live_feature_builder import build_features_for_game
 
 logging.basicConfig(
     level=logging.INFO,
@@ -421,16 +423,32 @@ async def generate_predictions_for_game(
     sport_code: str,
 ) -> int:
     """
-    Generate predictions for an upcoming game using consensus odds.
+    Generate predictions for an upcoming game.
     
-    For now, uses implied probability from Pinnacle/consensus lines
-    to create predictions. When H2O models are loaded, this will
-    use the full prediction engine instead.
+    Uses trained sklearn models when available (producing real Edge values).
+    Falls back to market-implied probability (Edge = 0%) when no model exists.
     
     Returns count of predictions created.
     """
     
-    # Get consensus odds (prefer Pinnacle, fall back to average)
+    # 1. Get game info for feature building
+    game_info = await db.execute(
+        text("""
+            SELECT ug.home_team_id, ug.away_team_id, ug.scheduled_at, ug.sport_id,
+                   COUNT(uo.id) as num_books
+            FROM upcoming_games ug
+            LEFT JOIN upcoming_odds uo ON uo.upcoming_game_id = ug.id
+            WHERE ug.id = :game_id
+            GROUP BY ug.id
+        """),
+        {"game_id": upcoming_game_id},
+    )
+    game = game_info.fetchone()
+    if not game:
+        logger.warning(f"  No game found for {upcoming_game_id}")
+        return 0
+    
+    # 2. Get consensus odds (prefer Pinnacle, fall back to average)
     odds_rows = await db.execute(
         text("""
             SELECT bet_type, 
@@ -450,7 +468,8 @@ async def generate_predictions_for_game(
                    MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN over_odds END) as pin_over_odds,
                    MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN under_odds END) as pin_under_odds,
                    MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN home_ml END) as pin_home_ml,
-                   MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN away_ml END) as pin_away_ml
+                   MAX(CASE WHEN sportsbook_key = 'pinnacle' THEN away_ml END) as pin_away_ml,
+                   COUNT(DISTINCT sportsbook_key) as book_count
             FROM upcoming_odds
             WHERE upcoming_game_id = :game_id
             GROUP BY bet_type
@@ -458,57 +477,154 @@ async def generate_predictions_for_game(
         {"game_id": upcoming_game_id},
     )
     
+    all_odds = odds_rows.fetchall()
+    if not all_odds:
+        return 0
+    
+    # 3. Build odds_data dict for feature builder (aggregate across bet types)
+    odds_data = {"num_books": game.num_books or 0}
+    for row in all_odds:
+        if row.bet_type == "spread":
+            spread = row.pin_home_line or row.avg_home_line or 0
+            odds_data["consensus_spread"] = round(spread * 2) / 2 if spread else 0
+            odds_data["spread_open"] = odds_data["consensus_spread"]
+            odds_data["spread_close"] = odds_data["consensus_spread"]
+        elif row.bet_type == "total":
+            total = row.pin_total or row.avg_total or 0
+            odds_data["consensus_total"] = round(total * 2) / 2 if total else 0
+            odds_data["total_open"] = odds_data["consensus_total"]
+            odds_data["total_close"] = odds_data["consensus_total"]
+        elif row.bet_type == "moneyline":
+            odds_data["moneyline_home_close"] = row.pin_home_ml or row.avg_home_ml or -110
+            odds_data["moneyline_away_close"] = row.pin_away_ml or row.avg_away_ml or -110
+            odds_data["moneyline_home_open"] = odds_data["moneyline_home_close"]
+    
+    # Fill defaults for odds not present
+    odds_data.setdefault("consensus_spread", 0)
+    odds_data.setdefault("consensus_total", 0)
+    odds_data.setdefault("spread_open", 0)
+    odds_data.setdefault("spread_close", 0)
+    odds_data.setdefault("total_open", 0)
+    odds_data.setdefault("total_close", 0)
+    odds_data.setdefault("moneyline_home_close", -110)
+    odds_data.setdefault("moneyline_away_close", -110)
+    odds_data.setdefault("moneyline_home_open", -110)
+    
+    # 4. Build features for ML model
+    features = None
+    has_model = load_model(sport_code, "spread") is not None  # Check if any model exists
+    
+    if has_model:
+        try:
+            features = await build_features_for_game(
+                db=db,
+                sport_id=game.sport_id,
+                home_team_id=game.home_team_id,
+                away_team_id=game.away_team_id,
+                game_time=game.scheduled_at,
+                odds_data=odds_data,
+            )
+            if features:
+                logger.info(f"  🧠 ML features built ({len(features)} features)")
+        except Exception as e:
+            logger.warning(f"  Feature building failed, using market-implied: {e}")
+    
+    # 5. Generate predictions for each bet type
     count = 0
-    for row in odds_rows.fetchall():
+    for row in all_odds:
         bet_type = row.bet_type
         
         predictions_to_make = []
         
+        # --- Try ML model prediction ---
+        model_prob = None
+        if features is not None:
+            result = predict_probability(sport_code, bet_type, feature_dict=features)
+            if result:
+                model_prob = result  # (positive_prob, negative_prob)
+        
         if bet_type == "spread":
             line = row.pin_home_line or row.avg_home_line
             if line is not None:
-                line = round(line * 2) / 2  # Snap to nearest 0.5
+                line = round(line * 2) / 2
             home_price = row.pin_home_odds or row.avg_home_odds
             away_price = row.pin_away_odds or row.avg_away_odds
             if line is not None and home_price is not None:
-                home_prob = _implied_prob(home_price)
-                away_prob = _implied_prob(away_price) if away_price else (1 - home_prob)
-                # Predict the side with higher implied probability
-                if home_prob >= away_prob:
-                    predictions_to_make.append(("home", home_prob, line, home_price))
+                # Market-implied probabilities
+                mkt_home = _implied_prob(home_price)
+                mkt_away = _implied_prob(away_price) if away_price else (1 - mkt_home)
+                
+                if model_prob:
+                    # ML model: p1 = P(home covers)
+                    home_prob = model_prob[0]
+                    away_prob = model_prob[1]
+                    market_prob_for_edge = mkt_home  # Compare model vs market
+                    if home_prob >= away_prob:
+                        edge = home_prob - mkt_home
+                        predictions_to_make.append(("home", home_prob, line, home_price, edge))
+                    else:
+                        edge = away_prob - mkt_away
+                        predictions_to_make.append(("away", away_prob, -line if line else None, away_price, edge))
                 else:
-                    predictions_to_make.append(("away", away_prob, -line if line else None, away_price))
+                    # Fallback: market-implied
+                    if mkt_home >= mkt_away:
+                        predictions_to_make.append(("home", mkt_home, line, home_price, 0.0))
+                    else:
+                        predictions_to_make.append(("away", mkt_away, -line if line else None, away_price, 0.0))
                     
         elif bet_type == "total":
             total = row.pin_total or row.avg_total
             if total is not None:
-                total = round(total * 2) / 2  # Snap to nearest 0.5
+                total = round(total * 2) / 2
             over_price = row.pin_over_odds or row.avg_over_odds
             under_price = row.pin_under_odds or row.avg_under_odds
             if total is not None and over_price is not None:
-                over_prob = _implied_prob(over_price)
-                under_prob = _implied_prob(under_price) if under_price else (1 - over_prob)
-                if over_prob >= under_prob:
-                    predictions_to_make.append(("over", over_prob, total, over_price))
+                mkt_over = _implied_prob(over_price)
+                mkt_under = _implied_prob(under_price) if under_price else (1 - mkt_over)
+                
+                if model_prob:
+                    # ML model: p1 = P(over)
+                    over_prob = model_prob[0]
+                    under_prob = model_prob[1]
+                    if over_prob >= under_prob:
+                        edge = over_prob - mkt_over
+                        predictions_to_make.append(("over", over_prob, total, over_price, edge))
+                    else:
+                        edge = under_prob - mkt_under
+                        predictions_to_make.append(("under", under_prob, total, under_price, edge))
                 else:
-                    predictions_to_make.append(("under", under_prob, total, under_price))
+                    if mkt_over >= mkt_under:
+                        predictions_to_make.append(("over", mkt_over, total, over_price, 0.0))
+                    else:
+                        predictions_to_make.append(("under", mkt_under, total, under_price, 0.0))
                     
         elif bet_type == "moneyline":
             home_ml = row.pin_home_ml or row.avg_home_ml
             away_ml = row.pin_away_ml or row.avg_away_ml
             if home_ml is not None and away_ml is not None:
-                home_prob = _implied_prob(home_ml)
-                away_prob = _implied_prob(away_ml)
-                # Normalize (remove vig)
-                total_prob = home_prob + away_prob
-                home_prob_fair = home_prob / total_prob if total_prob > 0 else 0.5
-                away_prob_fair = away_prob / total_prob if total_prob > 0 else 0.5
-                if home_prob_fair >= away_prob_fair:
-                    predictions_to_make.append(("home", home_prob_fair, None, home_ml))
+                mkt_home = _implied_prob(home_ml)
+                mkt_away = _implied_prob(away_ml)
+                total_prob = mkt_home + mkt_away
+                mkt_home_fair = mkt_home / total_prob if total_prob > 0 else 0.5
+                mkt_away_fair = mkt_away / total_prob if total_prob > 0 else 0.5
+                
+                if model_prob:
+                    # ML model: p1 = P(home wins)
+                    home_prob = model_prob[0]
+                    away_prob = model_prob[1]
+                    if home_prob >= away_prob:
+                        edge = home_prob - mkt_home_fair
+                        predictions_to_make.append(("home", home_prob, None, home_ml, edge))
+                    else:
+                        edge = away_prob - mkt_away_fair
+                        predictions_to_make.append(("away", away_prob, None, away_ml, edge))
                 else:
-                    predictions_to_make.append(("away", away_prob_fair, None, away_ml))
+                    if mkt_home_fair >= mkt_away_fair:
+                        predictions_to_make.append(("home", mkt_home_fair, None, home_ml, 0.0))
+                    else:
+                        predictions_to_make.append(("away", mkt_away_fair, None, away_ml, 0.0))
         
-        # Build opening snapshot from consensus (both sides, for all 4 frontend columns)
+        # Build opening snapshot from consensus
         open_home_line = None
         open_away_line = None
         open_home_odds = None
@@ -534,12 +650,8 @@ async def generate_predictions_for_game(
             open_home_ml = int(row.pin_home_ml or row.avg_home_ml) if (row.pin_home_ml or row.avg_home_ml) else None
             open_away_ml = int(row.pin_away_ml or row.avg_away_ml) if (row.pin_away_ml or row.avg_away_ml) else None
 
-        for predicted_side, probability, line_val, odds_val in predictions_to_make:
-            # Calculate edge (model prob vs market implied, simplified for now)
-            market_prob = probability  # Will be replaced with actual model output
-            edge = 0.0  # No edge when using market-implied (placeholder)
-            
-            # Signal tier based on probability
+        for predicted_side, probability, line_val, odds_val, edge in predictions_to_make:
+            # Signal tier based on model probability
             if probability >= 0.65:
                 tier = "A"
             elif probability >= 0.60:
@@ -549,7 +661,7 @@ async def generate_predictions_for_game(
             else:
                 tier = "D"
             
-            # Kelly fraction (simplified)
+            # Kelly fraction (only when edge > 0)
             if edge > 0 and odds_val:
                 decimal_odds = _american_to_decimal(odds_val)
                 kelly = (probability * decimal_odds - 1) / (decimal_odds - 1) if decimal_odds > 1 else 0

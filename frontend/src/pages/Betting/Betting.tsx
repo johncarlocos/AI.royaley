@@ -4,7 +4,7 @@ import {
   Box, Card, CardContent, Typography, Grid, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Chip, Button, TextField, Switch,
   FormControlLabel, Alert, LinearProgress, useTheme, TablePagination,
-  Tabs, Tab
+  Tabs, Tab, Select, MenuItem, InputLabel, FormControl
 } from '@mui/material';
 import { Refresh, Save, CheckCircle, Cancel, Schedule, Remove } from '@mui/icons-material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
@@ -93,6 +93,8 @@ const Betting: React.FC = () => {
   const [betTab, setBetTab] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [sportFilter, setSportFilter] = useState<string>('all');
+  const [allSports, setAllSports] = useState<string[]>([]);
 
   const getActiveTiers = useCallback(() => {
     const tiers: string[] = [];
@@ -110,15 +112,23 @@ const Betting: React.FC = () => {
         tiers: getActiveTiers(),
         stake: config.flat_amount,
         initial_bankroll: config.initial_bankroll,
+        sport: sportFilter !== 'all' ? sportFilter : undefined,
       });
       if (data.stats) setStats(data.stats);
-      if (data.bets) setBets(data.bets);
+      if (data.bets) {
+        setBets(data.bets);
+        // Update sport list only when not filtered (to keep full dropdown)
+        if (sportFilter === 'all') {
+          const sports = Array.from(new Set(data.bets.map((b: BetFromAPI) => b.sport).filter(Boolean))).sort() as string[];
+          setAllSports(sports);
+        }
+      }
       if (data.equity_curve) setEquityCurve(data.equity_curve);
     } catch (err) {
       console.error('Load betting data error:', err);
     }
     if (showLoading) setLoading(false);
-  }, [config.flat_amount, config.initial_bankroll, getActiveTiers]);
+  }, [config.flat_amount, config.initial_bankroll, getActiveTiers, sportFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { const iv = setInterval(() => loadData(false), 60000); return () => clearInterval(iv); }, [loadData]);
@@ -172,6 +182,15 @@ const Betting: React.FC = () => {
   const formatOdds = (odds: number | null) => {
     if (odds == null) return '-';
     return odds > 0 ? `+${odds}` : `${odds}`;
+  };
+
+  const formatPnL = (value: number) => {
+    const sign = value > 0 ? '+' : '';
+    const formatted = new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: 'USD',
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    }).format(value);
+    return `${sign}${formatted}`;
   };
 
   const formatGameTime = (gt: string | null) => {
@@ -229,7 +248,7 @@ const Betting: React.FC = () => {
         <Grid item xs={6} sm={4} md={2}>
           <Card><CardContent sx={{ textAlign: 'center', py: 1.5, '&:last-child': { pb: 1.5 } }}>
             <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>P/L</Typography>
-            <Typography sx={{ fontSize: 16, fontWeight: 700, color: stats.total_pnl >= 0 ? 'success.main' : 'error.main' }}>{stats.total_pnl >= 0 ? '+' : ''}{formatCurrency(stats.total_pnl)}</Typography>
+            <Typography sx={{ fontSize: 16, fontWeight: 700, color: stats.total_pnl >= 0 ? 'success.main' : 'error.main' }}>{stats.total_pnl >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(stats.total_pnl)}</Typography>
           </CardContent></Card>
         </Grid>
       </Grid>
@@ -262,6 +281,19 @@ const Betting: React.FC = () => {
                 <FormControlLabel control={<Switch size="small" checked={config.bet_tier_c} onChange={(e) => setConfig({ ...config, bet_tier_c: e.target.checked })} color="warning" />} label={<Typography sx={{ fontSize: 11 }}>Tier C (55-60%)</Typography>} />
                 <FormControlLabel control={<Switch size="small" checked={config.bet_tier_d} onChange={(e) => setConfig({ ...config, bet_tier_d: e.target.checked })} />} label={<Typography sx={{ fontSize: 11 }}>Tier D (&lt;55%)</Typography>} />
               </Box>
+              <Typography variant="caption" sx={{ fontSize: 11, mb: 0.5, display: 'block' }}>Filter by Sport:</Typography>
+              <FormControl size="small" fullWidth sx={{ mb: 1.5 }}>
+                <Select
+                  value={sportFilter}
+                  onChange={(e) => { setSportFilter(e.target.value); setPage(0); }}
+                  sx={{ fontSize: 12, height: 34 }}
+                >
+                  <MenuItem value="all" sx={{ fontSize: 12 }}>All Sports</MenuItem>
+                  {allSports.map(s => (
+                    <MenuItem key={s} value={s} sx={{ fontSize: 12 }}>{s}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
               <FormControlLabel control={<Switch size="small" checked={config.auto_bet} onChange={(e) => setConfig({ ...config, auto_bet: e.target.checked })} />} label={<Typography sx={{ fontSize: 11 }}>Auto-place bets (simulation)</Typography>} sx={{ mb: 1.5 }} />
               <Button fullWidth variant="contained" startIcon={<Save />} onClick={saveConfig} sx={{ fontSize: 12 }}>
                 {saved ? '✓ Saved!' : 'Save Configuration'}
@@ -292,7 +324,11 @@ const Betting: React.FC = () => {
               <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 13, mb: 1 }}>Bankroll Growth</Typography>
               <Box sx={{ height: 340 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={equityCurve} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
+                  <LineChart data={
+                    equityCurve.length > 0 && equityCurve[0]?.value !== stats.initial_bankroll
+                      ? [{ date: 'Start', value: stats.initial_bankroll }, ...equityCurve]
+                      : equityCurve
+                  } margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
                     <XAxis dataKey="date" stroke="#666" fontSize={10} />
                     <YAxis stroke="#666" fontSize={10} tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`} domain={['dataMin - 200', 'dataMax + 200']} />
@@ -370,7 +406,7 @@ const Betting: React.FC = () => {
                           <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}><TierBadge tier={bet.signal_tier || 'D'} /></TableCell>
                           <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>{getStatusChip(bet.result)}</TableCell>
                           <TableCell rowSpan={2} align="right" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider', color: bet.profit_loss != null ? (bet.profit_loss > 0 ? 'success.main' : bet.profit_loss < 0 ? 'error.main' : 'inherit') : 'text.secondary', fontWeight: 600 }}>
-                            {bet.profit_loss != null ? `${bet.profit_loss > 0 ? '+' : ''}${formatCurrency(bet.profit_loss)}` : '-'}
+                            {bet.profit_loss != null ? formatPnL(bet.profit_loss) : '-'}
                           </TableCell>
                           <TableCell rowSpan={2} align="right" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider', color: bet.clv != null ? (bet.clv > 0 ? 'success.main' : bet.clv < 0 ? 'error.main' : 'inherit') : 'text.secondary' }}>
                             {bet.clv != null ? `${bet.clv > 0 ? '+' : ''}${(bet.clv * 100).toFixed(1)}%` : '-'}

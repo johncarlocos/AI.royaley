@@ -1,7 +1,7 @@
 // src/api/client.ts
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 const axiosClient = axios.create({
   baseURL: BASE_URL,
@@ -87,14 +87,14 @@ export const api = {
     return data;
   },
 
-  // Models
+  // Models (public read, auth for training)
   getModels: async (params?: { sport_code?: string; production_only?: boolean }) => {
-    const { data } = await axiosClient.get('/models', { params });
+    const { data } = await axiosClient.get('/public/models', { params });
     return data;
   },
 
   getTrainingRuns: async (params?: { sport_code?: string; limit?: number }) => {
-    const { data } = await axiosClient.get('/models/training', { params });
+    const { data } = await axiosClient.get('/public/models/training-runs', { params });
     return data;
   },
 

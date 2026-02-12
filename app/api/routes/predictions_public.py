@@ -693,3 +693,119 @@ async def get_betting_summary(
     )
 
     return BettingSummaryResponse(stats=stats, bets=bets, equity_curve=equity_curve)
+
+
+# =============================================================================
+# PUBLIC MODELS ENDPOINTS
+# =============================================================================
+
+@router.get("/models")
+async def public_models(
+    sport_code: Optional[str] = None,
+    production_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public read-only list of ML models.
+    Joins ml_models with sports to get sport_code.
+    Extracts accuracy/auc from performance_metrics JSONB.
+    """
+    conditions = []
+    if sport_code:
+        conditions.append(f"AND s.code = '{sport_code.upper()}'")
+    if production_only:
+        conditions.append("AND m.is_production = true")
+
+    where_clause = " ".join(conditions)
+
+    result = await db.execute(text(f"""
+        SELECT
+            m.id::text                                    AS id,
+            s.code                                        AS sport_code,
+            m.bet_type,
+            m.framework::text                             AS framework,
+            m.version,
+            CASE WHEN m.is_production THEN 'production' ELSE 'ready' END AS status,
+            (m.performance_metrics->>'accuracy')::float   AS accuracy,
+            (m.performance_metrics->>'auc')::float        AS auc,
+            (m.performance_metrics->>'log_loss')::float   AS log_loss,
+            m.created_at,
+            m.training_samples
+        FROM ml_models m
+        JOIN sports s ON s.id = m.sport_id
+        WHERE 1=1 {where_clause}
+        ORDER BY m.is_production DESC, m.created_at DESC
+    """))
+
+    models = []
+    for row in result.fetchall():
+        models.append({
+            "id": row.id,
+            "sport_code": row.sport_code,
+            "bet_type": row.bet_type,
+            "framework": row.framework,
+            "version": row.version,
+            "status": row.status,
+            "accuracy": row.accuracy,
+            "auc": row.auc,
+            "log_loss": row.log_loss,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "training_samples": row.training_samples,
+        })
+
+    return models
+
+
+@router.get("/models/training-runs")
+async def public_training_runs(
+    sport_code: Optional[str] = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public read-only list of recent training runs.
+    Joins with ml_models and sports to get sport_code/bet_type.
+    """
+    conditions = []
+    if sport_code:
+        conditions.append(f"AND s.code = '{sport_code.upper()}'")
+
+    where_clause = " ".join(conditions)
+    safe_limit = min(max(limit, 1), 100)
+
+    result = await db.execute(text(f"""
+        SELECT
+            t.id::text                                    AS id,
+            s.code                                        AS sport_code,
+            m.bet_type,
+            m.framework::text                             AS framework,
+            t.status::text                                AS status,
+            t.started_at,
+            t.completed_at,
+            t.training_duration_seconds                   AS duration_seconds,
+            t.validation_metrics                          AS metrics,
+            t.error_message
+        FROM training_runs t
+        JOIN ml_models m ON m.id = t.model_id
+        JOIN sports s ON s.id = m.sport_id
+        WHERE 1=1 {where_clause}
+        ORDER BY t.started_at DESC
+        LIMIT {safe_limit}
+    """))
+
+    runs = []
+    for row in result.fetchall():
+        runs.append({
+            "id": row.id,
+            "sport_code": row.sport_code,
+            "bet_type": row.bet_type,
+            "framework": row.framework,
+            "status": row.status,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+            "duration_seconds": row.duration_seconds,
+            "metrics": row.metrics,
+            "error_message": row.error_message,
+        })
+
+    return runs

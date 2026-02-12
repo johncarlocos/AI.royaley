@@ -284,15 +284,6 @@ const Predictions: React.FC = () => {
         switch (sortField) {
           case 'sport': return m * a.sport.localeCompare(b.sport);
           case 'datetime': {
-            if (sortOrder === 'asc') {
-              // Smart sort: upcoming games (soonest first) at top, then past games (most recent first)
-              const now = Date.now();
-              const aFuture = a.datetime.getTime() >= now;
-              const bFuture = b.datetime.getTime() >= now;
-              if (aFuture !== bFuture) return aFuture ? -1 : 1;
-              if (aFuture) return a.datetime.getTime() - b.datetime.getTime();
-              return b.datetime.getTime() - a.datetime.getTime();
-            }
             return m * (a.datetime.getTime() - b.datetime.getTime());
           }
           case 'probability': return m * (Math.max(...a.bets.map(x => x.probability)) - Math.max(...b.bets.map(x => x.probability)));

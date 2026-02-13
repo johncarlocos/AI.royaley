@@ -129,9 +129,9 @@ export const api = {
     return data;
   },
 
-  // Player Props
+  // Player Props (public - no auth required)
   getPlayerProps: async (params?: { sport?: string }) => {
-    const { data } = await axiosClient.get('/player-props', { params });
+    const { data } = await axiosClient.get('/public/player-props', { params });
     return data;
   },
 

@@ -375,11 +375,11 @@ class PlayerPropsPredictor:
     
     def _assign_tier(self, probability: float) -> str:
         """Assign signal tier based on probability"""
-        if probability >= 0.65:
+        if probability >= 0.58:
             return "A"
-        elif probability >= 0.60:
-            return "B"
         elif probability >= 0.55:
+            return "B"
+        elif probability >= 0.52:
             return "C"
         return "D"
 

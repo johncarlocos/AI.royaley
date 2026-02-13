@@ -1034,3 +1034,109 @@ async def reinforce_model(
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# =============================================================================
+# PUBLIC PLAYER PROPS ENDPOINT
+# =============================================================================
+
+@router.get("/player-props")
+async def public_player_props(
+    sport: Optional[str] = None,
+    tier: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public read-only player props predictions.
+    Returns props from the player_props table joined with player/game data.
+    """
+    conditions = []
+    params: dict = {}
+
+    if sport:
+        conditions.append("AND s.code = :sport")
+        params["sport"] = sport.upper()
+    if tier:
+        conditions.append("AND pp.signal_tier = :tier::signaltier")
+        params["tier"] = tier.upper()
+
+    where_clause = " ".join(conditions)
+
+    result = await db.execute(text(f"""
+        SELECT
+            pp.id::text                         AS id,
+            s.code                              AS sport,
+            g.scheduled_at                      AS game_time,
+            p.name                              AS player_name,
+            ht.abbreviation                     AS home_team,
+            at2.abbreviation                    AS away_team,
+            CASE WHEN p.team_id = g.home_team_id 
+                 THEN ht.abbreviation 
+                 ELSE at2.abbreviation 
+            END                                 AS team,
+            CASE WHEN p.team_id = g.home_team_id 
+                 THEN at2.abbreviation 
+                 ELSE ht.abbreviation 
+            END                                 AS opponent,
+            CASE WHEN p.team_id = g.home_team_id 
+                 THEN 'home' ELSE 'away' 
+            END                                 AS home_away,
+            pp.prop_type,
+            pp.line,
+            pp.predicted_value,
+            pp.predicted_side                   AS pick,
+            pp.probability,
+            pp.signal_tier::text                AS tier,
+            pp.over_odds,
+            pp.under_odds,
+            pp.result::text                     AS status,
+            pp.actual_value                     AS actual,
+            pp.created_at
+        FROM player_props pp
+        JOIN players p ON p.id = pp.player_id
+        JOIN games g ON g.id = pp.game_id
+        JOIN sports s ON s.id = g.sport_id
+        JOIN teams ht ON ht.id = g.home_team_id
+        JOIN teams at2 ON at2.id = g.away_team_id
+        WHERE 1=1 {where_clause}
+        ORDER BY g.scheduled_at DESC, pp.probability DESC
+        LIMIT 500
+    """), params)
+
+    rows = result.fetchall()
+    props = []
+
+    for row in rows:
+        prob = row.probability or 0.50
+        pick = row.pick or ("over" if prob > 0.50 else "under")
+        # Edge = probability - 0.50 (implied even odds)
+        edge = abs(prob - 0.50) * 100
+
+        props.append({
+            "id": row.id,
+            "sport": row.sport,
+            "date": row.game_time.strftime("%-m/%-d") if row.game_time else "",
+            "time": row.game_time.strftime("%-I:%M %p") if row.game_time else "",
+            "player_name": row.player_name,
+            "team": row.team or "",
+            "opponent": row.opponent or "",
+            "home_away": row.home_away or "home",
+            "prop_type": row.prop_type,
+            "circa_open": row.line or 0,
+            "circa_current": row.line or 0,
+            "system_open": round(row.predicted_value, 1) if row.predicted_value else row.line or 0,
+            "system_current": round(row.predicted_value, 1) if row.predicted_value else row.line or 0,
+            "pick": pick,
+            "probability": prob,
+            "edge": round(edge, 1),
+            "tier": row.tier or "D",
+            "season_avg": round(row.predicted_value, 1) if row.predicted_value else 0,
+            "last_5_avg": round(row.predicted_value, 1) if row.predicted_value else 0,
+            "last_10_avg": round(row.predicted_value, 1) if row.predicted_value else 0,
+            "matchup_rating": "Neutral",
+            "status": row.status or "pending",
+            "actual": row.actual,
+            "reason": "",
+        })
+
+    return props

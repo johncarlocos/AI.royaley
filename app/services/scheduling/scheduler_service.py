@@ -143,6 +143,7 @@ class SchedulerService:
         # Run initial collections immediately on startup
         asyncio.create_task(self._run_initial_odds_collection())
         asyncio.create_task(self._run_initial_player_props_collection())
+        asyncio.create_task(self._run_initial_scores_collection())
         
         logger.info("Scheduler started")
     
@@ -281,6 +282,16 @@ class SchedulerService:
                 trigger="interval",
                 trigger_args={"seconds": 14400}  # Every 4 hours
             ),
+            
+            # Live Scores Pipeline
+            ScheduledJob(
+                job_id="update_live_scores",
+                name="Update Live Scores",
+                category=JobCategory.DATA_COLLECTION,
+                func=self._update_live_scores_job,
+                trigger="interval",
+                trigger_args={"seconds": 120}  # Every 2 minutes
+            ),
         ]
         
         for job in default_jobs:
@@ -372,6 +383,27 @@ class SchedulerService:
             await self._collect_player_props_job()
         except Exception as e:
             logger.error(f"[Scheduler] Initial player props collection failed: {e}", exc_info=True)
+    
+    async def _update_live_scores_job(self):
+        """Fetch live scores from The Odds API and update upcoming_games."""
+        try:
+            from app.pipeline.fetch_scores import run_scores_pipeline
+            
+            logger.info("[Scheduler] Updating live scores...")
+            await run_scores_pipeline(days_from=1)
+            logger.info("[Scheduler] ✅ Live scores updated")
+            
+        except Exception as e:
+            logger.error(f"[Scheduler] Error in live scores job: {e}", exc_info=True)
+    
+    async def _run_initial_scores_collection(self):
+        """Run score collection on startup after a delay."""
+        await asyncio.sleep(20)
+        try:
+            logger.info("[Scheduler] Running initial live scores collection on startup...")
+            await self._update_live_scores_job()
+        except Exception as e:
+            logger.error(f"[Scheduler] Initial scores collection failed: {e}", exc_info=True)
     
     def register_job(self, job: ScheduledJob):
         """Register a scheduled job"""

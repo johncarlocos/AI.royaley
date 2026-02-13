@@ -1275,3 +1275,273 @@ async def public_game_props(
         })
 
     return props
+
+
+# ============================================================================
+# LIVE PAGE - Public endpoint for Live scoreboard
+# ============================================================================
+
+@router.get("/live")
+async def get_live_games(
+    sport: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Live scoreboard: upcoming games (next 24h) + in-progress + recently completed.
+    Joins upcoming_games + upcoming_odds + predictions for full LiveGame data.
+    No auth required.
+    """
+    where_clauses = []
+    params: dict = {}
+    if sport:
+        where_clauses.append("s.code = :sport")
+        params["sport"] = sport.upper()
+    where_sql = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    result = await db.execute(text(f"""
+        WITH best_odds AS (
+            -- Get consensus spread/total from Pinnacle (preferred) or average
+            SELECT
+                upcoming_game_id,
+                -- Spread (from 'spreads' bet_type)
+                COALESCE(
+                    MAX(CASE WHEN bet_type = 'spreads' AND sportsbook_key = 'pinnacle' THEN home_line END),
+                    AVG(CASE WHEN bet_type = 'spreads' THEN home_line END)
+                ) as home_spread,
+                COALESCE(
+                    MAX(CASE WHEN bet_type = 'spreads' AND sportsbook_key = 'pinnacle' THEN away_line END),
+                    AVG(CASE WHEN bet_type = 'spreads' THEN away_line END)
+                ) as away_spread,
+                -- Total (from 'totals' bet_type)
+                COALESCE(
+                    MAX(CASE WHEN bet_type = 'totals' AND sportsbook_key = 'pinnacle' THEN total END),
+                    AVG(CASE WHEN bet_type = 'totals' THEN total END)
+                ) as total_line
+            FROM upcoming_odds
+            GROUP BY upcoming_game_id
+        ),
+        best_prediction AS (
+            -- Get the single best prediction per game (highest edge Tier A/B/C)
+            SELECT DISTINCT ON (upcoming_game_id)
+                upcoming_game_id,
+                bet_type,
+                predicted_side,
+                probability,
+                edge,
+                CAST(signal_tier AS TEXT) as signal_tier,
+                line_at_prediction
+            FROM predictions
+            WHERE upcoming_game_id IS NOT NULL
+              AND CAST(signal_tier AS TEXT) IN ('A', 'B', 'C')
+            ORDER BY upcoming_game_id,
+                     CASE CAST(signal_tier AS TEXT) WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 4 END,
+                     edge DESC NULLS LAST
+        ),
+        team_records AS (
+            SELECT team_id, sport_id,
+                SUM(CASE WHEN won THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN NOT won THEN 1 ELSE 0 END) as losses
+            FROM (
+                SELECT home_team_id as team_id, g2.sport_id, home_score > away_score as won
+                FROM games g2
+                WHERE home_score IS NOT NULL AND away_score IS NOT NULL
+                    AND scheduled_at >= NOW() - INTERVAL '365 days'
+                UNION ALL
+                SELECT away_team_id as team_id, g2.sport_id, away_score > home_score as won
+                FROM games g2
+                WHERE home_score IS NOT NULL AND away_score IS NOT NULL
+                    AND scheduled_at >= NOW() - INTERVAL '365 days'
+            ) t
+            GROUP BY team_id, sport_id
+        )
+        SELECT
+            ug.id,
+            ug.external_id,
+            s.code as sport,
+            ug.home_team_name,
+            ug.away_team_name,
+            ug.scheduled_at,
+            ug.status,
+            ug.home_score,
+            ug.away_score,
+            COALESCE(ug.completed, FALSE) as completed,
+            ug.last_score_update,
+            -- Odds
+            bo.home_spread,
+            bo.away_spread,
+            bo.total_line,
+            -- Best prediction
+            bp.bet_type as pred_bet_type,
+            bp.predicted_side as pred_side,
+            bp.probability as pred_prob,
+            bp.edge as pred_edge,
+            bp.signal_tier as pred_tier,
+            bp.line_at_prediction as pred_line,
+            -- Records (via team lookup)
+            ug.home_team_id,
+            ug.away_team_id,
+            hr.wins as home_wins,
+            hr.losses as home_losses,
+            ar.wins as away_wins,
+            ar.losses as away_losses
+        FROM upcoming_games ug
+        JOIN sports s ON ug.sport_id = s.id
+        LEFT JOIN best_odds bo ON bo.upcoming_game_id = ug.id
+        LEFT JOIN best_prediction bp ON bp.upcoming_game_id = ug.id
+        LEFT JOIN team_records hr ON hr.team_id = ug.home_team_id AND hr.sport_id = ug.sport_id
+        LEFT JOIN team_records ar ON ar.team_id = ug.away_team_id AND ar.sport_id = ug.sport_id
+        WHERE ug.scheduled_at >= NOW() - INTERVAL '12 hours'
+          AND ug.scheduled_at <= NOW() + INTERVAL '24 hours'
+        {where_sql}
+        ORDER BY
+            CASE ug.status
+                WHEN 'in_progress' THEN 1
+                WHEN 'scheduled' THEN 2
+                WHEN 'final' THEN 3
+                ELSE 4
+            END,
+            ug.scheduled_at ASC
+    """), params)
+
+    games = []
+    for i, row in enumerate(result.fetchall()):
+        # Build spread display
+        home_spread_val = _snap_line(row.home_spread)
+        away_spread_val = _snap_line(row.away_spread)
+        total_val = _snap_line(row.total_line)
+
+        home_spread_str = ""
+        away_spread_str = ""
+        if home_spread_val is not None:
+            home_spread_str = f"+{home_spread_val}" if home_spread_val > 0 else str(home_spread_val)
+            away_spread_str = f"+{away_spread_val}" if away_spread_val and away_spread_val > 0 else str(away_spread_val or "")
+
+        total_str = f"O/U {total_val}" if total_val else ""
+
+        # Determine status
+        status_val = row.status or "scheduled"
+        if row.completed:
+            status_val = "final"
+        elif status_val == "in_progress":
+            status_val = "live"
+
+        # Build prediction pick label
+        prediction = None
+        if row.pred_prob and row.pred_tier:
+            pick_label = _build_pick_label(
+                row.pred_bet_type, row.pred_side, row.pred_line,
+                row.home_team_name, row.away_team_name,
+                home_spread_val, away_spread_val, total_val
+            )
+            bet_type_display = {
+                "spreads": "Spread",
+                "totals": "Total",
+                "h2h": "Moneyline",
+            }.get(row.pred_bet_type, row.pred_bet_type or "")
+
+            prediction = {
+                "pick": pick_label,
+                "type": bet_type_display,
+                "probability": round(float(row.pred_prob), 4),
+                "edge": round(float(row.pred_edge), 1) if row.pred_edge else 0,
+                "tier": row.pred_tier,
+            }
+
+        # Build records
+        home_record = ""
+        away_record = ""
+        if row.home_wins is not None:
+            home_record = f"{row.home_wins}-{row.home_losses or 0}"
+        if row.away_wins is not None:
+            away_record = f"{row.away_wins}-{row.away_losses or 0}"
+
+        # Format time
+        game_time = ""
+        period = ""
+        if row.scheduled_at:
+            from datetime import timezone as tz
+            utc_time = row.scheduled_at.replace(tzinfo=tz.utc)
+            # Convert to PT for display
+            try:
+                from zoneinfo import ZoneInfo
+                pt_time = utc_time.astimezone(ZoneInfo("America/Los_Angeles"))
+                game_time = pt_time.strftime("%-I:%M %p")
+            except Exception:
+                game_time = utc_time.strftime("%-I:%M %p")
+
+        if status_val == "scheduled":
+            period = game_time
+        elif status_val == "final":
+            period = "Final"
+        else:
+            period = "LIVE"
+
+        games.append({
+            "id": str(row.id),
+            "sport": row.sport,
+            "date": row.scheduled_at.strftime("%m/%d/%Y") if row.scheduled_at else "",
+            "time": game_time,
+            "gameNumber": 601 + (i * 2),
+            "homeTeam": row.home_team_name,
+            "awayTeam": row.away_team_name,
+            "homeRecord": home_record,
+            "awayRecord": away_record,
+            "homeScore": row.home_score,
+            "awayScore": row.away_score,
+            "period": period,
+            "status": status_val,
+            "spread": {
+                "home": home_spread_str,
+                "away": away_spread_str,
+            },
+            "total": total_str,
+            "prediction": prediction,
+        })
+
+    return {
+        "games": games,
+        "counts": {
+            "live": sum(1 for g in games if g["status"] == "live"),
+            "halftime": sum(1 for g in games if g["status"] == "halftime"),
+            "upcoming": sum(1 for g in games if g["status"] == "scheduled"),
+            "final": sum(1 for g in games if g["status"] == "final"),
+            "with_predictions": sum(1 for g in games if g["prediction"] is not None),
+        },
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _build_pick_label(
+    bet_type: str, side: str, line, home_name: str, away_name: str,
+    home_spread, away_spread, total_val
+) -> str:
+    """Build a human-readable pick label like 'Celtics +4.5' or 'Under 224.5'."""
+    if not side:
+        return ""
+
+    side_lower = (side or "").lower()
+
+    if bet_type == "spreads":
+        if side_lower == "home":
+            spread_str = f"+{home_spread}" if home_spread and home_spread > 0 else str(home_spread or "")
+            # Use short team name (last word)
+            team_short = home_name.split()[-1] if home_name else "Home"
+            return f"{team_short} {spread_str}"
+        else:
+            spread_str = f"+{away_spread}" if away_spread and away_spread > 0 else str(away_spread or "")
+            team_short = away_name.split()[-1] if away_name else "Away"
+            return f"{team_short} {spread_str}"
+
+    elif bet_type == "totals":
+        if side_lower in ("over", "o"):
+            return f"Over {total_val}" if total_val else "Over"
+        else:
+            return f"Under {total_val}" if total_val else "Under"
+
+    elif bet_type == "h2h":
+        if side_lower == "home":
+            return home_name.split()[-1] if home_name else "Home"
+        else:
+            return away_name.split()[-1] if away_name else "Away"
+
+    return side

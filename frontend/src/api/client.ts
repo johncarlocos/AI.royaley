@@ -76,6 +76,14 @@ export const api = {
     return data;
   },
 
+  // Live scoreboard (public, no auth)
+  getLiveGames: async (sport?: string) => {
+    const params: Record<string, string> = {};
+    if (sport) params.sport = sport;
+    const { data } = await axiosClient.get('/public/live', { params });
+    return data;
+  },
+
   // Bets
   getBets: async () => {
     const { data } = await axiosClient.get('/betting/history');

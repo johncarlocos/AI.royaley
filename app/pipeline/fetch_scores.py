@@ -1,0 +1,279 @@
+"""
+ROYALEY - Live Scores Pipeline
+Fetches live and final scores from The Odds API → updates upcoming_games.
+
+The Odds API /scores endpoint returns:
+  - Live games with current scores
+  - Completed games (with daysFrom param) with final scores
+  - Cost: 1 request per sport (live only), 2 per sport (with completed)
+
+Usage:
+    docker exec royaley_api python -m app.pipeline.fetch_scores
+    docker exec royaley_api python -m app.pipeline.fetch_scores --sport NBA
+"""
+
+import asyncio
+import argparse
+import logging
+import sys
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+import httpx
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+
+from app.core.config import settings, ODDS_API_SPORT_KEYS
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger("royaley.scores")
+
+
+# =============================================================================
+# SCORES API CLIENT
+# =============================================================================
+
+class ScoresAPIClient:
+    """Fetches live scores from The Odds API."""
+
+    BASE_URL = "https://api.the-odds-api.com/v4"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.requests_used = 0
+        self.requests_remaining = 500
+
+    async def get_scores(
+        self,
+        sport_key: str,
+        days_from: int = 1,
+    ) -> List[dict]:
+        """
+        Fetch scores for a sport.
+
+        Args:
+            sport_key: e.g. 'basketball_nba'
+            days_from: 1-3, include completed games from past N days.
+                       0 = live + upcoming only (cost: 1 request)
+                       1-3 = also completed (cost: 2 requests)
+        """
+        params = {
+            "apiKey": self.api_key,
+        }
+        if days_from > 0:
+            params["daysFrom"] = min(days_from, 3)
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{self.BASE_URL}/sports/{sport_key}/scores",
+                params=params,
+            )
+            self._track_usage(resp)
+
+            if resp.status_code != 200:
+                logger.error(f"Scores API {resp.status_code}: {resp.text[:200]}")
+                return []
+
+            return resp.json()
+
+    def _track_usage(self, resp):
+        self.requests_used = int(resp.headers.get("x-requests-used", self.requests_used))
+        self.requests_remaining = int(resp.headers.get("x-requests-remaining", self.requests_remaining))
+
+
+# =============================================================================
+# SCORE UPDATER
+# =============================================================================
+
+async def update_scores_in_db(
+    db: AsyncSession,
+    scores_data: List[dict],
+    sport_code: str,
+) -> dict:
+    """
+    Update upcoming_games with score data from The Odds API.
+
+    The API returns:
+    {
+        "id": "abc123...",
+        "sport_key": "basketball_nba",
+        "home_team": "Los Angeles Lakers",
+        "away_team": "Boston Celtics",
+        "commence_time": "2026-02-18T00:30:00Z",
+        "completed": false,
+        "scores": [
+            {"name": "Los Angeles Lakers", "score": "52"},
+            {"name": "Boston Celtics", "score": "58"}
+        ],
+        "last_update": "2026-02-18T01:15:00Z"
+    }
+    """
+    stats = {"updated": 0, "completed": 0, "not_found": 0, "no_scores": 0}
+
+    for event in scores_data:
+        event_id = event.get("id")
+        if not event_id:
+            continue
+
+        scores = event.get("scores")
+        completed = event.get("completed", False)
+        home_team = event.get("home_team", "")
+        away_team = event.get("away_team", "")
+
+        # Parse scores
+        home_score = None
+        away_score = None
+
+        if scores and len(scores) >= 2:
+            for s in scores:
+                score_name = s.get("name", "")
+                score_val = s.get("score")
+                if score_val is not None:
+                    try:
+                        score_int = int(score_val)
+                    except (ValueError, TypeError):
+                        score_int = None
+
+                    if score_name == home_team:
+                        home_score = score_int
+                    elif score_name == away_team:
+                        away_score = score_int
+
+        if home_score is None and away_score is None:
+            stats["no_scores"] += 1
+            continue
+
+        # Determine status
+        if completed:
+            new_status = "final"
+        elif home_score is not None:
+            new_status = "in_progress"
+        else:
+            new_status = "scheduled"
+
+        # Update upcoming_games by external_id
+        result = await db.execute(
+            text("""
+                UPDATE upcoming_games
+                SET home_score = :home_score,
+                    away_score = :away_score,
+                    status = :status,
+                    completed = :completed,
+                    last_score_update = NOW(),
+                    updated_at = NOW()
+                WHERE external_id = :ext_id
+                RETURNING id
+            """),
+            {
+                "home_score": home_score,
+                "away_score": away_score,
+                "status": new_status,
+                "completed": completed,
+                "ext_id": event_id,
+            },
+        )
+        row = result.fetchone()
+
+        if row:
+            if completed:
+                stats["completed"] += 1
+            else:
+                stats["updated"] += 1
+        else:
+            stats["not_found"] += 1
+
+    await db.commit()
+    return stats
+
+
+# =============================================================================
+# MAIN PIPELINE
+# =============================================================================
+
+async def run_scores_pipeline(
+    sports: Optional[List[str]] = None,
+    days_from: int = 1,
+):
+    """
+    Main pipeline: fetch scores → update DB.
+
+    Args:
+        sports: Sport codes to fetch. None = all active.
+        days_from: Include completed games from past N days (0-3).
+    """
+    logger.info("=" * 50)
+    logger.info("ROYALEY Live Scores Pipeline")
+    logger.info("=" * 50)
+
+    api_client = ScoresAPIClient(api_key=settings.ODDS_API_KEY)
+
+    engine = create_async_engine(
+        settings.DATABASE_URL.replace("+asyncpg", "+asyncpg"),
+        echo=False,
+    )
+    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    # Determine sports
+    if sports:
+        sport_list = {s.upper(): ODDS_API_SPORT_KEYS[s.upper()]
+                      for s in sports if s.upper() in ODDS_API_SPORT_KEYS}
+    else:
+        sport_list = dict(ODDS_API_SPORT_KEYS)
+
+    logger.info(f"Sports: {list(sport_list.keys())}")
+    logger.info(f"Days from: {days_from}")
+
+    total_updated = 0
+    total_completed = 0
+
+    async with async_session() as db:
+        for sport_code, api_key in sport_list.items():
+            scores = await api_client.get_scores(api_key, days_from=days_from)
+
+            if not scores:
+                continue
+
+            # Count live vs completed
+            live_count = sum(1 for s in scores if not s.get("completed") and s.get("scores"))
+            final_count = sum(1 for s in scores if s.get("completed"))
+
+            if live_count == 0 and final_count == 0:
+                continue
+
+            stats = await update_scores_in_db(db, scores, sport_code)
+
+            logger.info(
+                f"  {sport_code}: {live_count} live, {final_count} final | "
+                f"DB: {stats['updated']} updated, {stats['completed']} completed, "
+                f"{stats['not_found']} not found"
+            )
+
+            total_updated += stats["updated"]
+            total_completed += stats["completed"]
+
+    logger.info(f"DONE: {total_updated} live updates, {total_completed} completed | "
+                f"API: {api_client.requests_remaining} remaining")
+
+    await engine.dispose()
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="ROYALEY Live Scores Pipeline")
+    parser.add_argument("--sport", type=str, help="Specific sport (e.g. NBA)")
+    parser.add_argument("--days-from", type=int, default=1, help="Include completed games from past N days (0-3)")
+    args = parser.parse_args()
+
+    sports = [args.sport] if args.sport else None
+    asyncio.run(run_scores_pipeline(sports=sports, days_from=args.days_from))
+
+
+if __name__ == "__main__":
+    main()

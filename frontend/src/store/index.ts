@@ -134,6 +134,112 @@ export const useBettingStore = create<BettingState>()(
   )
 );
 
+// ML Config Store
+interface MLConfigState {
+  // H2O AutoML
+  h2oMaxModels: number;
+  h2oMaxRuntime: number;
+  h2oMaxMem: string;
+  h2oNfolds: number;
+  h2oSeed: number;
+  // AutoGluon
+  autogluonPresets: 'best_quality' | 'high_quality' | 'good_quality' | 'medium_quality';
+  autogluonTimeLimit: number;
+  autogluonBagFolds: number;
+  autogluonStackLevels: number;
+  // Sklearn
+  sklearnEstimators: number;
+  sklearnMaxDepth: number;
+  sklearnLearningRate: number;
+  sklearnCvFolds: number;
+  // Walk-Forward Validation
+  trainingWindowDays: number;
+  validationWindowDays: number;
+  stepSizeDays: number;
+  minTrainingSizeDays: number;
+  gapDays: number;
+  // Calibration
+  calibrationMethod: 'isotonic' | 'platt' | 'temperature';
+  calibrationCvFolds: number;
+  // Signal Tiers
+  tierAThreshold: number;
+  tierBThreshold: number;
+  tierCThreshold: number;
+  // Meta-Ensemble
+  ensembleMinWeight: number;
+  ensembleWeightDecay: number;
+  maxModelsPerSport: number;
+  modelTtlDays: number;
+  // Feature Engineering
+  rollingWindows: number[];
+  eloBaseRating: number;
+  momentumDecay: number;
+  // Performance Targets
+  targetAccuracy: number;
+  targetAuc: number;
+  targetCalibrationError: number;
+  // Schedule
+  weeklyRetrainDay: number;
+  weeklyRetrainHour: number;
+  // Active Frameworks
+  frameworkH2o: boolean;
+  frameworkSklearn: boolean;
+  frameworkAutogluon: boolean;
+  frameworkDeepLearning: boolean;
+  frameworkQuantum: boolean;
+  // Setter
+  setMLConfig: (config: Partial<MLConfigState>) => void;
+}
+
+export const useMLConfigStore = create<MLConfigState>()(
+  persist(
+    (set) => ({
+      h2oMaxModels: 50,
+      h2oMaxRuntime: 3600,
+      h2oMaxMem: '32g',
+      h2oNfolds: 5,
+      h2oSeed: 42,
+      autogluonPresets: 'best_quality',
+      autogluonTimeLimit: 3600,
+      autogluonBagFolds: 8,
+      autogluonStackLevels: 2,
+      sklearnEstimators: 200,
+      sklearnMaxDepth: 8,
+      sklearnLearningRate: 0.05,
+      sklearnCvFolds: 3,
+      trainingWindowDays: 365,
+      validationWindowDays: 30,
+      stepSizeDays: 30,
+      minTrainingSizeDays: 180,
+      gapDays: 1,
+      calibrationMethod: 'isotonic',
+      calibrationCvFolds: 5,
+      tierAThreshold: 0.58,
+      tierBThreshold: 0.55,
+      tierCThreshold: 0.52,
+      ensembleMinWeight: 0.1,
+      ensembleWeightDecay: 0.95,
+      maxModelsPerSport: 5,
+      modelTtlDays: 90,
+      rollingWindows: [3, 5, 10, 15, 30],
+      eloBaseRating: 1500,
+      momentumDecay: 0.9,
+      targetAccuracy: 0.60,
+      targetAuc: 0.60,
+      targetCalibrationError: 0.05,
+      weeklyRetrainDay: 0,
+      weeklyRetrainHour: 4,
+      frameworkH2o: true,
+      frameworkSklearn: true,
+      frameworkAutogluon: true,
+      frameworkDeepLearning: false,
+      frameworkQuantum: false,
+      setMLConfig: (config) => set((state) => ({ ...state, ...config })),
+    }),
+    { name: 'ml-config-storage' }
+  )
+);
+
 // Filter Store
 interface FilterState {
   selectedSport: string;

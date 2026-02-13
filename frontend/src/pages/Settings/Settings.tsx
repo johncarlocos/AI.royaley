@@ -8,8 +8,8 @@ import {
   DialogContent, DialogActions, List, ListItem, ListItemText, Paper,
   Radio, RadioGroup
 } from '@mui/material';
-import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, PlayArrow, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer } from '@mui/icons-material';
-import { useSettingsStore, useBettingStore } from '../../store';
+import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, PlayArrow, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer, Memory, Speed, Tune, CalendarMonth, Timeline, Science, Hub } from '@mui/icons-material';
+import { useSettingsStore, useBettingStore, useMLConfigStore } from '../../store';
 import { TIMEZONES } from '../../types';
 
 interface TabPanelProps { children?: React.ReactNode; index: number; value: number; }
@@ -22,6 +22,7 @@ const Settings: React.FC = () => {
   const [tab, setTab] = useState(0);
   const { theme, setTheme, oddsFormat, setOddsFormat, timezone, setTimezone, timeFormat, setTimeFormat } = useSettingsStore();
   const betting = useBettingStore();
+  const ml = useMLConfigStore();
   const [telegramToken, setTelegramToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   
@@ -362,16 +363,364 @@ const Settings: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tab} index={3}>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="H2O Max Memory" defaultValue="32g" InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="Max Models per Training" type="number" defaultValue={50} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="Max Runtime (seconds)" type="number" defaultValue={3600} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="Min Training Samples" type="number" defaultValue={500} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12}><Divider sx={{ my: 1 }} /></Grid>
-            <Grid item xs={12} sm={4}><TextField fullWidth size="small" label="Training Window (days)" type="number" defaultValue={365} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12} sm={4}><TextField fullWidth size="small" label="Test Window (days)" type="number" defaultValue={30} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12} sm={4}><TextField fullWidth size="small" label="Step Size (days)" type="number" defaultValue={30} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-          </Grid>
+          {/* ── Section 1: Active Frameworks ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Hub sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Active Frameworks</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Enable/disable frameworks for the meta-ensemble. Predictions combine all active frameworks weighted by performance.
+            </Typography>
+            <Grid container spacing={1}>
+              {([
+                { key: 'frameworkH2o', label: 'H2O AutoML', desc: 'GBM, XGBoost, GLM, DRF, Stacked', color: '#2196f3' },
+                { key: 'frameworkSklearn', label: 'Sklearn', desc: 'LightGBM, XGBoost, RF, Logistic', color: '#4caf50' },
+                { key: 'frameworkAutogluon', label: 'AutoGluon', desc: 'Multi-layer stacking, bagging', color: '#ff9800' },
+                { key: 'frameworkDeepLearning', label: 'Deep Learning', desc: 'Neural networks (experimental)', color: '#9c27b0' },
+                { key: 'frameworkQuantum', label: 'Quantum ML', desc: 'PennyLane hybrid circuits', color: '#e91e63' },
+              ] as const).map(fw => (
+                <Grid item xs={6} sm={4} md={2.4} key={fw.key}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: (ml as any)[fw.key] ? fw.color : 'divider', bgcolor: (ml as any)[fw.key] ? `${fw.color}12` : 'transparent', borderWidth: (ml as any)[fw.key] ? 2 : 1 }}>
+                    <FormControlLabel control={<Switch size="small" checked={(ml as any)[fw.key]} onChange={(e) => ml.setMLConfig({ [fw.key]: e.target.checked } as any)} sx={{ '& .MuiSwitch-switchBase.Mui-checked': { color: fw.color } }} />}
+                      label={<Typography sx={{ fontSize: 12, fontWeight: 600 }}>{fw.label}</Typography>} sx={{ m: 0 }} />
+                    <Typography sx={{ fontSize: 10, color: 'text.secondary', mt: 0.5 }}>{fw.desc}</Typography>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 2: H2O AutoML ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Memory sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>H2O AutoML</Typography>
+              {!ml.frameworkH2o && <Chip label="Disabled" size="small" sx={{ fontSize: 10, height: 20 }} />}
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Max Memory" value={ml.h2oMaxMem}
+                  onChange={(e) => ml.setMLConfig({ h2oMaxMem: e.target.value })}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="e.g. 16g, 32g, 64g" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Max Models" type="number" value={ml.h2oMaxModels}
+                  onChange={(e) => ml.setMLConfig({ h2oMaxModels: Math.max(5, parseInt(e.target.value) || 50) })}
+                  inputProps={{ min: 5, max: 200 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Models to explore per run" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Max Runtime (sec)" type="number" value={ml.h2oMaxRuntime}
+                  onChange={(e) => ml.setMLConfig({ h2oMaxRuntime: Math.max(60, parseInt(e.target.value) || 3600) })}
+                  inputProps={{ min: 60, step: 300 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText={`${Math.round(ml.h2oMaxRuntime / 60)} minutes`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="CV Folds" type="number" value={ml.h2oNfolds}
+                  onChange={(e) => ml.setMLConfig({ h2oNfolds: Math.min(10, Math.max(2, parseInt(e.target.value) || 5)) })}
+                  inputProps={{ min: 2, max: 10 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Random Seed" type="number" value={ml.h2oSeed}
+                  onChange={(e) => ml.setMLConfig({ h2oSeed: parseInt(e.target.value) || 42 })}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 3: Sklearn ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Science sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Sklearn / LightGBM</Typography>
+              {!ml.frameworkSklearn && <Chip label="Disabled" size="small" sx={{ fontSize: 10, height: 20 }} />}
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="N Estimators (trees)" type="number" value={ml.sklearnEstimators}
+                  onChange={(e) => ml.setMLConfig({ sklearnEstimators: Math.max(50, parseInt(e.target.value) || 200) })}
+                  inputProps={{ min: 50, max: 2000, step: 50 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="More trees = slower but better" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Max Depth" type="number" value={ml.sklearnMaxDepth}
+                  onChange={(e) => ml.setMLConfig({ sklearnMaxDepth: Math.min(20, Math.max(2, parseInt(e.target.value) || 8)) })}
+                  inputProps={{ min: 2, max: 20 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Learning Rate" type="number" value={ml.sklearnLearningRate}
+                  onChange={(e) => ml.setMLConfig({ sklearnLearningRate: Math.min(1, Math.max(0.001, parseFloat(e.target.value) || 0.05)) })}
+                  inputProps={{ min: 0.001, max: 1, step: 0.01 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="CV Folds" type="number" value={ml.sklearnCvFolds}
+                  onChange={(e) => ml.setMLConfig({ sklearnCvFolds: Math.min(10, Math.max(2, parseInt(e.target.value) || 3)) })}
+                  inputProps={{ min: 2, max: 10 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 4: AutoGluon ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Tune sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>AutoGluon</Typography>
+              {!ml.frameworkAutogluon && <Chip label="Disabled" size="small" sx={{ fontSize: 10, height: 20 }} />}
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth size="small">
+                  <InputLabel sx={{ fontSize: 13 }}>Presets</InputLabel>
+                  <Select value={ml.autogluonPresets} label="Presets"
+                    onChange={(e) => ml.setMLConfig({ autogluonPresets: e.target.value as any })}
+                    sx={{ fontSize: 13 }}>
+                    <MenuItem value="best_quality" sx={{ fontSize: 13 }}>Best Quality (slowest)</MenuItem>
+                    <MenuItem value="high_quality" sx={{ fontSize: 13 }}>High Quality</MenuItem>
+                    <MenuItem value="good_quality" sx={{ fontSize: 13 }}>Good Quality</MenuItem>
+                    <MenuItem value="medium_quality" sx={{ fontSize: 13 }}>Medium Quality (fastest)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Time Limit (sec)" type="number" value={ml.autogluonTimeLimit}
+                  onChange={(e) => ml.setMLConfig({ autogluonTimeLimit: Math.max(60, parseInt(e.target.value) || 3600) })}
+                  inputProps={{ min: 60, step: 300 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText={`${Math.round(ml.autogluonTimeLimit / 60)} minutes`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Bag Folds" type="number" value={ml.autogluonBagFolds}
+                  onChange={(e) => ml.setMLConfig({ autogluonBagFolds: Math.min(10, Math.max(2, parseInt(e.target.value) || 8)) })}
+                  inputProps={{ min: 2, max: 10 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Stack Levels" type="number" value={ml.autogluonStackLevels}
+                  onChange={(e) => ml.setMLConfig({ autogluonStackLevels: Math.min(5, Math.max(0, parseInt(e.target.value) || 2)) })}
+                  inputProps={{ min: 0, max: 5 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="0 = no stacking" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 5: Walk-Forward Validation ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Timeline sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Walk-Forward Validation</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Sliding window that trains on historical data, validates on the next window, then steps forward. Prevents data leakage.
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Training Window (days)" type="number" value={ml.trainingWindowDays}
+                  onChange={(e) => ml.setMLConfig({ trainingWindowDays: Math.max(90, parseInt(e.target.value) || 365) })}
+                  inputProps={{ min: 90, step: 30 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText={`~${Math.round(ml.trainingWindowDays / 30)} months of training data`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Validation Window (days)" type="number" value={ml.validationWindowDays}
+                  onChange={(e) => ml.setMLConfig({ validationWindowDays: Math.max(7, parseInt(e.target.value) || 30) })}
+                  inputProps={{ min: 7, step: 7 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Step Size (days)" type="number" value={ml.stepSizeDays}
+                  onChange={(e) => ml.setMLConfig({ stepSizeDays: Math.max(7, parseInt(e.target.value) || 30) })}
+                  inputProps={{ min: 7, step: 7 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Min Training Size (days)" type="number" value={ml.minTrainingSizeDays}
+                  onChange={(e) => ml.setMLConfig({ minTrainingSizeDays: Math.max(30, parseInt(e.target.value) || 180) })}
+                  inputProps={{ min: 30, step: 30 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Gap Days" type="number" value={ml.gapDays}
+                  onChange={(e) => ml.setMLConfig({ gapDays: Math.max(0, parseInt(e.target.value) || 1) })}
+                  inputProps={{ min: 0, max: 7 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Gap between train/val to prevent leakage" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 6: Calibration & Signal Tiers ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Speed sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Calibration & Signal Tiers</Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth size="small">
+                  <InputLabel sx={{ fontSize: 13 }}>Calibration Method</InputLabel>
+                  <Select value={ml.calibrationMethod} label="Calibration Method"
+                    onChange={(e) => ml.setMLConfig({ calibrationMethod: e.target.value as any })}
+                    sx={{ fontSize: 13 }}>
+                    <MenuItem value="isotonic" sx={{ fontSize: 13 }}>Isotonic Regression</MenuItem>
+                    <MenuItem value="platt" sx={{ fontSize: 13 }}>Platt Scaling</MenuItem>
+                    <MenuItem value="temperature" sx={{ fontSize: 13 }}>Temperature Scaling</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Calibration CV Folds" type="number" value={ml.calibrationCvFolds}
+                  onChange={(e) => ml.setMLConfig({ calibrationCvFolds: Math.min(10, Math.max(2, parseInt(e.target.value) || 5)) })}
+                  inputProps={{ min: 2, max: 10 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+            </Grid>
+            <Typography variant="body2" fontWeight={500} sx={{ fontSize: 13, mt: 2, mb: 1 }}>Signal Tier Thresholds</Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'success.main', bgcolor: 'rgba(76, 175, 80, 0.06)' }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'success.main', mb: 1 }}>Tier A — High Confidence</Typography>
+                  <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierAThreshold}
+                    onChange={(e) => ml.setMLConfig({ tierAThreshold: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.58)) })}
+                    inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
+                    InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
+                    helperText={`≥ ${(ml.tierAThreshold * 100).toFixed(0)}% confidence`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+                </Paper>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'info.main', bgcolor: 'rgba(33, 150, 243, 0.06)' }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'info.main', mb: 1 }}>Tier B — Medium Confidence</Typography>
+                  <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierBThreshold}
+                    onChange={(e) => ml.setMLConfig({ tierBThreshold: Math.min(ml.tierAThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.55)) })}
+                    inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
+                    InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
+                    helperText={`${(ml.tierBThreshold * 100).toFixed(0)}%–${(ml.tierAThreshold * 100).toFixed(0)}%`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+                </Paper>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'warning.main', bgcolor: 'rgba(255, 152, 0, 0.06)' }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'warning.main', mb: 1 }}>Tier C — Low Confidence</Typography>
+                  <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierCThreshold}
+                    onChange={(e) => ml.setMLConfig({ tierCThreshold: Math.min(ml.tierBThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.52)) })}
+                    inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
+                    InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
+                    helperText={`${(ml.tierCThreshold * 100).toFixed(0)}%–${(ml.tierBThreshold * 100).toFixed(0)}%`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+                </Paper>
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 7: Meta-Ensemble & Model Management ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Psychology sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Meta-Ensemble & Model Management</Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Min Framework Weight" type="number" value={ml.ensembleMinWeight}
+                  onChange={(e) => ml.setMLConfig({ ensembleMinWeight: Math.min(0.5, Math.max(0, parseFloat(e.target.value) || 0.1)) })}
+                  inputProps={{ min: 0, max: 0.5, step: 0.05 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Floor for any framework's weight" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Weight Decay" type="number" value={ml.ensembleWeightDecay}
+                  onChange={(e) => ml.setMLConfig({ ensembleWeightDecay: Math.min(1, Math.max(0.5, parseFloat(e.target.value) || 0.95)) })}
+                  inputProps={{ min: 0.5, max: 1, step: 0.01 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Recency bias for ensemble weights" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Max Models/Sport" type="number" value={ml.maxModelsPerSport}
+                  onChange={(e) => ml.setMLConfig({ maxModelsPerSport: Math.min(20, Math.max(1, parseInt(e.target.value) || 5)) })}
+                  inputProps={{ min: 1, max: 20 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Model TTL (days)" type="number" value={ml.modelTtlDays}
+                  onChange={(e) => ml.setMLConfig({ modelTtlDays: Math.max(7, parseInt(e.target.value) || 90) })}
+                  inputProps={{ min: 7, step: 7 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Auto-expire old models after N days" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 8: Training Schedule & Targets ── */}
+          <Box>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <CalendarMonth sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Training Schedule & Performance Targets</Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth size="small">
+                  <InputLabel sx={{ fontSize: 13 }}>Weekly Retrain Day</InputLabel>
+                  <Select value={ml.weeklyRetrainDay} label="Weekly Retrain Day"
+                    onChange={(e) => ml.setMLConfig({ weeklyRetrainDay: e.target.value as number })}
+                    sx={{ fontSize: 13 }}>
+                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d, i) => (
+                      <MenuItem key={i} value={i} sx={{ fontSize: 13 }}>{d}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <TextField fullWidth size="small" label="Retrain Hour (UTC)" type="number" value={ml.weeklyRetrainHour}
+                  onChange={(e) => ml.setMLConfig({ weeklyRetrainHour: Math.min(23, Math.max(0, parseInt(e.target.value) || 4)) })}
+                  inputProps={{ min: 0, max: 23 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText={`${ml.weeklyRetrainHour}:00 UTC`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+            </Grid>
+            <Typography variant="body2" fontWeight={500} sx={{ fontSize: 13, mt: 2, mb: 1 }}>Performance Targets</Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Target Accuracy" type="number" value={ml.targetAccuracy}
+                  onChange={(e) => ml.setMLConfig({ targetAccuracy: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.60)) })}
+                  inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText={`${(ml.targetAccuracy * 100).toFixed(0)}%`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Target AUC" type="number" value={ml.targetAuc}
+                  onChange={(e) => ml.setMLConfig({ targetAuc: Math.min(0.95, Math.max(0.50, parseFloat(e.target.value) || 0.60)) })}
+                  inputProps={{ min: 0.50, max: 0.95, step: 0.01 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }} />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField fullWidth size="small" label="Target Cal. Error" type="number" value={ml.targetCalibrationError}
+                  onChange={(e) => ml.setMLConfig({ targetCalibrationError: Math.min(0.20, Math.max(0.01, parseFloat(e.target.value) || 0.05)) })}
+                  inputProps={{ min: 0.01, max: 0.20, step: 0.01 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }} sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Max expected calibration error" FormHelperTextProps={{ sx: { fontSize: 11 } }} />
+              </Grid>
+            </Grid>
+          </Box>
         </TabPanel>
 
         <TabPanel value={tab} index={4}>

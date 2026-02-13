@@ -3,10 +3,10 @@ ROYALEY - Signal Tier Classifier
 Phase 2: Classification of predictions into confidence tiers
 
 Signal tiers help categorize predictions by confidence level:
-- Tier A (65%+): Elite predictions, highest edge
-- Tier B (60-65%): Strong value plays
-- Tier C (55-60%): Moderate confidence
-- Tier D (<55%): Lower confidence, track only
+- Tier A (58%+): Elite predictions, highest edge
+- Tier B (55-58%): Strong value plays
+- Tier C (52-55%): Moderate confidence
+- Tier D (<52%): Lower confidence, track only
 """
 
 import logging
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 class SignalTier(Enum):
     """Signal tier classification"""
-    A = "A"  # Elite - 65%+
-    B = "B"  # Strong - 60-65%
-    C = "C"  # Moderate - 55-60%
-    D = "D"  # Lower - <55%
+    A = "A"  # Elite - 58%+
+    B = "B"  # Strong - 55-58%
+    C = "C"  # Moderate - 52-55%
+    D = "D"  # Lower - <52%
     
     @property
     def description(self) -> str:
@@ -54,9 +54,9 @@ class SignalTier(Enum):
     def target_accuracy(self) -> float:
         """Target accuracy for this tier"""
         targets = {
-            "A": 0.65,
-            "B": 0.60,
-            "C": 0.55,
+            "A": 0.58,
+            "B": 0.55,
+            "C": 0.52,
             "D": 0.50,
         }
         return targets.get(self.value, 0.50)
@@ -65,9 +65,9 @@ class SignalTier(Enum):
 @dataclass
 class TierThresholds:
     """Configurable tier thresholds"""
-    tier_a_min: float = 0.65
-    tier_b_min: float = 0.60
-    tier_c_min: float = 0.55
+    tier_a_min: float = 0.58
+    tier_b_min: float = 0.55
+    tier_c_min: float = 0.52
     tier_d_min: float = 0.00  # Everything below C
     
     def to_dict(self) -> Dict:
@@ -495,14 +495,14 @@ class SignalTierClassifier:
         tier_c_threshold = 0.55
         
         # Ensure proper ordering
-        tier_a_threshold = max(tier_a_threshold, 0.60)
-        tier_b_threshold = max(tier_b_threshold, 0.55)
+        tier_a_threshold = max(tier_a_threshold, 0.55)
+        tier_b_threshold = max(tier_b_threshold, 0.52)
         tier_b_threshold = min(tier_b_threshold, tier_a_threshold - 0.01)
         
         new_thresholds = TierThresholds(
             tier_a_min=tier_a_threshold,
             tier_b_min=tier_b_threshold,
-            tier_c_min=tier_c_threshold,
+            tier_c_min=0.52,
         )
         
         logger.info(
@@ -525,7 +525,7 @@ class SignalTierClassifier:
         best_threshold = 0.5
         best_diff = float('inf')
         
-        for threshold in np.arange(0.50, 0.80, 0.01):
+        for threshold in np.arange(0.50, 0.65, 0.005):
             subset = df[df['probability'] >= threshold]
             if len(subset) < 10:
                 continue
@@ -558,11 +558,11 @@ def assign_signal_tier(probability: float) -> str:
     Returns:
         Tier letter (A, B, C, or D)
     """
-    if probability >= 0.65:
+    if probability >= 0.58:
         return 'A'
-    elif probability >= 0.60:
-        return 'B'
     elif probability >= 0.55:
+        return 'B'
+    elif probability >= 0.52:
         return 'C'
     else:
         return 'D'

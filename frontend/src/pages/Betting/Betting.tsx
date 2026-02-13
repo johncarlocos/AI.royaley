@@ -276,9 +276,9 @@ const Betting: React.FC = () => {
               </Grid>
               <Typography variant="caption" sx={{ fontSize: 11, mb: 1, display: 'block' }}>Bet on Tiers:</Typography>
               <Box display="flex" gap={1} mb={1.5} flexWrap="wrap">
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_a} onChange={(e) => setConfig({ ...config, bet_tier_a: e.target.checked })} color="success" />} label={<Typography sx={{ fontSize: 11 }}>Tier A (65%+)</Typography>} />
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_b} onChange={(e) => setConfig({ ...config, bet_tier_b: e.target.checked })} color="primary" />} label={<Typography sx={{ fontSize: 11 }}>Tier B (60-65%)</Typography>} />
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_c} onChange={(e) => setConfig({ ...config, bet_tier_c: e.target.checked })} color="warning" />} label={<Typography sx={{ fontSize: 11 }}>Tier C (55-60%)</Typography>} />
+                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_a} onChange={(e) => setConfig({ ...config, bet_tier_a: e.target.checked })} color="success" />} label={<Typography sx={{ fontSize: 11 }}>Tier A (58%+)</Typography>} />
+                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_b} onChange={(e) => setConfig({ ...config, bet_tier_b: e.target.checked })} color="primary" />} label={<Typography sx={{ fontSize: 11 }}>Tier B (55-58%)</Typography>} />
+                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_c} onChange={(e) => setConfig({ ...config, bet_tier_c: e.target.checked })} color="warning" />} label={<Typography sx={{ fontSize: 11 }}>Tier C (52-55%)</Typography>} />
                 <FormControlLabel control={<Switch size="small" checked={config.bet_tier_d} onChange={(e) => setConfig({ ...config, bet_tier_d: e.target.checked })} />} label={<Typography sx={{ fontSize: 11 }}>Tier D (&lt;55%)</Typography>} />
               </Box>
               <Typography variant="caption" sx={{ fontSize: 11, mb: 0.5, display: 'block' }}>Filter by Sport:</Typography>

@@ -655,12 +655,17 @@ async def generate_predictions_for_game(
             open_away_ml = int(row.pin_away_ml or row.avg_away_ml) if (row.pin_away_ml or row.avg_away_ml) else None
 
         for predicted_side, probability, line_val, odds_val, edge in predictions_to_make:
-            # Signal tier based on model probability
-            if probability >= 0.65:
+            # Signal tier based on calibrated probability
+            # These thresholds match sports betting reality:
+            #   58%+ sustained = world-class edge (Pinnacle-sharp level)
+            #   55-58% = strong positive EV at standard -110 juice
+            #   52.4% = breakeven at -110, so 52-55% = modest edge
+            #   <52% = losing territory, track only
+            if probability >= 0.58:
                 tier = "A"
-            elif probability >= 0.60:
-                tier = "B"
             elif probability >= 0.55:
+                tier = "B"
+            elif probability >= 0.52:
                 tier = "C"
             else:
                 tier = "D"

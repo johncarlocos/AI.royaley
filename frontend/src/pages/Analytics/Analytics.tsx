@@ -327,9 +327,9 @@ const Analytics: React.FC = () => {
                 <InputLabel sx={{ fontSize: 12 }}>Tier</InputLabel>
                 <Select value={tierFilter} label="Tier" onChange={(e) => { setTierFilter(e.target.value); setPage(0); }} sx={{ fontSize: 12 }}>
                   <MenuItem value="all" sx={{ fontSize: 12 }}>All Tiers</MenuItem>
-                  <MenuItem value="A" sx={{ fontSize: 12 }}>Tier A (65%+)</MenuItem>
-                  <MenuItem value="B" sx={{ fontSize: 12 }}>Tier B (60-65%)</MenuItem>
-                  <MenuItem value="C" sx={{ fontSize: 12 }}>Tier C (55-60%)</MenuItem>
+                  <MenuItem value="A" sx={{ fontSize: 12 }}>Tier A (58%+)</MenuItem>
+                  <MenuItem value="B" sx={{ fontSize: 12 }}>Tier B (55-58%)</MenuItem>
+                  <MenuItem value="C" sx={{ fontSize: 12 }}>Tier C (52-55%)</MenuItem>
                   <MenuItem value="D" sx={{ fontSize: 12 }}>Tier D (&lt;55%)</MenuItem>
                 </Select>
               </FormControl>

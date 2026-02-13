@@ -362,9 +362,9 @@ const Backtesting: React.FC = () => {
                   <FormControl fullWidth size="small">
                     <InputLabel sx={{ fontSize: 11 }}>Min Tier</InputLabel>
                     <Select value={minTier} label="Min Tier" onChange={(e) => setMinTier(e.target.value)} sx={{ fontSize: 11 }}>
-                      <MenuItem value="A" sx={{ fontSize: 11 }}>Tier A Only (65%+)</MenuItem>
-                      <MenuItem value="B" sx={{ fontSize: 11 }}>Tier B+ (60%+)</MenuItem>
-                      <MenuItem value="C" sx={{ fontSize: 11 }}>Tier C+ (55%+)</MenuItem>
+                      <MenuItem value="A" sx={{ fontSize: 11 }}>Tier A Only (58%+)</MenuItem>
+                      <MenuItem value="B" sx={{ fontSize: 11 }}>Tier B+ (55%+)</MenuItem>
+                      <MenuItem value="C" sx={{ fontSize: 11 }}>Tier C+ (52%+)</MenuItem>
                       <MenuItem value="D" sx={{ fontSize: 11 }}>All Tiers</MenuItem>
                     </Select>
                   </FormControl>

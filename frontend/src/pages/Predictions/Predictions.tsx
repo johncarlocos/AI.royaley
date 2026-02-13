@@ -134,7 +134,7 @@ const PerformanceTable: React.FC<{ data: PerformanceRow[]; isDark: boolean }> = 
               <TableCell align="center"><Chip label={row.losses} size="small" color="error" sx={{ fontSize: 11, height: 22, minWidth: 40 }} /></TableCell>
               <TableCell align="center"><Chip label={row.pushes} size="small" sx={{ fontSize: 11, height: 22, minWidth: 32 }} /></TableCell>
               <TableCell align="center">{row.wins}-{row.losses}-{row.pushes}</TableCell>
-              <TableCell align="center" sx={{ color: row.winPct >= 60 ? 'success.main' : row.winPct >= 55 ? 'warning.main' : 'text.secondary', fontWeight: 600 }}>
+              <TableCell align="center" sx={{ color: row.winPct >= 55 ? 'success.main' : row.winPct >= 52 ? 'warning.main' : 'text.secondary', fontWeight: 600 }}>
                 {row.wins + row.losses > 0 ? `${row.winPct.toFixed(1)}%` : '-'}
               </TableCell>
               <TableCell align="center" sx={{ color: row.edge > 0 ? 'success.main' : row.edge < 0 ? 'error.main' : 'text.secondary' }}>
@@ -214,7 +214,7 @@ const Predictions: React.FC = () => {
 
   // Performance data computed from actual rows
   const tierPerf = useMemo(() => buildPerf(rows, r => r.signal_tier,
-    k => ({ A: 'Tier A (65%+)', B: 'Tier B (60-65%)', C: 'Tier C (55-60%)', D: 'Tier D (<55%)' }[k] || `Tier ${k}`),
+    k => ({ A: 'Tier A (58%+)', B: 'Tier B (55-58%)', C: 'Tier C (52-55%)', D: 'Tier D (<52%)' }[k] || `Tier ${k}`),
     ['A', 'B', 'C', 'D']), [rows]);
   const sportPerf = useMemo(() => buildPerf(rows, r => r.sport), [rows]);
   const periodPerf = useMemo(() => buildPerf(rows, () => 'Full Game'), [rows]);

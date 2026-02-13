@@ -59,10 +59,10 @@ class PredictedSide(Enum):
 
 class SignalTier(Enum):
     """Prediction confidence tiers with detailed attributes."""
-    A = 'A'  # 65%+ confidence - Elite predictions
-    B = 'B'  # 60-65% - Strong value
-    C = 'C'  # 55-60% - Moderate confidence
-    D = 'D'  # <55% - Track only
+    A = 'A'  # 58%+ confidence - Elite predictions
+    B = 'B'  # 55-58% - Strong value
+    C = 'C'  # 52-55% - Moderate confidence
+    D = 'D'  # <52% - Track only
     
     @property
     def kelly_multiplier(self) -> float:
@@ -77,7 +77,7 @@ class SignalTier(Enum):
     @property
     def target_accuracy(self) -> float:
         """Target accuracy for this tier."""
-        return {'A': 0.65, 'B': 0.60, 'C': 0.55, 'D': 0.50}.get(self.value, 0.50)
+        return {'A': 0.58, 'B': 0.55, 'C': 0.52, 'D': 0.50}.get(self.value, 0.50)
 
 
 class MarketType(Enum):
@@ -107,9 +107,9 @@ class SportPredictionConfig:
     sport_code: str
     
     # Tier thresholds (can be sport-specific)
-    tier_a_min: float = 0.65
-    tier_b_min: float = 0.60
-    tier_c_min: float = 0.55
+    tier_a_min: float = 0.58
+    tier_b_min: float = 0.55
+    tier_c_min: float = 0.52
     
     # Edge requirements
     min_edge_spread: float = 0.03
@@ -191,14 +191,14 @@ SPORT_PREDICTION_CONFIGS: Dict[str, SportPredictionConfig] = {
         typical_total=52.0,
         typical_spread=10.0,
         home_advantage_points=3.5,
-        tier_a_min=0.63,  # Lower threshold for NCAAF
+        tier_a_min=0.56,  # Lower threshold for NCAAF (bigger talent gaps)
     ),
     'NCAAB': SportPredictionConfig(
         sport_code='NCAAB',
         typical_total=140.0,
         typical_spread=7.0,
         home_advantage_points=4.0,
-        tier_a_min=0.63,
+        tier_a_min=0.56,
     ),
     'WNBA': SportPredictionConfig(
         sport_code='WNBA',

@@ -81,6 +81,59 @@ export const useSettingsStore = create<SettingsState>()(
   )
 );
 
+// Betting Store
+interface BettingState {
+  // Bankroll
+  initialBankroll: number;
+  // Bet Sizing
+  betSizing: 'flat' | 'percentage' | 'kelly';
+  flatAmount: number;
+  percentageAmount: number;
+  kellyFraction: 'quarter' | 'half' | 'full';
+  // Tier Filters
+  tierA: boolean;
+  tierB: boolean;
+  tierC: boolean;
+  // Bet Type Filters
+  betSpread: boolean;
+  betMoneyline: boolean;
+  betTotal: boolean;
+  // Risk Controls
+  minEdge: number;
+  maxDailyBets: number;
+  minOdds: number;
+  maxOdds: number;
+  // Auto
+  autoBet: boolean;
+  // Setter
+  setBetting: (config: Partial<BettingState>) => void;
+}
+
+export const useBettingStore = create<BettingState>()(
+  persist(
+    (set) => ({
+      initialBankroll: 10000,
+      betSizing: 'flat',
+      flatAmount: 100,
+      percentageAmount: 2,
+      kellyFraction: 'quarter',
+      tierA: true,
+      tierB: true,
+      tierC: false,
+      betSpread: true,
+      betMoneyline: true,
+      betTotal: true,
+      minEdge: 1.0,
+      maxDailyBets: 20,
+      minOdds: -500,
+      maxOdds: 500,
+      autoBet: false,
+      setBetting: (config) => set((state) => ({ ...state, ...config })),
+    }),
+    { name: 'betting-storage' }
+  )
+);
+
 // Filter Store
 interface FilterState {
   selectedSport: string;

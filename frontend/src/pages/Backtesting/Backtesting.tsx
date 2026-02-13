@@ -9,7 +9,7 @@ import {
 import { PlayArrow, CheckCircle, Cancel, Schedule, Remove } from '@mui/icons-material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar } from 'recharts';
 import { api } from '../../api/client';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, useBettingStore } from '../../store';
 import { formatDateTime, formatShortDate } from '../../utils/formatters';
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -87,6 +87,10 @@ const Backtesting: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const { timezone, timeFormat } = useSettingsStore();
+  const bettingDefaults = useBettingStore();
+  const effectiveDefault = bettingDefaults.betSizing === 'flat' ? bettingDefaults.flatAmount
+    : bettingDefaults.betSizing === 'percentage' ? Math.round(bettingDefaults.initialBankroll * bettingDefaults.percentageAmount / 100)
+    : bettingDefaults.flatAmount;
 
   // All bets from API (fetched once)
   const [allBets, setAllBets] = useState<Bet[]>([]);
@@ -97,8 +101,8 @@ const Backtesting: React.FC = () => {
   const [betType, setBetType] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [initialBankroll, setInitialBankroll] = useState(10000);
-  const [betAmount, setBetAmount] = useState(100);
+  const [initialBankroll, setInitialBankroll] = useState(() => bettingDefaults.initialBankroll);
+  const [betAmount, setBetAmount] = useState(() => effectiveDefault);
   const [minTier, setMinTier] = useState('B');
 
   // Results
@@ -114,7 +118,7 @@ const Backtesting: React.FC = () => {
     (async () => {
       setDataLoading(true);
       try {
-        const data = await api.getBettingSummary({ tiers: 'A,B,C,D', stake: 100, initial_bankroll: 10000 });
+        const data = await api.getBettingSummary({ tiers: 'A,B,C,D', stake: effectiveDefault, initial_bankroll: bettingDefaults.initialBankroll });
         if (data.bets) {
           setAllBets(data.bets);
           // Set smart date defaults from actual data

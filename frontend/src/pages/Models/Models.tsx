@@ -12,6 +12,7 @@ import {
   Refresh, Science, Star, StarBorder, Cancel, AutoFixHigh
 } from '@mui/icons-material';
 import { api } from '../../api/client';
+import { useSettingsStore } from '../../store';
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Model {
@@ -65,9 +66,9 @@ const frameworkLabel = (f: string) => {
   return m[f] || f;
 };
 
-const formatDate = (d: string | null) => {
+const formatDate = (d: string | null, tz: string = 'America/New_York') => {
   if (!d) return '-';
-  return new Date(d).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' });
+  return new Date(d).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: tz });
 };
 
 const formatDuration = (secs: number | null) => {
@@ -87,6 +88,8 @@ const fmtAcc = (v: number | null) => {
 const Models: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+  const { timezone } = useSettingsStore();
+  const fmtDate = (d: string | null) => formatDate(d, timezone);
 
   const [models, setModels] = useState<Model[]>([]);
   const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
@@ -342,7 +345,7 @@ const Models: React.FC = () => {
                       </Box>
                       <Typography fontSize={10} color="text.secondary">{frameworkLabel(run.framework)}</Typography>
                       <LinearProgress sx={{ mt: 0.5 }} />
-                      <Typography fontSize={10} color="text.secondary" mt={0.5}>Started {formatDate(run.started_at)}</Typography>
+                      <Typography fontSize={10} color="text.secondary" mt={0.5}>Started {fmtDate(run.started_at)}</Typography>
                     </CardContent>
                   </Card>
                 </Grid>
@@ -374,7 +377,7 @@ const Models: React.FC = () => {
                         <TableCell sx={{ py: 0.5, fontSize: 11, textTransform: 'capitalize' }}>{run.bet_type}</TableCell>
                         <TableCell sx={{ py: 0.5, fontSize: 11 }}>{frameworkLabel(run.framework)}</TableCell>
                         <TableCell sx={{ py: 0.5 }}><Chip size="small" label={run.status} color={statusColor(run.status)} sx={{ fontSize: 10 }} /></TableCell>
-                        <TableCell sx={{ py: 0.5, fontSize: 11 }}>{formatDate(run.started_at)}</TableCell>
+                        <TableCell sx={{ py: 0.5, fontSize: 11 }}>{fmtDate(run.started_at)}</TableCell>
                         <TableCell sx={{ py: 0.5, fontSize: 11 }}>{formatDuration(run.duration_seconds)}</TableCell>
                         <TableCell sx={{ py: 0.5 }}>
                           {(run.metrics || run.error_message) && (
@@ -482,7 +485,7 @@ const Models: React.FC = () => {
                         icon={isProd ? <Star sx={{ fontSize: 12 }} /> : undefined}
                         sx={{ fontSize: 10, textTransform: 'capitalize' }} />
                     </TableCell>
-                    <TableCell sx={{ py: 0.75, fontSize: 11 }}>{formatDate(model.created_at)}</TableCell>
+                    <TableCell sx={{ py: 0.75, fontSize: 11 }}>{fmtDate(model.created_at)}</TableCell>
                     <TableCell sx={{ py: 0.75 }}>
                       <Box display="flex" gap={0.5}>
                         {!isProd ? (

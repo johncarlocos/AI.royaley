@@ -5,10 +5,11 @@ import {
   Switch, FormControlLabel, Select, MenuItem, FormControl, InputLabel,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Chip, LinearProgress, Alert, Divider, IconButton, Dialog, DialogTitle,
-  DialogContent, DialogActions, List, ListItem, ListItemText, Paper
+  DialogContent, DialogActions, List, ListItem, ListItemText, Paper,
+  Radio, RadioGroup
 } from '@mui/material';
-import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, PlayArrow, Add, Delete, Send } from '@mui/icons-material';
-import { useSettingsStore } from '../../store';
+import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, PlayArrow, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer } from '@mui/icons-material';
+import { useSettingsStore, useBettingStore } from '../../store';
 import { TIMEZONES } from '../../types';
 
 interface TabPanelProps { children?: React.ReactNode; index: number; value: number; }
@@ -20,6 +21,7 @@ interface EmailAccount { id: string; email: string; enabled: boolean; }
 const Settings: React.FC = () => {
   const [tab, setTab] = useState(0);
   const { theme, setTheme, oddsFormat, setOddsFormat, timezone, setTimezone, timeFormat, setTimeFormat } = useSettingsStore();
+  const betting = useBettingStore();
   const [telegramToken, setTelegramToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   
@@ -86,11 +88,221 @@ const Settings: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tab} index={1}>
-          <Alert severity="info" sx={{ mb: 2, fontSize: 13 }}>Flat betting: Fixed amount per bet. All records saved for model training.</Alert>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="Flat Bet Amount ($)" type="number" defaultValue={100} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
-            <Grid item xs={12}><Typography variant="body2" fontWeight={500} gutterBottom sx={{ fontSize: 14 }}>Bet on Tiers:</Typography><FormControlLabel control={<Switch defaultChecked size="small" />} label={<Typography sx={{ fontSize: 13 }}>Tier A (65%+)</Typography>} /><FormControlLabel control={<Switch defaultChecked size="small" />} label={<Typography sx={{ fontSize: 13 }}>Tier B (60-65%)</Typography>} /><FormControlLabel control={<Switch size="small" />} label={<Typography sx={{ fontSize: 13 }}>Tier C (55-60%)</Typography>} /><FormControlLabel control={<Switch size="small" />} label={<Typography sx={{ fontSize: 13 }}>Tier D (&lt;55%)</Typography>} /></Grid>
-          </Grid>
+          {/* ── Section 1: Bankroll ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <AccountBalance sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Bankroll</Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth size="small" label="Initial Bankroll ($)" type="number"
+                  value={betting.initialBankroll}
+                  onChange={(e) => betting.setBetting({ initialBankroll: Math.max(100, parseInt(e.target.value) || 10000) })}
+                  inputProps={{ min: 100, step: 500 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }}
+                  sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Starting capital for tracking P/L and bankroll growth"
+                  FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 2: Bet Sizing ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <TrendingUp sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Bet Sizing Strategy</Typography>
+            </Box>
+
+            <FormControl component="fieldset" sx={{ mb: 2 }}>
+              <RadioGroup value={betting.betSizing} onChange={(e) => betting.setBetting({ betSizing: e.target.value as 'flat' | 'percentage' | 'kelly' })}>
+                <FormControlLabel value="flat" control={<Radio size="small" />}
+                  label={<Typography sx={{ fontSize: 13 }}>Flat — Same dollar amount for every bet</Typography>} />
+                <FormControlLabel value="percentage" control={<Radio size="small" />}
+                  label={<Typography sx={{ fontSize: 13 }}>Percentage — Fixed % of current bankroll per bet</Typography>} />
+                <FormControlLabel value="kelly" control={<Radio size="small" />}
+                  label={<Typography sx={{ fontSize: 13 }}>Kelly Criterion — Optimal sizing based on edge & odds</Typography>} />
+              </RadioGroup>
+            </FormControl>
+
+            <Grid container spacing={2}>
+              {betting.betSizing === 'flat' && (
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth size="small" label="Flat Bet Amount ($)" type="number"
+                    value={betting.flatAmount}
+                    onChange={(e) => betting.setBetting({ flatAmount: Math.max(1, parseInt(e.target.value) || 100) })}
+                    inputProps={{ min: 1, step: 10 }}
+                    InputLabelProps={{ sx: { fontSize: 13 } }}
+                    sx={{ '& input': { fontSize: 13 } }}
+                  />
+                </Grid>
+              )}
+              {betting.betSizing === 'percentage' && (
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth size="small" label="Bankroll % per Bet" type="number"
+                    value={betting.percentageAmount}
+                    onChange={(e) => betting.setBetting({ percentageAmount: Math.min(25, Math.max(0.5, parseFloat(e.target.value) || 2)) })}
+                    inputProps={{ min: 0.5, max: 25, step: 0.5 }}
+                    InputLabelProps={{ sx: { fontSize: 13 } }}
+                    sx={{ '& input': { fontSize: 13 } }}
+                    helperText={`Current stake: $${Math.round(betting.initialBankroll * betting.percentageAmount / 100)}`}
+                    FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                  />
+                </Grid>
+              )}
+              {betting.betSizing === 'kelly' && (
+                <Grid item xs={12} sm={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel sx={{ fontSize: 13 }}>Kelly Fraction</InputLabel>
+                    <Select value={betting.kellyFraction} label="Kelly Fraction"
+                      onChange={(e) => betting.setBetting({ kellyFraction: e.target.value as 'quarter' | 'half' | 'full' })}
+                      sx={{ fontSize: 13 }}>
+                      <MenuItem value="quarter" sx={{ fontSize: 13 }}>Quarter Kelly (25%) — Conservative</MenuItem>
+                      <MenuItem value="half" sx={{ fontSize: 13 }}>Half Kelly (50%) — Balanced</MenuItem>
+                      <MenuItem value="full" sx={{ fontSize: 13 }}>Full Kelly (100%) — Aggressive</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 3: Tier Filters ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Casino sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Prediction Tiers to Bet</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Only predictions matching enabled tiers will be included in your betting portfolio.
+            </Typography>
+            <Grid container spacing={1}>
+              <Grid item xs={6} sm={3}>
+                <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: betting.tierA ? 'success.main' : 'divider', bgcolor: betting.tierA ? 'rgba(76, 175, 80, 0.08)' : 'transparent' }}>
+                  <FormControlLabel control={<Switch size="small" checked={betting.tierA} onChange={(e) => betting.setBetting({ tierA: e.target.checked })} color="success" />}
+                    label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier A</Typography>} sx={{ m: 0 }} />
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>58%+ confidence</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: betting.tierB ? 'info.main' : 'divider', bgcolor: betting.tierB ? 'rgba(33, 150, 243, 0.08)' : 'transparent' }}>
+                  <FormControlLabel control={<Switch size="small" checked={betting.tierB} onChange={(e) => betting.setBetting({ tierB: e.target.checked })} color="info" />}
+                    label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier B</Typography>} sx={{ m: 0 }} />
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>55–58% confidence</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: betting.tierC ? 'warning.main' : 'divider', bgcolor: betting.tierC ? 'rgba(255, 152, 0, 0.08)' : 'transparent' }}>
+                  <FormControlLabel control={<Switch size="small" checked={betting.tierC} onChange={(e) => betting.setBetting({ tierC: e.target.checked })} color="warning" />}
+                    label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier C</Typography>} sx={{ m: 0 }} />
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>52–55% confidence</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', opacity: 0.5 }}>
+                  <FormControlLabel control={<Switch size="small" disabled checked={false} />}
+                    label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier D</Typography>} sx={{ m: 0 }} />
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>&lt;52% — disabled</Typography>
+                </Paper>
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 4: Bet Types ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <SportsSoccer sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Bet Types</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Select which bet types to include. Disabling a type excludes those predictions entirely.
+            </Typography>
+            <Box display="flex" gap={3} flexWrap="wrap">
+              <FormControlLabel control={<Switch size="small" checked={betting.betSpread} onChange={(e) => betting.setBetting({ betSpread: e.target.checked })} />}
+                label={<Typography sx={{ fontSize: 13 }}>Spread</Typography>} />
+              <FormControlLabel control={<Switch size="small" checked={betting.betMoneyline} onChange={(e) => betting.setBetting({ betMoneyline: e.target.checked })} />}
+                label={<Typography sx={{ fontSize: 13 }}>Moneyline</Typography>} />
+              <FormControlLabel control={<Switch size="small" checked={betting.betTotal} onChange={(e) => betting.setBetting({ betTotal: e.target.checked })} />}
+                label={<Typography sx={{ fontSize: 13 }}>Totals (O/U)</Typography>} />
+            </Box>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 5: Risk Controls ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Shield sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Risk Controls</Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth size="small" label="Minimum Edge (%)" type="number"
+                  value={betting.minEdge}
+                  onChange={(e) => betting.setBetting({ minEdge: Math.max(0, parseFloat(e.target.value) || 1) })}
+                  inputProps={{ min: 0, max: 20, step: 0.5 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }}
+                  sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Skip predictions with edge below this threshold"
+                  FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth size="small" label="Max Daily Bets" type="number"
+                  value={betting.maxDailyBets}
+                  onChange={(e) => betting.setBetting({ maxDailyBets: Math.max(1, parseInt(e.target.value) || 20) })}
+                  inputProps={{ min: 1, max: 100 }}
+                  InputLabelProps={{ sx: { fontSize: 13 } }}
+                  sx={{ '& input': { fontSize: 13 } }}
+                  helperText="Cap exposure per day"
+                  FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth size="small" label="Min Odds (American)" type="number"
+                  value={betting.minOdds}
+                  onChange={(e) => betting.setBetting({ minOdds: parseInt(e.target.value) || -500 })}
+                  InputLabelProps={{ sx: { fontSize: 13 } }}
+                  sx={{ '& input': { fontSize: 13 } }}
+                  helperText="e.g. -500 to avoid heavy favorites"
+                  FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth size="small" label="Max Odds (American)" type="number"
+                  value={betting.maxOdds}
+                  onChange={(e) => betting.setBetting({ maxOdds: parseInt(e.target.value) || 500 })}
+                  InputLabelProps={{ sx: { fontSize: 13 } }}
+                  sx={{ '& input': { fontSize: 13 } }}
+                  helperText="e.g. +500 to avoid long shots"
+                  FormHelperTextProps={{ sx: { fontSize: 11 } }}
+                />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* ── Section 6: Auto-Bet Toggle ── */}
+          <Box>
+            <FormControlLabel
+              control={<Switch checked={betting.autoBet} onChange={(e) => betting.setBetting({ autoBet: e.target.checked })} />}
+              label={
+                <Box>
+                  <Typography sx={{ fontSize: 13, fontWeight: 500 }}>Auto-place bets (simulation mode)</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Automatically track all qualifying predictions as placed bets for P/L tracking.</Typography>
+                </Box>
+              }
+            />
+          </Box>
         </TabPanel>
 
         <TabPanel value={tab} index={2}>

@@ -11,7 +11,7 @@ import {
   PieChart, Pie, Cell, LineChart, Line, ReferenceLine
 } from 'recharts';
 import { api } from '../../api/client';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, useBettingStore } from '../../store';
 import { formatDateTime, formatTime, getTimezoneAbbr } from '../../utils/formatters';
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -70,6 +70,7 @@ const Analytics: React.FC = () => {
   const [equityCurve, setEquityCurve] = useState<{ date: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const { timezone, timeFormat } = useSettingsStore();
+  const betting = useBettingStore();
 
   // Filters
   const [sportFilter, setSportFilter] = useState('all');
@@ -88,7 +89,10 @@ const Analytics: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.getBettingSummary({ tiers: 'A,B,C,D', stake: 100, initial_bankroll: 10000 });
+      const effectiveStake = betting.betSizing === 'flat' ? betting.flatAmount
+        : betting.betSizing === 'percentage' ? Math.round(betting.initialBankroll * betting.percentageAmount / 100)
+        : betting.flatAmount;
+      const data = await api.getBettingSummary({ tiers: 'A,B,C,D', stake: effectiveStake, initial_bankroll: betting.initialBankroll });
       if (data.bets) setAllBets(data.bets);
       if (data.equity_curve) setEquityCurve(data.equity_curve);
     } catch (err) {

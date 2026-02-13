@@ -6,10 +6,12 @@ import {
   FormControlLabel, Alert, LinearProgress, useTheme, TablePagination,
   Tabs, Tab, Select, MenuItem, InputLabel, FormControl
 } from '@mui/material';
-import { Refresh, Save, CheckCircle, Cancel, Schedule, Remove } from '@mui/icons-material';
+import { Refresh, CheckCircle, Cancel, Schedule, Remove } from '@mui/icons-material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { api } from '../../api/client';
+import { useBettingStore, useSettingsStore } from '../../store';
 import { formatCurrency, formatPercent } from '../../utils';
+import { formatDateTime } from '../../utils/formatters';
 
 interface BetFromAPI {
   id: string;
@@ -48,16 +50,6 @@ interface StatsFromAPI {
   total_pnl: number;
 }
 
-interface BettingConfig {
-  flat_amount: number;
-  initial_bankroll: number;
-  bet_tier_a: boolean;
-  bet_tier_b: boolean;
-  bet_tier_c: boolean;
-  bet_tier_d: boolean;
-  auto_bet: boolean;
-}
-
 const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
   const colors: Record<string, { bg: string; color: string }> = {
     'A': { bg: '#4caf50', color: '#fff' },
@@ -72,14 +64,8 @@ const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
 const Betting: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-
-  const [config, setConfig] = useState<BettingConfig>(() => {
-    try {
-      const saved = localStorage.getItem('royaley_betting_config');
-      if (saved) return JSON.parse(saved);
-    } catch { /* ignore */ }
-    return { flat_amount: 100, initial_bankroll: 10000, bet_tier_a: true, bet_tier_b: true, bet_tier_c: false, bet_tier_d: false, auto_bet: false };
-  });
+  const betting = useBettingStore();
+  const { timezone, timeFormat } = useSettingsStore();
 
   const [stats, setStats] = useState<StatsFromAPI>({
     initial_bankroll: 10000, current_bankroll: 10000, total_bets: 0,
@@ -89,7 +75,6 @@ const Betting: React.FC = () => {
   const [bets, setBets] = useState<BetFromAPI[]>([]);
   const [equityCurve, setEquityCurve] = useState<{ date: string; value: number }[]>([]);
   const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [betTab, setBetTab] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
@@ -98,26 +83,31 @@ const Betting: React.FC = () => {
 
   const getActiveTiers = useCallback(() => {
     const tiers: string[] = [];
-    if (config.bet_tier_a) tiers.push('A');
-    if (config.bet_tier_b) tiers.push('B');
-    if (config.bet_tier_c) tiers.push('C');
-    if (config.bet_tier_d) tiers.push('D');
+    if (betting.tierA) tiers.push('A');
+    if (betting.tierB) tiers.push('B');
+    if (betting.tierC) tiers.push('C');
     return tiers.join(',') || 'A,B';
-  }, [config]);
+  }, [betting.tierA, betting.tierB, betting.tierC]);
+
+  // Compute effective stake from store settings
+  const effectiveStake = betting.betSizing === 'flat'
+    ? betting.flatAmount
+    : betting.betSizing === 'percentage'
+      ? Math.round(betting.initialBankroll * betting.percentageAmount / 100)
+      : betting.flatAmount; // Kelly computed server-side, pass flat as fallback
 
   const loadData = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
       const data = await api.getBettingSummary({
         tiers: getActiveTiers(),
-        stake: config.flat_amount,
-        initial_bankroll: config.initial_bankroll,
+        stake: effectiveStake,
+        initial_bankroll: betting.initialBankroll,
         sport: sportFilter !== 'all' ? sportFilter : undefined,
       });
       if (data.stats) setStats(data.stats);
       if (data.bets) {
         setBets(data.bets);
-        // Update sport list only when not filtered (to keep full dropdown)
         if (sportFilter === 'all') {
           const sports = Array.from(new Set(data.bets.map((b: BetFromAPI) => b.sport).filter(Boolean))).sort() as string[];
           setAllSports(sports);
@@ -128,17 +118,10 @@ const Betting: React.FC = () => {
       console.error('Load betting data error:', err);
     }
     if (showLoading) setLoading(false);
-  }, [config.flat_amount, config.initial_bankroll, getActiveTiers, sportFilter]);
+  }, [effectiveStake, betting.initialBankroll, getActiveTiers, sportFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { const iv = setInterval(() => loadData(false), 60000); return () => clearInterval(iv); }, [loadData]);
-
-  const saveConfig = () => {
-    localStorage.setItem('royaley_betting_config', JSON.stringify(config));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-    loadData();
-  };
 
   const filteredBets = betTab === 0 ? bets
     : betTab === 1 ? bets.filter(b => b.result === 'pending')
@@ -194,12 +177,7 @@ const Betting: React.FC = () => {
   };
 
   const formatGameTime = (gt: string | null) => {
-    if (!gt) return { date: '-', time: '-' };
-    const d = new Date(gt);
-    return {
-      date: d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' }),
-      time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }),
-    };
+    return formatDateTime(gt, timezone, timeFormat);
   };
 
   const hdr = { fontWeight: 600, fontSize: 11, py: 0.75, bgcolor: isDark ? 'grey.900' : 'grey.100', color: isDark ? 'grey.100' : 'grey.800', whiteSpace: 'nowrap', borderBottom: 1, borderColor: 'divider' };
@@ -254,32 +232,33 @@ const Betting: React.FC = () => {
       </Grid>
 
       <Grid container spacing={2}>
-        {/* Flat Betting Configuration */}
+        {/* Betting Configuration — reads from Settings */}
         <Grid item xs={12} md={5}>
           <Card sx={{ mb: 2 }}>
             <CardContent>
-              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 13, mb: 1.5 }}>Flat Betting Configuration</Typography>
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 13, mb: 1.5 }}>Betting Configuration</Typography>
               <Alert severity="info" sx={{ mb: 2, fontSize: 11, py: 0.5 }}>
-                System uses flat betting: same amount for every bet. All records saved for self-reinforcement training.
+                {betting.betSizing === 'flat' ? `Flat betting: $${betting.flatAmount} per bet.`
+                  : betting.betSizing === 'percentage' ? `Percentage: ${betting.percentageAmount}% of bankroll ($${effectiveStake}) per bet.`
+                  : `Kelly Criterion (${betting.kellyFraction}) sizing.`}
+                {' '}Configure in Settings → Betting.
               </Alert>
               <Grid container spacing={2} sx={{ mb: 1.5 }}>
                 <Grid item xs={6}>
-                  <TextField fullWidth size="small" label="Bet Amount ($)" type="number" value={config.flat_amount}
-                    onChange={(e) => setConfig({ ...config, flat_amount: Math.max(1, parseInt(e.target.value) || 100) })}
-                    inputProps={{ min: 1 }} sx={{ '& input': { fontSize: 13 } }} />
+                  <TextField fullWidth size="small" label="Effective Stake ($)" type="number" value={effectiveStake}
+                    InputProps={{ readOnly: true }} sx={{ '& input': { fontSize: 13, color: 'primary.main' } }} />
                 </Grid>
                 <Grid item xs={6}>
-                  <TextField fullWidth size="small" label="Initial Bankroll ($)" type="number" value={config.initial_bankroll}
-                    onChange={(e) => setConfig({ ...config, initial_bankroll: Math.max(100, parseInt(e.target.value) || 10000) })}
-                    inputProps={{ min: 100 }} sx={{ '& input': { fontSize: 13 } }} />
+                  <TextField fullWidth size="small" label="Initial Bankroll ($)" type="number" value={betting.initialBankroll}
+                    InputProps={{ readOnly: true }} sx={{ '& input': { fontSize: 13, color: 'primary.main' } }} />
                 </Grid>
               </Grid>
-              <Typography variant="caption" sx={{ fontSize: 11, mb: 1, display: 'block' }}>Bet on Tiers:</Typography>
+              <Typography variant="caption" sx={{ fontSize: 11, mb: 1, display: 'block' }}>Active Tiers:</Typography>
               <Box display="flex" gap={1} mb={1.5} flexWrap="wrap">
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_a} onChange={(e) => setConfig({ ...config, bet_tier_a: e.target.checked })} color="success" />} label={<Typography sx={{ fontSize: 11 }}>Tier A (58%+)</Typography>} />
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_b} onChange={(e) => setConfig({ ...config, bet_tier_b: e.target.checked })} color="primary" />} label={<Typography sx={{ fontSize: 11 }}>Tier B (55-58%)</Typography>} />
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_c} onChange={(e) => setConfig({ ...config, bet_tier_c: e.target.checked })} color="warning" />} label={<Typography sx={{ fontSize: 11 }}>Tier C (52-55%)</Typography>} />
-                <FormControlLabel control={<Switch size="small" checked={config.bet_tier_d} onChange={(e) => setConfig({ ...config, bet_tier_d: e.target.checked })} />} label={<Typography sx={{ fontSize: 11 }}>Tier D (&lt;55%)</Typography>} />
+                {betting.tierA && <Chip label="Tier A (58%+)" size="small" color="success" sx={{ fontSize: 11, height: 22 }} />}
+                {betting.tierB && <Chip label="Tier B (55-58%)" size="small" color="primary" sx={{ fontSize: 11, height: 22 }} />}
+                {betting.tierC && <Chip label="Tier C (52-55%)" size="small" color="warning" sx={{ fontSize: 11, height: 22 }} />}
+                {!betting.tierA && !betting.tierB && !betting.tierC && <Typography sx={{ fontSize: 11, color: 'error.main' }}>No tiers selected</Typography>}
               </Box>
               <Typography variant="caption" sx={{ fontSize: 11, mb: 0.5, display: 'block' }}>Filter by Sport:</Typography>
               <FormControl size="small" fullWidth sx={{ mb: 1.5 }}>
@@ -294,10 +273,7 @@ const Betting: React.FC = () => {
                   ))}
                 </Select>
               </FormControl>
-              <FormControlLabel control={<Switch size="small" checked={config.auto_bet} onChange={(e) => setConfig({ ...config, auto_bet: e.target.checked })} />} label={<Typography sx={{ fontSize: 11 }}>Auto-place bets (simulation)</Typography>} sx={{ mb: 1.5 }} />
-              <Button fullWidth variant="contained" startIcon={<Save />} onClick={saveConfig} sx={{ fontSize: 12 }}>
-                {saved ? '✓ Saved!' : 'Save Configuration'}
-              </Button>
+              {betting.autoBet && <Chip label="Auto-bet ON (simulation)" size="small" color="info" sx={{ fontSize: 11, height: 22 }} />}
             </CardContent>
           </Card>
 
@@ -398,7 +374,7 @@ const Betting: React.FC = () => {
                           <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, color: isNegEdge ? 'text.secondary' : 'success.main', borderBottom: 1, borderColor: 'divider' }}>{bet.predicted_side}</TableCell>
                           <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>{formatLine(bet.line, bet.bet_type)}</TableCell>
                           <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>{formatOdds(bet.odds)}</TableCell>
-                          <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>${config.flat_amount}</TableCell>
+                          <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>${effectiveStake}</TableCell>
                           <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider' }}>{(bet.probability * 100).toFixed(1)}%</TableCell>
                           <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 1, borderColor: 'divider', color: isNegEdge ? 'error.main' : edgeVal >= 3 ? 'success.main' : edgeVal >= 1 ? 'warning.main' : 'text.secondary' }}>
                             {edgeVal >= 0 ? '+' : ''}{edgeVal.toFixed(1)}%

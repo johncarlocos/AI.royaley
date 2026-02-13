@@ -69,12 +69,23 @@ class DashboardStats(BaseModel):
     tier_a_count: int = 0
     pending_count: int = 0
     graded_today: int = 0
+    graded_total: int = 0
+    wins: int = 0
+    losses: int = 0
+    pushes: int = 0
     win_rate: float = 0.0
     roi: float = 0.0
+    total_pnl: float = 0.0
+    avg_clv: float = 0.0
     top_picks: list = []
     recent_activity: list = []
     best_performers: list = []
     areas_to_monitor: list = []
+    sport_breakdown: list = []
+    tier_breakdown: list = []
+    bet_type_breakdown: list = []
+    upcoming_games_count: int = 0
+    active_models_count: int = 0
 
 
 # ---- Unified game join: upcoming_games first, fallback to legacy games ----
@@ -358,7 +369,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         text("SELECT COUNT(*) FROM predictions WHERE CAST(signal_tier AS TEXT) = 'A'")
     )).scalar() or 0
 
-    # All predictions are pending until grading is implemented
+    # Grading stats
     graded_count = (await db.execute(
         text("SELECT COUNT(*) FROM prediction_results WHERE actual_result != 'pending'")
     )).scalar() or 0
@@ -370,6 +381,9 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     losses = (await db.execute(
         text("SELECT COUNT(*) FROM prediction_results WHERE actual_result = 'loss'")
     )).scalar() or 0
+    pushes = (await db.execute(
+        text("SELECT COUNT(*) FROM prediction_results WHERE actual_result = 'push'")
+    )).scalar() or 0
 
     win_rate = round(wins / (wins + losses) * 100, 1) if (wins + losses) > 0 else 0.0
 
@@ -378,15 +392,55 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     )).scalar() or 0
 
     avg_clv = (await db.execute(
-        text("SELECT AVG(clv) FROM prediction_results WHERE clv IS NOT NULL")
-    )).scalar()
+        text("SELECT ROUND(AVG(clv)::numeric, 2) FROM prediction_results WHERE clv IS NOT NULL")
+    )).scalar() or 0.0
 
     total_pnl = (await db.execute(
-        text("SELECT SUM(profit_loss) FROM prediction_results WHERE profit_loss IS NOT NULL")
-    )).scalar()
-    roi = round((total_pnl or 0) / max(graded_count * 100, 1) * 100, 1) if graded_count > 0 else 0.0
+        text("SELECT ROUND(COALESCE(SUM(profit_loss), 0)::numeric, 2) FROM prediction_results WHERE profit_loss IS NOT NULL")
+    )).scalar() or 0.0
+    roi = round(float(total_pnl) / max(graded_count * 100, 1) * 100, 1) if graded_count > 0 else 0.0
 
-    # Top picks (upcoming, highest probability)
+    # ── Sport breakdown ──
+    sport_rows = (await db.execute(text(f"""
+        SELECT s.code as sport, COUNT(*) as cnt,
+               SUM(CASE WHEN CAST(p.signal_tier AS TEXT) = 'A' THEN 1 ELSE 0 END) as tier_a
+        FROM predictions p
+        {GAME_JOIN}
+        {TEAM_JOIN_LEGACY}
+        WHERE COALESCE(ug.scheduled_at, g.scheduled_at) >= NOW() - INTERVAL '24 hours'
+        GROUP BY s.code ORDER BY cnt DESC
+    """))).fetchall()
+    sport_breakdown = [{"sport": r.sport, "count": r.cnt, "tier_a": r.tier_a} for r in sport_rows]
+
+    # ── Tier breakdown ──
+    tier_rows = (await db.execute(text("""
+        SELECT CAST(signal_tier AS TEXT) as tier, COUNT(*) as cnt
+        FROM predictions GROUP BY CAST(signal_tier AS TEXT) ORDER BY tier
+    """))).fetchall()
+    tier_breakdown = [{"tier": r.tier or "D", "count": r.cnt} for r in tier_rows]
+
+    # ── Bet type breakdown ──
+    bt_rows = (await db.execute(text("""
+        SELECT bet_type, COUNT(*) as cnt
+        FROM predictions GROUP BY bet_type ORDER BY cnt DESC
+    """))).fetchall()
+    bet_type_breakdown = [{"type": r.bet_type, "count": r.cnt} for r in bt_rows]
+
+    # ── Upcoming games count ──
+    upcoming_games_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM upcoming_games
+        WHERE status = 'scheduled' AND scheduled_at >= NOW()
+    """))).scalar() or 0
+
+    # ── Active models count ──
+    try:
+        active_models_count = (await db.execute(text("""
+            SELECT COUNT(*) FROM ml_models WHERE is_production = true
+        """))).scalar() or 0
+    except Exception:
+        active_models_count = 0
+
+    # ── Top picks (upcoming, highest probability) ──
     top_rows = (await db.execute(text(f"""
         SELECT
             p.id, s.code as sport,
@@ -400,7 +454,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         {TEAM_JOIN_LEGACY}
         WHERE COALESCE(ug.scheduled_at, g.scheduled_at) >= NOW() - INTERVAL '2 hours'
         ORDER BY p.probability DESC
-        LIMIT 6
+        LIMIT 8
     """))).fetchall()
 
     top_picks = []
@@ -419,21 +473,136 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "game": f"{row.away_team} vs {row.home_team}",
             "pick": pick_str,
             "tier": row.signal_tier or "D",
-            "probability": float(row.probability),
-            "time": (row.game_time.isoformat() + 'Z') if row.game_time else "",  # ISO for frontend PST conversion
+            "probability": round(float(row.probability), 3),
+            "edge": round(float(row.edge), 2) if row.edge else 0.0,
+            "time": (row.game_time.isoformat() + 'Z') if row.game_time else "",
         })
+
+    # ── Recent activity (last 15 graded predictions) ──
+    recent_rows = (await db.execute(text(f"""
+        SELECT
+            pr.actual_result, pr.profit_loss, pr.graded_at,
+            s.code as sport,
+            {TEAM_NAMES}
+            p.bet_type, p.predicted_side, p.line_at_prediction,
+            CAST(p.signal_tier AS TEXT) as signal_tier
+        FROM prediction_results pr
+        JOIN predictions p ON pr.prediction_id = p.id
+        {GAME_JOIN}
+        {TEAM_JOIN_LEGACY}
+        WHERE pr.actual_result != 'pending'
+        ORDER BY pr.graded_at DESC NULLS LAST
+        LIMIT 15
+    """))).fetchall()
+
+    recent_activity = []
+    for r in recent_rows:
+        side = r.predicted_side or ""
+        line = r.line_at_prediction
+        if r.bet_type == "spread":
+            team = r.home_team if side == "home" else r.away_team
+            pick_str = f"{team} {'+' if line and line > 0 else ''}{line}" if line else team
+        elif r.bet_type == "total":
+            pick_str = f"{'Over' if side == 'over' else 'Under'} {line}" if line else side.capitalize()
+        else:
+            pick_str = f"{r.home_team if side == 'home' else r.away_team} ML"
+        icon = "win" if r.actual_result == "win" else "loss" if r.actual_result == "loss" else "push"
+        pnl = float(r.profit_loss) if r.profit_loss else 0.0
+        time_str = ""
+        if r.graded_at:
+            from datetime import datetime as dt
+            diff = dt.utcnow() - r.graded_at
+            if diff.days > 0:
+                time_str = f"{diff.days}d ago"
+            elif diff.seconds >= 3600:
+                time_str = f"{diff.seconds // 3600}h ago"
+            else:
+                time_str = f"{max(diff.seconds // 60, 1)}m ago"
+        recent_activity.append({
+            "icon": icon,
+            "text": f"{r.sport} {pick_str} — {'W' if icon == 'win' else 'L' if icon == 'loss' else 'P'}",
+            "time": time_str,
+            "pnl": round(pnl, 2),
+            "tier": r.signal_tier or "D",
+            "result": r.actual_result,
+        })
+
+    # ── Best performers (sport+type combos with best win rates, min 3 graded) ──
+    perf_rows = (await db.execute(text(f"""
+        SELECT s.code as sport, p.bet_type,
+               COUNT(*) as total,
+               SUM(CASE WHEN pr.actual_result = 'win' THEN 1 ELSE 0 END) as wins
+        FROM prediction_results pr
+        JOIN predictions p ON pr.prediction_id = p.id
+        {GAME_JOIN}
+        {TEAM_JOIN_LEGACY}
+        WHERE pr.actual_result IN ('win', 'loss')
+        GROUP BY s.code, p.bet_type
+        HAVING COUNT(*) >= 3
+        ORDER BY (SUM(CASE WHEN pr.actual_result = 'win' THEN 1 ELSE 0 END)::float / COUNT(*)) DESC
+        LIMIT 5
+    """))).fetchall()
+
+    best_performers = []
+    for r in perf_rows:
+        wr = round(r.wins / r.total * 100, 1)
+        if wr >= 50:  # Only show winning combos
+            bt_label = "ML" if r.bet_type == "moneyline" else r.bet_type.capitalize() if r.bet_type else "?"
+            best_performers.append({
+                "label": f"{r.sport} {bt_label}",
+                "value": f"{wr}% ({r.wins}-{r.total - r.wins})",
+                "color": "success" if wr >= 60 else "primary",
+            })
+
+    # ── Areas to monitor (worst performers, min 3 graded) ──
+    worst_rows = (await db.execute(text(f"""
+        SELECT s.code as sport, p.bet_type,
+               COUNT(*) as total,
+               SUM(CASE WHEN pr.actual_result = 'win' THEN 1 ELSE 0 END) as wins
+        FROM prediction_results pr
+        JOIN predictions p ON pr.prediction_id = p.id
+        {GAME_JOIN}
+        {TEAM_JOIN_LEGACY}
+        WHERE pr.actual_result IN ('win', 'loss')
+        GROUP BY s.code, p.bet_type
+        HAVING COUNT(*) >= 3
+        ORDER BY (SUM(CASE WHEN pr.actual_result = 'win' THEN 1 ELSE 0 END)::float / COUNT(*)) ASC
+        LIMIT 5
+    """))).fetchall()
+
+    areas_to_monitor = []
+    for r in worst_rows:
+        wr = round(r.wins / r.total * 100, 1)
+        if wr < 55:  # Only show struggling combos
+            bt_label = "ML" if r.bet_type == "moneyline" else r.bet_type.capitalize() if r.bet_type else "?"
+            areas_to_monitor.append({
+                "label": f"{r.sport} {bt_label}",
+                "value": f"{wr}% ({r.wins}-{r.total - r.wins})",
+                "color": "error" if wr < 45 else "warning",
+            })
 
     return DashboardStats(
         total_predictions=total_predictions,
         tier_a_count=tier_a_count,
         pending_count=pending_count,
         graded_today=graded_today,
+        graded_total=graded_count,
+        wins=wins,
+        losses=losses,
+        pushes=pushes,
         win_rate=win_rate,
         roi=roi,
+        total_pnl=float(total_pnl),
+        avg_clv=float(avg_clv),
         top_picks=top_picks,
-        recent_activity=[],
-        best_performers=[],
-        areas_to_monitor=[],
+        recent_activity=recent_activity,
+        best_performers=best_performers,
+        areas_to_monitor=areas_to_monitor,
+        sport_breakdown=sport_breakdown,
+        tier_breakdown=tier_breakdown,
+        bet_type_breakdown=bet_type_breakdown,
+        upcoming_games_count=upcoming_games_count,
+        active_models_count=active_models_count,
     )
 
 

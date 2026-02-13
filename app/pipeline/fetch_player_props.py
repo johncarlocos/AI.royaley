@@ -699,15 +699,19 @@ async def run_player_props_pipeline(
                 logger.info(f"  No upcoming events for {sport_code}")
                 continue
 
-            # Filter to future events only
+            # Filter to upcoming events (include games that started within last 2 hours for live props)
             now = datetime.utcnow()
+            cutoff = now - timedelta(hours=2)
             future_events = []
+            past_events = 0
             for ev in events:
                 try:
                     ct = datetime.fromisoformat(ev["commence_time"].replace("Z", "+00:00")).replace(tzinfo=None)
-                    if ct > now:
+                    if ct > cutoff:
                         ev["_commence_dt"] = ct
                         future_events.append(ev)
+                    else:
+                        past_events += 1
                 except Exception:
                     pass
 
@@ -715,7 +719,7 @@ async def run_player_props_pipeline(
             future_events.sort(key=lambda e: e["_commence_dt"])
             future_events = future_events[:max_events_per_sport]
 
-            logger.info(f"  {len(future_events)} upcoming events (of {len(events)} total)")
+            logger.info(f"  {len(future_events)} upcoming events (of {len(events)} total, {past_events} already past)")
 
             # Step 2: For each event, fetch prop odds
             for ev in future_events:
@@ -744,10 +748,27 @@ async def run_player_props_pipeline(
                     logger.info(f"     No props available yet")
                     continue
 
+                # Debug: show what bookmakers returned
+                bookmakers = event_data.get("bookmakers", [])
+                if not bookmakers:
+                    logger.info(f"     No bookmakers returned props (too early or small market)")
+                    continue
+
+                total_outcomes = 0
+                for bm in bookmakers:
+                    for mk in bm.get("markets", []):
+                        total_outcomes += len(mk.get("outcomes", []))
+
+                logger.info(
+                    f"     📚 {len(bookmakers)} bookmakers, "
+                    f"{sum(len(bm.get('markets',[])) for bm in bookmakers)} markets, "
+                    f"{total_outcomes} outcomes"
+                )
+
                 # Step 3: Parse outcomes into prop records
                 parsed_props = parse_event_props(event_data)
                 if not parsed_props:
-                    logger.info(f"     No prop lines returned")
+                    logger.info(f"     ⚠️ Outcomes found but no valid Over/Under pairs parsed")
                     continue
 
                 # Step 4: Ensure game exists in DB

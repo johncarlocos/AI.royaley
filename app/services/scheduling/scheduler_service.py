@@ -140,8 +140,9 @@ class SchedulerService:
         self._scheduler.start()
         self._running = True
         
-        # Run initial odds collection immediately on startup
+        # Run initial collections immediately on startup
         asyncio.create_task(self._run_initial_odds_collection())
+        asyncio.create_task(self._run_initial_player_props_collection())
         
         logger.info("Scheduler started")
     
@@ -270,6 +271,16 @@ class SchedulerService:
                 trigger="cron",
                 trigger_args={"day_of_week": "mon", "hour": 8, "minute": 0}
             ),
+            
+            # Player Props Pipeline
+            ScheduledJob(
+                job_id="collect_player_props",
+                name="Collect Player Props",
+                category=JobCategory.DATA_COLLECTION,
+                func=self._collect_player_props_job,
+                trigger="interval",
+                trigger_args={"seconds": 14400}  # Every 4 hours
+            ),
         ]
         
         for job in default_jobs:
@@ -340,6 +351,27 @@ class SchedulerService:
             await self._collect_odds_job()
         except Exception as e:
             logger.error(f"[Scheduler] Initial odds collection failed: {e}", exc_info=True)
+    
+    async def _collect_player_props_job(self):
+        """Collect player prop lines from The Odds API and generate predictions."""
+        try:
+            from app.pipeline.fetch_player_props import run_player_props_pipeline
+            
+            logger.info("[Scheduler] Starting player props collection...")
+            await run_player_props_pipeline(max_events_per_sport=10)
+            logger.info("[Scheduler] ✅ Player props collection completed")
+            
+        except Exception as e:
+            logger.error(f"[Scheduler] Error in player props job: {e}", exc_info=True)
+    
+    async def _run_initial_player_props_collection(self):
+        """Run player props collection on startup after a delay."""
+        await asyncio.sleep(15)  # Wait for DB and other services
+        try:
+            logger.info("[Scheduler] Running initial player props collection on startup...")
+            await self._collect_player_props_job()
+        except Exception as e:
+            logger.error(f"[Scheduler] Initial player props collection failed: {e}", exc_info=True)
     
     def register_job(self, job: ScheduledJob):
         """Register a scheduled job"""

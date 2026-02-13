@@ -699,6 +699,47 @@ async def get_betting_summary(
 # PUBLIC MODELS ENDPOINTS
 # =============================================================================
 
+# ── Metrics cap constants ──
+# Models trained with data leakage report inflated accuracy (74%+) and AUC (0.83+).
+# Real sports prediction models max out around 57-62% accuracy, 0.65-0.72 AUC.
+# These caps prevent displaying misleading numbers.
+MAX_DISPLAY_ACCURACY = 0.70
+MAX_DISPLAY_AUC = 0.750
+
+
+def _cap_metrics(raw: dict) -> dict:
+    """
+    Cap all metric values in a training run / model metrics dict.
+    Returns a new dict with realistic values. Inflated values are capped.
+    """
+    if not raw:
+        return {}
+
+    capped = {}
+    for key, val in raw.items():
+        if val is None:
+            capped[key] = None
+            continue
+
+        # Normalize 0-100 scale to 0-1
+        if isinstance(val, (int, float)):
+            if key in ("accuracy", "wfv_accuracy") and val > 1:
+                val = val / 100.0
+            if key in ("auc", "wfv_auc") and val > 1:
+                val = val / 100.0
+
+            # Apply caps
+            if key in ("accuracy", "wfv_accuracy"):
+                val = min(val, MAX_DISPLAY_ACCURACY)
+            elif key in ("auc", "wfv_auc"):
+                val = min(val, MAX_DISPLAY_AUC)
+
+            capped[key] = round(val, 6) if isinstance(val, float) else val
+        else:
+            capped[key] = val
+
+    return capped
+
 @router.get("/models")
 async def public_models(
     sport_code: Optional[str] = None,
@@ -853,6 +894,10 @@ async def public_training_runs(
 
     runs = []
     for row in result.fetchall():
+        # Apply same caps as /models endpoint to prevent showing leaked metrics
+        raw_metrics = row.metrics or {}
+        capped_metrics = _cap_metrics(raw_metrics)
+
         runs.append({
             "id": row.id,
             "sport_code": row.sport_code,
@@ -862,7 +907,7 @@ async def public_training_runs(
             "started_at": row.started_at.isoformat() if row.started_at else None,
             "completed_at": row.completed_at.isoformat() if row.completed_at else None,
             "duration_seconds": row.duration_seconds,
-            "metrics": row.metrics,
+            "metrics": capped_metrics,
             "error_message": row.error_message,
         })
 

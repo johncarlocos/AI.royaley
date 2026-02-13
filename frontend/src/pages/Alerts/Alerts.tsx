@@ -312,10 +312,10 @@ const Alerts: React.FC = () => {
           {/* DB Counts */}
           <Grid container spacing={1.5} mb={2}>
             {Object.entries(dcData.db_counts).map(([label, count], idx) => (
-              <Grid item xs={6} sm={3} md={1.5} key={idx}>
+              <Grid item xs={4} sm={2} md={1.5} key={idx}>
                 <Card sx={{ textAlign: 'center', py: 1, px: 0.5 }}>
                   <Typography sx={{ fontSize: 10, color: 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
-                  <Typography sx={{ fontSize: 16, fontWeight: 700 }}>{(count || 0).toLocaleString()}</Typography>
+                  <Typography sx={{ fontSize: 15, fontWeight: 700 }}>{(count || 0).toLocaleString()}</Typography>
                 </Card>
               </Grid>
             ))}
@@ -390,7 +390,7 @@ const Alerts: React.FC = () => {
                         )}
                       </TableCell>
                       <TableCell sx={cellSx}>
-                        <Typography sx={{ fontSize: 11, color: c.notes?.includes('BROKEN') ? 'error.main' : 'text.secondary', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <Typography sx={{ fontSize: 11, color: c.notes?.includes('Pending') ? 'warning.main' : 'text.secondary', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {c.notes}
                         </Typography>
                       </TableCell>

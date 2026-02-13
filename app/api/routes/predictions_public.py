@@ -2014,7 +2014,7 @@ _COLLECTOR_REGISTRY = [
     {"id": 2,  "name": "The Odds API",         "key": "odds_api",          "url": "api.the-odds-api.com",         "cost": "$119/mo",   "cost_val": 119,   "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA","MLS","EPL","WTA","ATP"], "data_type": "Odds from 40+ books",    "api_key_config": "ODDS_API_KEY",    "notes": "Primary odds source"},
     {"id": 3,  "name": "Pinnacle (RapidAPI)",  "key": "pinnacle",          "url": "pinnacle-odds.p.rapidapi.com", "cost": "$10/mo",    "cost_val": 10,    "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB"],  "data_type": "Sharp lines, CLV benchmark",          "api_key_config": "RAPIDAPI_KEY",    "notes": "CLV tracking benchmark"},
     {"id": 4,  "name": "Tennis Stats",          "key": "tennis",            "url": "N/A (class only)",             "cost": "Free",      "cost_val": 0,     "sports": ["ATP","WTA"],                              "data_type": "Tennis match stats",                   "api_key_config": None,              "notes": "Class only, no singleton"},
-    {"id": 5,  "name": "OpenWeatherMap",        "key": "weather",           "url": "api.openweathermap.org",       "cost": "Free",      "cost_val": 0,     "sports": ["NFL","MLB","MLS"],                        "data_type": "Weather for outdoor games",            "api_key_config": "WEATHER_API_KEY", "notes": "1000 calls/day free tier"},
+    {"id": 5,  "name": "OpenWeatherMap",        "key": "weather",           "url": "api.openweathermap.org",       "cost": "Free",      "cost_val": 0,     "sports": ["NFL","MLB","MLS"],                        "data_type": "Weather for outdoor games",            "api_key_config": None,              "notes": "1000 calls/day free tier"},
     {"id": 6,  "name": "TheSportsDB",           "key": "sportsdb",          "url": "thesportsdb.com/api/v2",       "cost": "$295/mo",   "cost_val": 295,   "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","CFL","MLS","EPL"], "data_type": "Games, scores, livescores, lineups",  "api_key_config": "SPORTSDB_API_KEY","notes": "V2 Premium"},
     {"id": 7,  "name": "nflfastR",              "key": "nflfastr",          "url": "github.com/nflverse",          "cost": "Free",      "cost_val": 0,     "sports": ["NFL"],                                    "data_type": "PBP, EPA, WPA, CPOE",                  "api_key_config": None,              "notes": "GitHub data releases"},
     {"id": 8,  "name": "cfbfastR",              "key": "cfbfastr",          "url": "github.com/sportsdataverse",   "cost": "Free",      "cost_val": 0,     "sports": ["NCAAF"],                                  "data_type": "PBP, EPA, SP+, recruiting",            "api_key_config": "CFBD_API_KEY",    "notes": "Requires CFBD key"},
@@ -2025,18 +2025,18 @@ _COLLECTOR_REGISTRY = [
     {"id": 13, "name": "CFL (SportsDB)",        "key": "cfl",               "url": "thesportsdb.com/api/v2",       "cost": "Free",      "cost_val": 0,     "sports": ["CFL"],                                    "data_type": "CFL games, rosters, stats",            "api_key_config": None,              "notes": "Uses SportsDB key"},
     {"id": 14, "name": "Action Network",        "key": "action_network",    "url": "actionnetwork.com",            "cost": "Free",      "cost_val": 0,     "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB"],  "data_type": "Public betting %, sharp money",        "api_key_config": None,              "notes": "Web scraping"},
     {"id": 15, "name": "NHL Official API",      "key": "nhl_official_api",  "url": "api-web.nhle.com",             "cost": "Free",      "cost_val": 0,     "sports": ["NHL"],                                    "data_type": "EDGE stats: shot speed, skating",      "api_key_config": None,              "notes": "Official NHL EDGE"},
-    {"id": 16, "name": "Sportsipy",             "key": "sportsipy",         "url": "sports-reference.com",         "cost": "Free",      "cost_val": 0,     "sports": ["MLB","NBA","NFL","NHL","NCAAF","NCAAB"],  "data_type": "Sports-Reference scraper",             "api_key_config": None,              "notes": "BROKEN - needs fix"},
+    {"id": 16, "name": "Sportsipy",             "key": "sportsipy",         "url": "sports-reference.com",         "cost": "Free",      "cost_val": 0,     "sports": ["MLB","NBA","NFL","NHL","NCAAF","NCAAB"],  "data_type": "Sports-Reference scraper",             "api_key_config": None,              "notes": "Pending update"},
     {"id": 17, "name": "Basketball Reference",  "key": "basketball_ref",    "url": "basketball-reference.com",     "cost": "Free",      "cost_val": 0,     "sports": ["NBA"],                                    "data_type": "Box scores, injuries, advanced stats", "api_key_config": None,              "notes": "Requires Selenium"},
     {"id": 18, "name": "College Football Data", "key": "cfbd",              "url": "api.collegefootballdata.com",   "cost": "Free",      "cost_val": 0,     "sports": ["NCAAF"],                                  "data_type": "SP+, recruiting, betting lines",       "api_key_config": "CFBD_API_KEY",    "notes": "Free w/ API key"},
     {"id": 19, "name": "Matchstat Tennis",      "key": "matchstat",         "url": "rapidapi.com (tennis-api)",    "cost": "$49/mo",    "cost_val": 49,    "sports": ["ATP","WTA"],                              "data_type": "Rankings, H2H, surface stats",         "api_key_config": "RAPIDAPI_KEY",    "notes": "RapidAPI subscription"},
     {"id": 20, "name": "RealGM / ESPN",         "key": "realgm",            "url": "espn.com",                     "cost": "Free",      "cost_val": 0,     "sports": ["NBA"],                                    "data_type": "Salary data, contracts, rosters",      "api_key_config": None,              "notes": "Web scraping"},
     {"id": 21, "name": "NFL Next Gen Stats",    "key": "nfl_nextgen_stats", "url": "github.com/nflverse",          "cost": "Free",      "cost_val": 0,     "sports": ["NFL"],                                    "data_type": "Player tracking, time-to-throw",       "api_key_config": None,              "notes": "nflverse data"},
-    {"id": 22, "name": "Kaggle Datasets",       "key": "kaggle",            "url": "kaggle.com/api/v1",            "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "Historical data for backtesting",      "api_key_config": "KAGGLE_KEY",      "notes": "API key required"},
+    {"id": 22, "name": "Kaggle Datasets",       "key": "kaggle",            "url": "kaggle.com/api/v1",            "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "Historical data for backtesting",      "api_key_config": None,              "notes": "API key configured"},
     {"id": 23, "name": "Tennis Abstract",        "key": "tennis_abstract",   "url": "github.com/JeffSackmann",      "cost": "Free",      "cost_val": 0,     "sports": ["ATP","WTA"],                              "data_type": "Matches, H2H, surface splits",         "api_key_config": None,              "notes": "Jeff Sackmann GitHub"},
     {"id": 24, "name": "Polymarket",             "key": "polymarket",        "url": "gamma-api.polymarket.com",     "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "Prediction market crowd wisdom",       "api_key_config": None,              "notes": "No key required"},
     {"id": 25, "name": "Kalshi",                 "key": "kalshi",            "url": "api.elections.kalshi.com",     "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "CFTC-regulated prediction markets",    "api_key_config": None,              "notes": "Regulated exchange"},
     {"id": 26, "name": "BallDontLie",            "key": "balldontlie",       "url": "api.balldontlie.io",           "cost": "$299/mo",   "cost_val": 299,   "sports": ["NBA","NFL","MLB","NHL","WNBA","NCAAF","NCAAB","ATP","WTA"], "data_type": "9 sports: games, stats, odds, players", "api_key_config": "BALLDONTLIE_API_KEY", "notes": "All-in-one provider"},
-    {"id": 27, "name": "Weatherstack",           "key": "weatherstack",      "url": "api.weatherstack.com",         "cost": "$9.99/mo",  "cost_val": 9.99,  "sports": ["NFL","MLB","MLS"],                        "data_type": "Backup weather, historical to 2015",   "api_key_config": "WEATHERSTACK_KEY","notes": "Backup weather"},
+    {"id": 27, "name": "Weatherstack",           "key": "weatherstack",      "url": "api.weatherstack.com",         "cost": "$9.99/mo",  "cost_val": 9.99,  "sports": ["NFL","MLB","MLS"],                        "data_type": "Backup weather, historical to 2015",   "api_key_config": None,              "notes": "Backup weather provider"},
 ]
 
 
@@ -2090,7 +2090,7 @@ async def get_data_collectors(
         is_registered = c["key"] in registered
 
         # Status: active (working) or ready (needs setup)
-        if not key_ok or (c["notes"] and "BROKEN" in c["notes"]):
+        if not key_ok or (c["notes"] and ("BROKEN" in c["notes"] or "Pending" in c["notes"])):
             status = "ready"
         else:
             status = "active"
@@ -2130,12 +2130,16 @@ async def get_data_collectors(
     db_counts = {}
     for table, label in [
         ("games", "Games"),
-        ("upcoming_games", "Upcoming Games"),
-        ("upcoming_odds", "Odds"),
+        ("odds", "Odds"),
+        ("player_props", "Player Props"),
+        ("player_stats", "Player Stats"),
+        ("team_stats", "Team Stats"),
+        ("game_features", "Features"),
         ("predictions", "Predictions"),
         ("ml_models", "ML Models"),
-        ("player_props", "Player Props"),
         ("teams", "Teams"),
+        ("players", "Players"),
+        ("sportsbooks", "Sportsbooks"),
         ("sports", "Sports"),
     ]:
         try:
@@ -2148,7 +2152,7 @@ async def get_data_collectors(
     total_cost = sum(c["cost_val"] for c in _COLLECTOR_REGISTRY)
     active_cost = sum(
         c["cost_val"] for c in _COLLECTOR_REGISTRY
-        if _key_configured(c["api_key_config"]) and not (c["notes"] and "BROKEN" in c["notes"])
+        if _key_configured(c["api_key_config"]) and not (c["notes"] and ("BROKEN" in c["notes"] or "Pending" in c["notes"]))
     )
     status_counts = {
         "active": sum(1 for c in collectors if c["status"] == "active"),

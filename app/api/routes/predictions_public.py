@@ -2002,3 +2002,185 @@ async def get_system_health(
         },
         "updated_at": now.isoformat() + "Z",
     }
+
+
+# ============================================================================
+# DATA COLLECTORS STATUS - All 27 collectors with real status
+# ============================================================================
+
+# Static registry: all 27 collectors with metadata
+_COLLECTOR_REGISTRY = [
+    {"id": 1,  "name": "ESPN",                "key": "espn",              "url": "site.api.espn.com",            "cost": "Free",      "cost_val": 0,     "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA"], "data_type": "Injuries, lineups, scores",          "api_key_config": None,              "notes": "No key required"},
+    {"id": 2,  "name": "The Odds API",         "key": "odds_api",          "url": "api.the-odds-api.com",         "cost": "$79/mo",    "cost_val": 79,    "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA","MLS","EPL","WTA","ATP"], "data_type": "Odds from 40+ books",    "api_key_config": "ODDS_API_KEY",    "notes": "Primary odds source"},
+    {"id": 3,  "name": "Pinnacle (RapidAPI)",  "key": "pinnacle",          "url": "pinnacle-odds.p.rapidapi.com", "cost": "$10/mo",    "cost_val": 10,    "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB"],  "data_type": "Sharp lines, CLV benchmark",          "api_key_config": "RAPIDAPI_KEY",    "notes": "CLV tracking benchmark"},
+    {"id": 4,  "name": "Tennis Stats",          "key": "tennis",            "url": "N/A (class only)",             "cost": "Free",      "cost_val": 0,     "sports": ["ATP","WTA"],                              "data_type": "Tennis match stats",                   "api_key_config": None,              "notes": "Class only, no singleton"},
+    {"id": 5,  "name": "OpenWeatherMap",        "key": "weather",           "url": "api.openweathermap.org",       "cost": "Free",      "cost_val": 0,     "sports": ["NFL","MLB","MLS"],                        "data_type": "Weather for outdoor games",            "api_key_config": "WEATHER_API_KEY", "notes": "1000 calls/day free tier"},
+    {"id": 6,  "name": "TheSportsDB",           "key": "sportsdb",          "url": "thesportsdb.com/api/v2",       "cost": "$295/mo",   "cost_val": 295,   "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","CFL","MLS","EPL"], "data_type": "Games, scores, livescores, lineups",  "api_key_config": "SPORTSDB_API_KEY","notes": "V2 Premium"},
+    {"id": 7,  "name": "nflfastR",              "key": "nflfastr",          "url": "github.com/nflverse",          "cost": "Free",      "cost_val": 0,     "sports": ["NFL"],                                    "data_type": "PBP, EPA, WPA, CPOE",                  "api_key_config": None,              "notes": "GitHub data releases"},
+    {"id": 8,  "name": "cfbfastR",              "key": "cfbfastr",          "url": "github.com/sportsdataverse",   "cost": "Free",      "cost_val": 0,     "sports": ["NCAAF"],                                  "data_type": "PBP, EPA, SP+, recruiting",            "api_key_config": "CFBD_API_KEY",    "notes": "Requires CFBD key"},
+    {"id": 9,  "name": "baseballR (MLB API)",   "key": "baseballr",         "url": "statsapi.mlb.com",             "cost": "Free",      "cost_val": 0,     "sports": ["MLB"],                                    "data_type": "Statcast, FanGraphs, 85+ features",   "api_key_config": None,              "notes": "MLB Stats API"},
+    {"id": 10, "name": "hockeyR (NHL API)",     "key": "hockeyr",           "url": "api-web.nhle.com",             "cost": "Free",      "cost_val": 0,     "sports": ["NHL"],                                    "data_type": "xG, Corsi, Fenwick, 75+ features",    "api_key_config": None,              "notes": "NHL Web API"},
+    {"id": 11, "name": "wehoop (ESPN/WNBA)",    "key": "wehoop",            "url": "site.api.espn.com",            "cost": "Free",      "cost_val": 0,     "sports": ["WNBA"],                                   "data_type": "PBP, box scores, player stats",        "api_key_config": None,              "notes": "ESPN WNBA data"},
+    {"id": 12, "name": "hoopR (ESPN/NBA)",      "key": "hoopr",             "url": "site.api.espn.com",            "cost": "Free",      "cost_val": 0,     "sports": ["NBA","NCAAB"],                            "data_type": "Games, rosters, player/team stats",    "api_key_config": None,              "notes": "ESPN NBA/NCAAB"},
+    {"id": 13, "name": "CFL (SportsDB)",        "key": "cfl",               "url": "thesportsdb.com/api/v2",       "cost": "Free",      "cost_val": 0,     "sports": ["CFL"],                                    "data_type": "CFL games, rosters, stats",            "api_key_config": None,              "notes": "Uses SportsDB key"},
+    {"id": 14, "name": "Action Network",        "key": "action_network",    "url": "actionnetwork.com",            "cost": "Free",      "cost_val": 0,     "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB"],  "data_type": "Public betting %, sharp money",        "api_key_config": None,              "notes": "Web scraping"},
+    {"id": 15, "name": "NHL Official API",      "key": "nhl_official_api",  "url": "api-web.nhle.com",             "cost": "Free",      "cost_val": 0,     "sports": ["NHL"],                                    "data_type": "EDGE stats: shot speed, skating",      "api_key_config": None,              "notes": "Official NHL EDGE"},
+    {"id": 16, "name": "Sportsipy",             "key": "sportsipy",         "url": "sports-reference.com",         "cost": "Free",      "cost_val": 0,     "sports": ["MLB","NBA","NFL","NHL","NCAAF","NCAAB"],  "data_type": "Sports-Reference scraper",             "api_key_config": None,              "notes": "BROKEN - needs fix"},
+    {"id": 17, "name": "Basketball Reference",  "key": "basketball_ref",    "url": "basketball-reference.com",     "cost": "Free",      "cost_val": 0,     "sports": ["NBA"],                                    "data_type": "Box scores, injuries, advanced stats", "api_key_config": None,              "notes": "Requires Selenium"},
+    {"id": 18, "name": "College Football Data", "key": "cfbd",              "url": "api.collegefootballdata.com",   "cost": "Free",      "cost_val": 0,     "sports": ["NCAAF"],                                  "data_type": "SP+, recruiting, betting lines",       "api_key_config": "CFBD_API_KEY",    "notes": "Free w/ API key"},
+    {"id": 19, "name": "Matchstat Tennis",      "key": "matchstat",         "url": "rapidapi.com (tennis-api)",    "cost": "$49/mo",    "cost_val": 49,    "sports": ["ATP","WTA"],                              "data_type": "Rankings, H2H, surface stats",         "api_key_config": "RAPIDAPI_KEY",    "notes": "RapidAPI subscription"},
+    {"id": 20, "name": "RealGM / ESPN",         "key": "realgm",            "url": "espn.com",                     "cost": "Free",      "cost_val": 0,     "sports": ["NBA"],                                    "data_type": "Salary data, contracts, rosters",      "api_key_config": None,              "notes": "Web scraping"},
+    {"id": 21, "name": "NFL Next Gen Stats",    "key": "nfl_nextgen_stats", "url": "github.com/nflverse",          "cost": "Free",      "cost_val": 0,     "sports": ["NFL"],                                    "data_type": "Player tracking, time-to-throw",       "api_key_config": None,              "notes": "nflverse data"},
+    {"id": 22, "name": "Kaggle Datasets",       "key": "kaggle",            "url": "kaggle.com/api/v1",            "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "Historical data for backtesting",      "api_key_config": "KAGGLE_KEY",      "notes": "API key required"},
+    {"id": 23, "name": "Tennis Abstract",        "key": "tennis_abstract",   "url": "github.com/JeffSackmann",      "cost": "Free",      "cost_val": 0,     "sports": ["ATP","WTA"],                              "data_type": "Matches, H2H, surface splits",         "api_key_config": None,              "notes": "Jeff Sackmann GitHub"},
+    {"id": 24, "name": "Polymarket",             "key": "polymarket",        "url": "gamma-api.polymarket.com",     "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "Prediction market crowd wisdom",       "api_key_config": None,              "notes": "No key required"},
+    {"id": 25, "name": "Kalshi",                 "key": "kalshi",            "url": "api.elections.kalshi.com",     "cost": "Free",      "cost_val": 0,     "sports": ["Multi-sport"],                            "data_type": "CFTC-regulated prediction markets",    "api_key_config": None,              "notes": "Regulated exchange"},
+    {"id": 26, "name": "BallDontLie",            "key": "balldontlie",       "url": "api.balldontlie.io",           "cost": "$299/mo",   "cost_val": 299,   "sports": ["NBA","NFL","MLB","NHL","WNBA","NCAAF","NCAAB","ATP","WTA"], "data_type": "9 sports: games, stats, odds, players", "api_key_config": "BALLDONTLIE_API_KEY", "notes": "All-in-one provider"},
+    {"id": 27, "name": "Weatherstack",           "key": "weatherstack",      "url": "api.weatherstack.com",         "cost": "$9.99/mo",  "cost_val": 9.99,  "sports": ["NFL","MLB","MLS"],                        "data_type": "Backup weather, historical to 2015",   "api_key_config": "WEATHERSTACK_KEY","notes": "Backup weather"},
+]
+
+
+@router.get("/data-collectors")
+async def get_data_collectors(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Status of all 27 data collectors: registration, API key config,
+    subscription tier, data types, sports coverage, archive stats.
+    """
+    import os
+
+    now = datetime.utcnow()
+
+    # Get registered collectors from the collector manager
+    try:
+        from app.services.collectors.base_collector import collector_manager
+        registered = set(collector_manager.collectors.keys())
+    except Exception:
+        registered = set()
+
+    # Check API keys from environment / settings
+    def _key_configured(config_name):
+        if not config_name:
+            return True  # No key needed
+        val = getattr(settings, config_name, None) or os.environ.get(config_name, "")
+        return bool(val and len(val) > 3)
+
+    # Check raw-data archive sizes
+    archive_stats = {}
+    try:
+        import pathlib
+        archive_base = pathlib.Path("/app/raw-data")
+        if archive_base.exists():
+            for category_dir in archive_base.iterdir():
+                if category_dir.is_dir():
+                    file_count = sum(1 for _ in category_dir.rglob("*") if _.is_file())
+                    total_size = sum(f.stat().st_size for f in category_dir.rglob("*") if f.is_file())
+                    archive_stats[category_dir.name.lower()] = {
+                        "files": file_count,
+                        "size_mb": round(total_size / (1024 * 1024), 1),
+                    }
+    except Exception:
+        pass
+
+    # Build response for each collector
+    collectors = []
+    for c in _COLLECTOR_REGISTRY:
+        key_ok = _key_configured(c["api_key_config"])
+        is_registered = c["key"] in registered
+
+        # Determine status
+        if not key_ok:
+            status = "no_key"
+        elif c["notes"] and "BROKEN" in c["notes"]:
+            status = "broken"
+        elif is_registered:
+            status = "active"
+        else:
+            status = "available"  # Key configured but not registered in manager
+
+        # Get archive info for this collector
+        archive_info = archive_stats.get(c["key"], {"files": 0, "size_mb": 0})
+
+        # Subscription tier
+        if c["cost_val"] == 0:
+            sub_tier = "Free"
+        elif c["cost_val"] < 50:
+            sub_tier = "Basic"
+        elif c["cost_val"] < 100:
+            sub_tier = "Pro"
+        else:
+            sub_tier = "Premium"
+
+        collectors.append({
+            "id": c["id"],
+            "name": c["name"],
+            "key": c["key"],
+            "url": c["url"],
+            "status": status,
+            "api_key_configured": key_ok,
+            "registered": is_registered,
+            "cost": c["cost"],
+            "subscription_tier": sub_tier,
+            "sports": c["sports"],
+            "sports_count": len(c["sports"]),
+            "data_type": c["data_type"],
+            "notes": c["notes"],
+            "archive_files": archive_info["files"],
+            "archive_size_mb": archive_info["size_mb"],
+        })
+
+    # DB table counts for key data
+    db_counts = {}
+    for table, label in [
+        ("games", "Historical Games"),
+        ("upcoming_games", "Upcoming Games"),
+        ("upcoming_odds", "Odds Lines"),
+        ("predictions", "Predictions"),
+        ("ml_models", "ML Models"),
+        ("player_props", "Player Props"),
+        ("teams", "Teams"),
+        ("sports", "Sports"),
+    ]:
+        try:
+            r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            db_counts[label] = r.scalar() or 0
+        except Exception:
+            db_counts[label] = 0
+
+    # Summary stats
+    total_cost = sum(c["cost_val"] for c in _COLLECTOR_REGISTRY)
+    active_cost = sum(
+        c["cost_val"] for c in _COLLECTOR_REGISTRY
+        if _key_configured(c["api_key_config"]) and c["key"] in registered
+    )
+    status_counts = {
+        "active": sum(1 for c in collectors if c["status"] == "active"),
+        "available": sum(1 for c in collectors if c["status"] == "available"),
+        "no_key": sum(1 for c in collectors if c["status"] == "no_key"),
+        "broken": sum(1 for c in collectors if c["status"] == "broken"),
+    }
+    free_count = sum(1 for c in _COLLECTOR_REGISTRY if c["cost_val"] == 0)
+    paid_count = sum(1 for c in _COLLECTOR_REGISTRY if c["cost_val"] > 0)
+
+    # All unique sports covered
+    all_sports = set()
+    for c in _COLLECTOR_REGISTRY:
+        all_sports.update(c["sports"])
+
+    return {
+        "collectors": collectors,
+        "summary": {
+            "total": len(collectors),
+            "status_counts": status_counts,
+            "free_count": free_count,
+            "paid_count": paid_count,
+            "total_monthly_cost": f"${total_cost:.0f}",
+            "active_monthly_cost": f"${active_cost:.0f}",
+            "sports_covered": sorted(all_sports),
+            "sports_count": len(all_sports),
+        },
+        "db_counts": db_counts,
+        "archive_stats": archive_stats,
+        "updated_at": now.isoformat() + "Z",
+    }

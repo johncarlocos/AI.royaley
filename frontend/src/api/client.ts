@@ -154,6 +154,11 @@ export const api = {
     return data;
   },
 
+  getDataCollectors: async () => {
+    const { data } = await axiosClient.get('/public/data-collectors');
+    return data;
+  },
+
   // Backtest
   runBacktest: async (config: Record<string, unknown>) => {
     const { data } = await axiosClient.post('/backtest/run', config);

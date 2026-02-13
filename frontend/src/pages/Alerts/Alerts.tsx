@@ -1,14 +1,18 @@
-// src/pages/Alerts/Alerts.tsx - System Health Dashboard (Real Data)
+// src/pages/Alerts/Alerts.tsx - System Health + Data Collectors Dashboard (Real Data)
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Box, Card, Typography, Grid, Chip, Button, LinearProgress, useTheme, Tooltip
+  Box, Card, Typography, Grid, Chip, Button, LinearProgress, useTheme, Tooltip,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper
 } from '@mui/material';
 import {
   CheckCircle, Warning, Error as ErrorIcon, Info, Refresh, Storage, Memory, Speed,
-  Cloud, Psychology, Api, DataObject, MonitorHeart, Dns, Security, Timer, TrendingUp, Circle
+  Cloud, Psychology, Api, DataObject, MonitorHeart, Dns, Security, Timer, TrendingUp,
+  Circle, CloudDownload
 } from '@mui/icons-material';
 import { api } from '../../api/client';
 import { useAlertStore } from '../../store';
+
+/* ─── Types ─────────────────────────────────────────────── */
 
 interface HealthComponent {
   name: string;
@@ -40,19 +44,51 @@ interface SystemHealthResponse {
     disk_used_gb: number;
     disk_total_gb: number;
   };
-  counts: {
-    good: number;
-    warning: number;
-    error: number;
-    total: number;
-  };
+  counts: { good: number; warning: number; error: number; total: number };
   updated_at: string;
 }
+
+interface Collector {
+  id: number;
+  name: string;
+  key: string;
+  url: string;
+  status: 'active' | 'available' | 'no_key' | 'broken';
+  api_key_configured: boolean;
+  registered: boolean;
+  cost: string;
+  subscription_tier: string;
+  sports: string[];
+  sports_count: number;
+  data_type: string;
+  notes: string;
+  archive_files: number;
+  archive_size_mb: number;
+}
+
+interface DataCollectorsResponse {
+  collectors: Collector[];
+  summary: {
+    total: number;
+    status_counts: { active: number; available: number; no_key: number; broken: number };
+    free_count: number;
+    paid_count: number;
+    total_monthly_cost: string;
+    active_monthly_cost: string;
+    sports_covered: string[];
+    sports_count: number;
+  };
+  db_counts: Record<string, number>;
+  updated_at: string;
+}
+
+/* ─── Main Component ────────────────────────────────────── */
 
 const Alerts: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [data, setData] = useState<SystemHealthResponse | null>(null);
+  const [dcData, setDcData] = useState<DataCollectorsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const { markAllRead } = useAlertStore();
@@ -60,9 +96,13 @@ const Alerts: React.FC = () => {
   const loadHealth = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await api.getSystemHealth();
-      setData(resp);
-      if (resp.updated_at) setLastUpdate(new Date(resp.updated_at));
+      const [healthResp, dcResp] = await Promise.all([
+        api.getSystemHealth(),
+        api.getDataCollectors(),
+      ]);
+      setData(healthResp);
+      setDcData(dcResp);
+      if (healthResp.updated_at) setLastUpdate(new Date(healthResp.updated_at));
     } catch {
       // Keep existing data on error
     }
@@ -71,7 +111,7 @@ const Alerts: React.FC = () => {
 
   useEffect(() => {
     loadHealth();
-    const interval = setInterval(loadHealth, 30000);
+    const interval = setInterval(loadHealth, 60000);
     return () => clearInterval(interval);
   }, [loadHealth]);
 
@@ -109,22 +149,50 @@ const Alerts: React.FC = () => {
 
   const quickStats = qs ? [
     { label: 'Uptime', value: qs.uptime, sub: 'since restart', color: 'success.main' },
-    { label: 'CPU', value: `${qs.cpu_percent}%`, sub: `${qs.cpu_cores} cores`, color: qs.cpu_percent >= 80 ? 'warning.main' : qs.cpu_percent >= 90 ? 'error.main' : 'success.main' },
-    { label: 'Memory', value: `${qs.memory_percent}%`, sub: `${qs.memory_used_gb}/${qs.memory_total_gb} GB`, color: qs.memory_percent >= 80 ? 'warning.main' : qs.memory_percent >= 90 ? 'error.main' : 'text.primary' },
-    { label: 'Disk', value: `${qs.disk_percent}%`, sub: `${qs.disk_used_gb}/${qs.disk_total_gb} GB`, color: qs.disk_percent >= 80 ? 'warning.main' : qs.disk_percent >= 90 ? 'error.main' : 'text.primary' },
-    { label: 'Components', value: `${counts.total}`, sub: `${counts.good} healthy`, color: counts.error > 0 ? 'error.main' : counts.warning > 0 ? 'warning.main' : 'success.main' },
+    { label: 'CPU', value: `${qs.cpu_percent}%`, sub: `${qs.cpu_cores} cores`, color: qs.cpu_percent >= 80 ? 'warning.main' : 'success.main' },
+    { label: 'Memory', value: `${qs.memory_percent}%`, sub: `${qs.memory_used_gb}/${qs.memory_total_gb} GB`, color: qs.memory_percent >= 80 ? 'warning.main' : 'text.primary' },
+    { label: 'Disk', value: `${qs.disk_percent}%`, sub: `${qs.disk_used_gb}/${qs.disk_total_gb} GB`, color: qs.disk_percent >= 80 ? 'warning.main' : 'text.primary' },
+    { label: 'Components', value: `${counts.total}`, sub: `${counts.good} healthy`, color: counts.error > 0 ? 'error.main' : 'success.main' },
     { label: 'Health', value: `${healthScore}%`, sub: 'overall', color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main' },
   ] : [];
 
+  const statusColor = (s: string) => {
+    switch (s) {
+      case 'active': return 'success';
+      case 'available': return 'info';
+      case 'no_key': return 'warning';
+      case 'broken': return 'error';
+      default: return 'default';
+    }
+  };
+  const statusLabel = (s: string) => {
+    switch (s) {
+      case 'active': return 'Active';
+      case 'available': return 'Ready';
+      case 'no_key': return 'No Key';
+      case 'broken': return 'Broken';
+      default: return s;
+    }
+  };
+  const tierColor = (t: string) => {
+    switch (t) {
+      case 'Premium': return 'error';
+      case 'Pro': return 'warning';
+      case 'Basic': return 'info';
+      default: return 'success';
+    }
+  };
+
+  const cellSx = { py: 0.75, px: 1.25, fontSize: 12, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)' };
+  const headerSx = { ...cellSx, fontWeight: 600, fontSize: 11, color: 'text.secondary', textTransform: 'uppercase' as const, letterSpacing: 0.5 };
+
   return (
     <Box>
-      {/* Header */}
+      {/* ─── Header ─── */}
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Box display="flex" alignItems="center" gap={2}>
           <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>System Health</Typography>
-          <Typography variant="caption" color="text.secondary">
-            Updated: {lastUpdate.toLocaleTimeString()}
-          </Typography>
+          <Typography variant="caption" color="text.secondary">Updated: {lastUpdate.toLocaleTimeString()}</Typography>
         </Box>
         <Box display="flex" gap={1.5}>
           <Button variant="outlined" size="small" onClick={markAllRead} sx={{ fontSize: 12, py: 0.75 }}>Mark All Read</Button>
@@ -134,7 +202,7 @@ const Alerts: React.FC = () => {
 
       {loading && !data && <LinearProgress sx={{ mb: 1.5, height: 3 }} />}
 
-      {/* Overall Health Bar */}
+      {/* ─── Overall Health Bar ─── */}
       <Card sx={{ mb: 2 }}>
         <Box sx={{ px: 2.5, py: 1.5 }}>
           <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
@@ -143,40 +211,17 @@ const Alerts: React.FC = () => {
               <Typography sx={{ fontSize: 15, fontWeight: 600 }}>Overall System Health</Typography>
             </Box>
             <Box display="flex" alignItems="center" gap={2}>
-              <Box display="flex" alignItems="center" gap={0.5}>
-                <CheckCircle sx={{ fontSize: 14, color: 'success.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'success.main' }}>{counts.good}</Typography>
-              </Box>
-              <Box display="flex" alignItems="center" gap={0.5}>
-                <Warning sx={{ fontSize: 14, color: 'warning.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'warning.main' }}>{counts.warning}</Typography>
-              </Box>
-              <Box display="flex" alignItems="center" gap={0.5}>
-                <ErrorIcon sx={{ fontSize: 14, color: 'error.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'error.main' }}>{counts.error}</Typography>
-              </Box>
-              <Typography sx={{ fontSize: 18, fontWeight: 700, color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main', ml: 1 }}>
-                {healthScore}%
-              </Typography>
+              <Box display="flex" alignItems="center" gap={0.5}><CheckCircle sx={{ fontSize: 14, color: 'success.main' }} /><Typography sx={{ fontSize: 12, color: 'success.main' }}>{counts.good}</Typography></Box>
+              <Box display="flex" alignItems="center" gap={0.5}><Warning sx={{ fontSize: 14, color: 'warning.main' }} /><Typography sx={{ fontSize: 12, color: 'warning.main' }}>{counts.warning}</Typography></Box>
+              <Box display="flex" alignItems="center" gap={0.5}><ErrorIcon sx={{ fontSize: 14, color: 'error.main' }} /><Typography sx={{ fontSize: 12, color: 'error.main' }}>{counts.error}</Typography></Box>
+              <Typography sx={{ fontSize: 18, fontWeight: 700, color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main', ml: 1 }}>{healthScore}%</Typography>
             </Box>
           </Box>
-          <LinearProgress
-            variant="determinate"
-            value={healthScore}
-            sx={{
-              height: 6,
-              borderRadius: 3,
-              bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-              '& .MuiLinearProgress-bar': {
-                bgcolor: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main',
-                borderRadius: 3
-              }
-            }}
-          />
+          <LinearProgress variant="determinate" value={healthScore} sx={{ height: 6, borderRadius: 3, bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', '& .MuiLinearProgress-bar': { bgcolor: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main', borderRadius: 3 } }} />
         </Box>
       </Card>
 
-      {/* Quick Stats Row */}
+      {/* ─── Quick Stats ─── */}
       {quickStats.length > 0 && (
         <Grid container spacing={1.5} mb={2}>
           {quickStats.map((stat, idx) => (
@@ -191,8 +236,8 @@ const Alerts: React.FC = () => {
         </Grid>
       )}
 
-      <Grid container spacing={2}>
-        {/* System Components */}
+      {/* ─── Components + Alerts row ─── */}
+      <Grid container spacing={2} mb={2}>
         <Grid item xs={12} md={7}>
           <Card sx={{ height: '100%' }}>
             <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
@@ -204,14 +249,7 @@ const Alerts: React.FC = () => {
                   {components.map((ind, idx) => (
                     <Grid item xs={6} sm={4} md={3} key={idx}>
                       <Tooltip title={ind.details || ''} arrow>
-                        <Box sx={{
-                          p: 1.25,
-                          borderRadius: 2,
-                          bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                          border: 1,
-                          borderColor: ind.status === 'error' ? 'error.main' : ind.status === 'warning' ? 'warning.main' : 'transparent',
-                          '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }
-                        }}>
+                        <Box sx={{ p: 1.25, borderRadius: 2, bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: 1, borderColor: ind.status === 'error' ? 'error.main' : ind.status === 'warning' ? 'warning.main' : 'transparent', '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' } }}>
                           <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
                             <Box display="flex" alignItems="center" gap={0.75}>
                               <Box sx={{ color: 'text.secondary' }}>{getIcon(ind.icon)}</Box>
@@ -221,27 +259,18 @@ const Alerts: React.FC = () => {
                             {ind.status === 'warning' && <Warning sx={{ fontSize: 16, color: 'warning.main' }} />}
                             {ind.status === 'error' && <ErrorIcon sx={{ fontSize: 16, color: 'error.main' }} />}
                           </Box>
-                          <Chip
-                            label={ind.value}
-                            size="small"
-                            color={ind.status === 'good' ? 'success' : ind.status === 'warning' ? 'warning' : 'error'}
-                            sx={{ fontSize: 10, height: 20, width: '100%', '& .MuiChip-label': { px: 0.75 } }}
-                          />
+                          <Chip label={ind.value} size="small" color={ind.status === 'good' ? 'success' : ind.status === 'warning' ? 'warning' : 'error'} sx={{ fontSize: 10, height: 20, width: '100%', '& .MuiChip-label': { px: 0.75 } }} />
                         </Box>
                       </Tooltip>
                     </Grid>
                   ))}
                 </Grid>
               ) : (
-                <Box sx={{ textAlign: 'center', py: 4 }}>
-                  <Typography color="text.secondary">Loading health data...</Typography>
-                </Box>
+                <Box sx={{ textAlign: 'center', py: 4 }}><Typography color="text.secondary">Loading...</Typography></Box>
               )}
             </Box>
           </Card>
         </Grid>
-
-        {/* Recent Alerts */}
         <Grid item xs={12} md={5}>
           <Card sx={{ height: '100%' }}>
             <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
@@ -249,32 +278,134 @@ const Alerts: React.FC = () => {
             </Box>
             <Box sx={{ p: 1.5, maxHeight: 500, overflow: 'auto' }}>
               {alerts.length > 0 ? alerts.map((alert) => (
-                <Box key={alert.id} sx={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 1.5,
-                  py: 1,
-                  px: 1.25,
-                  mb: 0.75,
-                  borderRadius: 1.5,
-                  bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)',
-                  '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }
-                }}>
+                <Box key={alert.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, py: 1, px: 1.25, mb: 0.75, borderRadius: 1.5, bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)', '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' } }}>
                   {getAlertIcon(alert.type)}
-                  <Box flex={1} minWidth={0}>
-                    <Typography sx={{ fontSize: 13, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert.message}</Typography>
-                  </Box>
+                  <Box flex={1} minWidth={0}><Typography sx={{ fontSize: 13, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert.message}</Typography></Box>
                   <Typography sx={{ fontSize: 11, color: 'text.secondary', whiteSpace: 'nowrap' }}>{alert.timestamp}</Typography>
                 </Box>
               )) : (
-                <Box sx={{ textAlign: 'center', py: 4 }}>
-                  <Typography color="text.secondary" sx={{ fontSize: 13 }}>No events to display</Typography>
-                </Box>
+                <Box sx={{ textAlign: 'center', py: 4 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>No events</Typography></Box>
               )}
             </Box>
           </Card>
         </Grid>
       </Grid>
+
+      {/* ─── Data Collectors Section ─── */}
+      {dcData && (
+        <>
+          {/* Summary stats row */}
+          <Grid container spacing={1.5} mb={2}>
+            {[
+              { label: 'Total Collectors', value: dcData.summary.total, color: 'text.primary' },
+              { label: 'Active', value: dcData.summary.status_counts.active, color: 'success.main' },
+              { label: 'Ready', value: dcData.summary.status_counts.available, color: 'info.main' },
+              { label: 'No Key', value: dcData.summary.status_counts.no_key, color: 'warning.main' },
+              { label: 'Free / Paid', value: `${dcData.summary.free_count}/${dcData.summary.paid_count}`, color: 'text.primary' },
+              { label: 'Monthly Cost', value: dcData.summary.active_monthly_cost, color: 'error.main' },
+            ].map((s, idx) => (
+              <Grid item xs={4} sm={2} key={idx}>
+                <Card sx={{ textAlign: 'center', py: 1.5, px: 1 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{s.label}</Typography>
+                  <Typography sx={{ fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</Typography>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* DB Counts */}
+          <Grid container spacing={1.5} mb={2}>
+            {Object.entries(dcData.db_counts).map(([label, count], idx) => (
+              <Grid item xs={6} sm={3} md={1.5} key={idx}>
+                <Card sx={{ textAlign: 'center', py: 1, px: 0.5 }}>
+                  <Typography sx={{ fontSize: 10, color: 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
+                  <Typography sx={{ fontSize: 16, fontWeight: 700 }}>{(count || 0).toLocaleString()}</Typography>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* Collectors Table */}
+          <Card>
+            <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <CloudDownload sx={{ fontSize: 20, color: 'primary.main' }} />
+              <Typography sx={{ fontSize: 16, fontWeight: 600 }}>
+                Data Collectors ({dcData.summary.total})
+              </Typography>
+              <Typography sx={{ fontSize: 12, color: 'text.secondary', ml: 'auto' }}>
+                {dcData.summary.sports_count} sports covered
+              </Typography>
+            </Box>
+            <TableContainer component={Paper} elevation={0} sx={{ maxHeight: 700 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={headerSx}>#</TableCell>
+                    <TableCell sx={headerSx}>Name</TableCell>
+                    <TableCell sx={headerSx}>Status</TableCell>
+                    <TableCell sx={headerSx}>Key</TableCell>
+                    <TableCell sx={headerSx}>Tier</TableCell>
+                    <TableCell sx={headerSx}>Cost</TableCell>
+                    <TableCell sx={headerSx}>Sports</TableCell>
+                    <TableCell sx={headerSx}>Data Type</TableCell>
+                    <TableCell sx={headerSx}>Archive</TableCell>
+                    <TableCell sx={headerSx}>Notes</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {dcData.collectors.map((c) => (
+                    <TableRow key={c.id} sx={{ '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' } }}>
+                      <TableCell sx={{ ...cellSx, color: 'text.secondary', fontWeight: 500 }}>{c.id}</TableCell>
+                      <TableCell sx={{ ...cellSx, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        <Tooltip title={c.url} arrow><span>{c.name}</span></Tooltip>
+                      </TableCell>
+                      <TableCell sx={cellSx}>
+                        <Chip label={statusLabel(c.status)} size="small" color={statusColor(c.status) as any} sx={{ fontSize: 10, height: 20, fontWeight: 600 }} />
+                      </TableCell>
+                      <TableCell sx={cellSx}>
+                        {c.api_key_configured
+                          ? <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />
+                          : <Warning sx={{ fontSize: 16, color: 'warning.main' }} />
+                        }
+                      </TableCell>
+                      <TableCell sx={cellSx}>
+                        <Chip label={c.subscription_tier} size="small" color={tierColor(c.subscription_tier) as any} variant="outlined" sx={{ fontSize: 10, height: 18 }} />
+                      </TableCell>
+                      <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap', color: c.cost === 'Free' ? 'success.main' : 'warning.main', fontWeight: 600 }}>{c.cost}</TableCell>
+                      <TableCell sx={cellSx}>
+                        <Tooltip title={c.sports.join(', ')} arrow>
+                          <Typography sx={{ fontSize: 11, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.sports.join(', ')}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell sx={cellSx}>
+                        <Tooltip title={c.data_type} arrow>
+                          <Typography sx={{ fontSize: 11, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.data_type}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap' }}>
+                        {c.archive_files > 0 ? (
+                          <Typography sx={{ fontSize: 11 }}>{c.archive_files.toLocaleString()} files ({c.archive_size_mb} MB)</Typography>
+                        ) : (
+                          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>-</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell sx={cellSx}>
+                        <Typography sx={{ fontSize: 11, color: c.notes?.includes('BROKEN') ? 'error.main' : 'text.secondary', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.notes}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Card>
+        </>
+      )}
     </Box>
   );
 };

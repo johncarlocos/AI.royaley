@@ -1140,3 +1140,138 @@ async def public_player_props(
         })
 
     return props
+
+
+# =============================================================================
+# PUBLIC GAME PROPS ENDPOINT
+# =============================================================================
+
+# Prop type categories for the Game Props page
+_SCORING_PROP_TYPES = {"atd", "ftd", "dd", "td", "goal"}
+_GAME_EVENT_TYPES = {"ot", "safety", "fts", "fgm"}
+_PROP_LABELS = {
+    "pass_yds": ("Pass Yds", "blue"), "rush_yds": ("Rush Yds", "green"),
+    "rec_yds": ("Rec Yds", "orange"), "rec": ("Rec", "red"),
+    "points": ("Points", "purple"), "rebounds": ("Reb", "teal"),
+    "assists": ("Ast", "pink"), "threes": ("3PM", "yellow"),
+    "pra": ("PRA", "teal"), "sog": ("SOG", "blue"),
+    "atd": ("Any TD", "green"), "ftd": ("First TD", "red"),
+    "dd": ("Double-Dbl", "purple"), "td": ("Triple-Dbl", "teal"),
+    "goal": ("Goal", "orange"), "ot": ("Overtime", "pink"),
+    "safety": ("Safety", "red"), "fts": ("First Score", "green"),
+    "fgm": ("50+ FG", "blue"),
+}
+
+
+@router.get("/game-props")
+async def public_game_props(
+    sport: Optional[str] = None,
+    tier: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public read-only game props predictions.
+    Queries player_props table and categorises into player_stats / scoring_props / game_events.
+    """
+    conditions = []
+    params: dict = {}
+
+    if sport:
+        conditions.append("AND s.code = :sport")
+        params["sport"] = sport.upper()
+    if tier:
+        conditions.append("AND pp.signal_tier = :tier::signaltier")
+        params["tier"] = tier.upper()
+
+    where_clause = " ".join(conditions)
+
+    result = await db.execute(text(f"""
+        SELECT
+            pp.id::text                         AS id,
+            s.code                              AS sport,
+            g.scheduled_at                      AS game_time,
+            p.name                              AS player_name,
+            p.position                          AS player_position,
+            ht.abbreviation                     AS home_team,
+            at2.abbreviation                    AS away_team,
+            CASE WHEN p.team_id = g.home_team_id
+                 THEN ht.abbreviation
+                 ELSE at2.abbreviation
+            END                                 AS team,
+            CASE WHEN p.team_id = g.home_team_id
+                 THEN 'HOME' ELSE 'AWAY'
+            END                                 AS player_team_side,
+            pp.prop_type,
+            pp.line,
+            pp.predicted_value,
+            pp.predicted_side                   AS pick,
+            pp.probability,
+            pp.over_odds,
+            pp.under_odds,
+            pp.signal_tier::text                AS tier,
+            pp.result::text                     AS status,
+            pp.actual_value                     AS actual,
+            pp.created_at
+        FROM player_props pp
+        JOIN players p ON p.id = pp.player_id
+        JOIN games g ON g.id = pp.game_id
+        JOIN sports s ON s.id = g.sport_id
+        JOIN teams ht ON ht.id = g.home_team_id
+        JOIN teams at2 ON at2.id = g.away_team_id
+        WHERE 1=1 {where_clause}
+        ORDER BY g.scheduled_at DESC, pp.probability DESC
+        LIMIT 500
+    """), params)
+
+    rows = result.fetchall()
+    props = []
+
+    for row in rows:
+        pt = row.prop_type or ""
+        prob = row.probability or 0.50
+        pick = (row.pick or ("OVER" if prob > 0.50 else "UNDER")).upper()
+        edge = abs(prob - 0.50) * 100
+        label_info = _PROP_LABELS.get(pt, (pt.replace("_", " ").title(), "blue"))
+
+        # Categorise
+        if pt in _SCORING_PROP_TYPES:
+            category = "scoring_props"
+        elif pt in _GAME_EVENT_TYPES:
+            category = "game_events"
+        else:
+            category = "player_stats"
+
+        # Format odds
+        over_odds = f"O {row.over_odds}" if row.over_odds else "-"
+        under_odds = f"U {row.under_odds}" if row.under_odds else "-"
+
+        props.append({
+            "id": row.id,
+            "sport": row.sport,
+            "gameDate": row.game_time.strftime("%-m/%-d") if row.game_time else "",
+            "gameTime": row.game_time.strftime("%-I:%M %p") if row.game_time else "",
+            "teams": f"{row.home_team} vs {row.away_team}",
+            "player": row.player_name or "Game",
+            "playerPosition": row.player_position or "-",
+            "playerTeamSide": row.player_team_side or "-",
+            "propType": pt,
+            "propLabel": label_info[0],
+            "propColor": label_info[1],
+            "line": row.line or 0,
+            "oddsOver": over_odds,
+            "oddsUnder": under_odds,
+            "pick": pick,
+            "projection": round(row.predicted_value, 1) if row.predicted_value else 0,
+            "probability": prob,
+            "edge": round(edge, 1),
+            "tier": row.tier or "D",
+            "average": round(row.predicted_value, 1) if row.predicted_value else 0,
+            "lastSeason": "-",
+            "lastSeasonTrend": "flat",
+            "matchTier": row.tier or "D",
+            "status": row.status or "pending",
+            "actual": row.actual,
+            "category": category,
+        })
+
+    return props

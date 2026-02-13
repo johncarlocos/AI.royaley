@@ -4,19 +4,20 @@ import {
   Box, Card, CardContent, Typography, Grid, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Chip, Select, MenuItem, FormControl,
   InputLabel, Button, Alert, LinearProgress, useTheme, Tabs, Tab, IconButton,
-  Dialog, DialogTitle, DialogContent, DialogActions, Tooltip
+  Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
-import { 
-  Refresh, CheckCircle, Cancel, Schedule, ExpandMore, 
-  Person, Casino, FlashOn, TrendingUp, TrendingDown, AccessTime
+import {
+  Refresh, CheckCircle, Cancel, Schedule, ExpandMore,
+  Person, Casino, FlashOn, AccessTime, SportsScore
 } from '@mui/icons-material';
-import { TierBadge } from '../../components/Common';
 import { formatPercent } from '../../utils';
+import axios from 'axios';
+
+const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 interface GameProp {
   id: string;
   sport: string;
-  sportIcon: string;
   gameDate: string;
   gameTime: string;
   teams: string;
@@ -46,7 +47,7 @@ interface GameProp {
 const GameProps: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  
+
   const [gameProps, setGameProps] = useState<GameProp[]>([]);
   const [loading, setLoading] = useState(true);
   const [sportFilter, setSportFilter] = useState('all');
@@ -61,23 +62,26 @@ const GameProps: React.FC = () => {
   const loadGameProps = async () => {
     setLoading(true);
     try {
-      setGameProps(generateDemoGameProps());
+      const { data } = await axios.get(`${BASE_URL}/public/game-props`, {
+        params: sportFilter !== 'all' ? { sport: sportFilter } : undefined
+      });
+      setGameProps(Array.isArray(data) ? data : []);
     } catch {
-      setGameProps(generateDemoGameProps());
+      setGameProps([]);
     }
     setLoading(false);
   };
 
   const categoryLabels = ['player_stats', 'scoring_props', 'game_events'];
-  
+
   const filteredGameProps = useMemo(() => {
     return gameProps.filter(p => {
       const sportMatch = sportFilter === 'all' || p.sport === sportFilter;
       const tierMatch = tierFilter === 'all' || p.tier === tierFilter;
       const propTypeMatch = propTypeFilter === 'all' || p.propType === propTypeFilter;
       const categoryMatch = p.category === categoryLabels[categoryTab];
-      const statusMatch = statusTab === 0 || 
-        (statusTab === 1 && p.status === 'pending') || 
+      const statusMatch = statusTab === 0 ||
+        (statusTab === 1 && p.status === 'pending') ||
         (statusTab === 2 && p.status !== 'pending');
       return sportMatch && tierMatch && propTypeMatch && categoryMatch && statusMatch;
     });
@@ -92,14 +96,14 @@ const GameProps: React.FC = () => {
   const stats = useMemo(() => {
     const filtered = gameProps.filter(p => p.category === categoryLabels[categoryTab]);
     const graded = filtered.filter(p => p.status !== 'pending');
-    const wins = graded.filter(p => p.status === 'won').length;
+    const wins = graded.filter(p => p.status === 'won' || p.status === 'win' as any).length;
     const winRate = graded.length > 0 ? (wins / graded.length) * 100 : 0;
     const units = graded.reduce((sum, p) => {
-      if (p.status === 'won') return sum + 1;
-      if (p.status === 'lost') return sum - 1.1;
+      if (p.status === 'won' || p.status === 'win' as any) return sum + 1;
+      if (p.status === 'lost' || p.status === 'loss' as any) return sum - 1.1;
       return sum;
     }, 0);
-    
+
     return {
       total: filtered.length,
       pending: filtered.filter(p => p.status === 'pending').length,
@@ -123,34 +127,34 @@ const GameProps: React.FC = () => {
     };
     const colors = colorMap[color] || colorMap['blue'];
     return (
-      <Chip 
-        label={label} 
-        size="small" 
-        sx={{ 
-          bgcolor: colors.bg, 
-          color: colors.text, 
-          fontSize: 10, 
+      <Chip
+        label={label}
+        size="small"
+        sx={{
+          bgcolor: colors.bg,
+          color: colors.text,
+          fontSize: 10,
           fontWeight: 600,
           height: 22,
           minWidth: 55,
           '& .MuiChip-label': { px: 1 }
-        }} 
+        }}
       />
     );
   };
 
   const getPickChip = (pick: 'OVER' | 'UNDER') => (
-    <Chip 
-      label={pick} 
-      size="small" 
-      sx={{ 
+    <Chip
+      label={pick}
+      size="small"
+      sx={{
         bgcolor: pick === 'OVER' ? '#22c55e' : '#f97316',
         color: 'white',
         fontSize: 10,
         fontWeight: 700,
         height: 22,
         minWidth: 50,
-      }} 
+      }}
     />
   );
 
@@ -163,11 +167,11 @@ const GameProps: React.FC = () => {
     };
     const color = colors[tier] || colors['D'];
     return (
-      <Box sx={{ 
-        width: 24, 
-        height: 24, 
-        borderRadius: '50%', 
-        bgcolor: color.bg, 
+      <Box sx={{
+        width: 24,
+        height: 24,
+        borderRadius: '50%',
+        bgcolor: color.bg,
         color: color.text,
         display: 'flex',
         alignItems: 'center',
@@ -182,8 +186,8 @@ const GameProps: React.FC = () => {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'won': return <CheckCircle sx={{ color: '#22c55e', fontSize: 18 }} />;
-      case 'lost': return <Cancel sx={{ color: '#ef4444', fontSize: 18 }} />;
+      case 'won': case 'win': return <CheckCircle sx={{ color: '#22c55e', fontSize: 18 }} />;
+      case 'lost': case 'loss': return <Cancel sx={{ color: '#ef4444', fontSize: 18 }} />;
       case 'push': return <Schedule sx={{ color: '#eab308', fontSize: 18 }} />;
       default: return <AccessTime sx={{ color: '#6b7280', fontSize: 18 }} />;
     }
@@ -200,15 +204,6 @@ const GameProps: React.FC = () => {
   };
 
   const hdr = { fontSize: 11, fontWeight: 600, color: 'text.secondary', py: 1.5, borderBottom: 2, borderColor: 'divider' };
-
-  if (loading) {
-    return (
-      <Box sx={{ p: 3 }}>
-        <LinearProgress />
-        <Typography sx={{ mt: 2, textAlign: 'center' }}>Loading game props...</Typography>
-      </Box>
-    );
-  }
 
   return (
     <Box>
@@ -227,6 +222,7 @@ const GameProps: React.FC = () => {
       <Alert severity="info" sx={{ mb: 3 }} icon={<FlashOn />}>
         <Typography variant="body2">
           <strong>Game Props Predictions:</strong> Player stat props (passing yards, rushing, receiving, rebounds, assists), scoring props (anytime TD, first TD scorer), and game event props (overtime, safety, first to score).
+          {' '}Tier A (58%+) = Strong Edge · Tier B (55-58%) = Clear +EV · Tier C (52-55%) = Modest Edge · Tier D (&lt;52%) = Track Only
         </Typography>
       </Alert>
 
@@ -236,9 +232,9 @@ const GameProps: React.FC = () => {
           { label: 'Total Props', value: stats.total, color: 'text.primary' },
           { label: 'Pending', value: stats.pending, color: 'primary.main' },
           { label: 'Tier A Picks', value: stats.tierA, color: 'success.main' },
-          { label: 'Avg Edge', value: `+${stats.avgEdge.toFixed(1)}%`, color: 'success.main' },
-          { label: 'Win Rate', value: `${stats.winRate.toFixed(1)}%`, color: 'text.primary' },
-          { label: 'Units +/-', value: stats.units >= 0 ? `+${stats.units.toFixed(1)}u` : `${stats.units.toFixed(1)}u`, color: stats.units >= 0 ? 'success.main' : 'error.main' },
+          { label: 'Avg Edge', value: stats.total > 0 ? `+${stats.avgEdge.toFixed(1)}%` : '-', color: 'success.main' },
+          { label: 'Win Rate', value: stats.total > 0 ? `${stats.winRate.toFixed(1)}%` : '-', color: 'text.primary' },
+          { label: 'Units +/-', value: stats.total > 0 ? (stats.units >= 0 ? `+${stats.units.toFixed(1)}u` : `${stats.units.toFixed(1)}u`) : '-', color: stats.units >= 0 ? 'success.main' : 'error.main' },
         ].map((stat) => (
           <Grid item xs={6} sm={4} md={2} key={stat.label}>
             <Card sx={{ textAlign: 'center', py: 2, bgcolor: isDark ? 'grey.900' : 'grey.50' }}>
@@ -252,20 +248,20 @@ const GameProps: React.FC = () => {
       {/* Category Tabs */}
       <Card sx={{ mb: 2 }}>
         <Tabs value={categoryTab} onChange={(_, v) => setCategoryTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tab 
-            icon={<Person sx={{ fontSize: 18 }} />} 
-            iconPosition="start" 
-            label={<>PLAYER STATS <Chip label={categoryCounts.player_stats} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>} 
+          <Tab
+            icon={<Person sx={{ fontSize: 18 }} />}
+            iconPosition="start"
+            label={<>PLAYER STATS <Chip label={categoryCounts.player_stats} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>}
           />
-          <Tab 
-            icon={<Casino sx={{ fontSize: 18 }} />} 
-            iconPosition="start" 
-            label={<>SCORING PROPS <Chip label={categoryCounts.scoring_props} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>} 
+          <Tab
+            icon={<Casino sx={{ fontSize: 18 }} />}
+            iconPosition="start"
+            label={<>SCORING PROPS <Chip label={categoryCounts.scoring_props} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>}
           />
-          <Tab 
-            icon={<FlashOn sx={{ fontSize: 18 }} />} 
-            iconPosition="start" 
-            label={<>GAME EVENTS <Chip label={categoryCounts.game_events} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>} 
+          <Tab
+            icon={<FlashOn sx={{ fontSize: 18 }} />}
+            iconPosition="start"
+            label={<>GAME EVENTS <Chip label={categoryCounts.game_events} size="small" sx={{ ml: 1, height: 20, fontSize: 11 }} /></>}
           />
         </Tabs>
       </Card>
@@ -275,10 +271,9 @@ const GameProps: React.FC = () => {
         <CardContent sx={{ p: 2 }}>
           {/* Filters Row */}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, mb: 2 }}>
-            {/* Status Tabs */}
             <Box sx={{ display: 'flex', gap: 1 }}>
               {['ALL', 'PENDING', 'GRADED'].map((label, idx) => (
-                <Chip 
+                <Chip
                   key={label}
                   label={idx === 0 ? `ALL (${filteredGameProps.length})` : label}
                   onClick={() => setStatusTab(idx)}
@@ -290,7 +285,6 @@ const GameProps: React.FC = () => {
               ))}
             </Box>
 
-            {/* Dropdowns */}
             <FormControl size="small" sx={{ minWidth: 120 }}>
               <InputLabel sx={{ fontSize: 12 }}>Sport</InputLabel>
               <Select value={sportFilter} onChange={(e) => setSportFilter(e.target.value)} label="Sport" sx={{ fontSize: 12 }}>
@@ -299,6 +293,8 @@ const GameProps: React.FC = () => {
                 <MenuItem value="NBA">NBA</MenuItem>
                 <MenuItem value="NHL">NHL</MenuItem>
                 <MenuItem value="MLB">MLB</MenuItem>
+                <MenuItem value="NCAAB">NCAAB</MenuItem>
+                <MenuItem value="WNBA">WNBA</MenuItem>
               </Select>
             </FormControl>
 
@@ -306,9 +302,10 @@ const GameProps: React.FC = () => {
               <InputLabel sx={{ fontSize: 12 }}>Tier</InputLabel>
               <Select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)} label="Tier" sx={{ fontSize: 12 }}>
                 <MenuItem value="all">All</MenuItem>
-                <MenuItem value="A">A</MenuItem>
-                <MenuItem value="B">B</MenuItem>
-                <MenuItem value="C">C</MenuItem>
+                <MenuItem value="A">A (58%+)</MenuItem>
+                <MenuItem value="B">B (55-58%)</MenuItem>
+                <MenuItem value="C">C (52-55%)</MenuItem>
+                <MenuItem value="D">D (&lt;52%)</MenuItem>
               </Select>
             </FormControl>
 
@@ -322,6 +319,8 @@ const GameProps: React.FC = () => {
                 <MenuItem value="points">Points</MenuItem>
                 <MenuItem value="rebounds">Rebounds</MenuItem>
                 <MenuItem value="assists">Assists</MenuItem>
+                <MenuItem value="threes">3PM</MenuItem>
+                <MenuItem value="sog">SOG</MenuItem>
               </Select>
             </FormControl>
 
@@ -331,6 +330,7 @@ const GameProps: React.FC = () => {
         </CardContent>
 
         {/* Table */}
+        {loading && <LinearProgress />}
         <TableContainer>
           <Table size="small" sx={{ minWidth: 1400 }}>
             <TableHead>
@@ -354,86 +354,63 @@ const GameProps: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
+              {!loading && filteredGameProps.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={16} sx={{ textAlign: 'center', py: 8 }}>
+                    <SportsScore sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+                    <Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600, mb: 0.5 }}>No Game Props Yet</Typography>
+                    <Typography color="text.disabled" sx={{ fontSize: 12 }}>
+                      Game props predictions will appear here once the pipeline is configured with player stats and game event data.
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
               {filteredGameProps.map((prop) => (
-                <TableRow 
-                  key={prop.id} 
-                  sx={{ 
+                <TableRow
+                  key={prop.id}
+                  sx={{
                     '&:hover': { bgcolor: isDark ? 'grey.800' : 'grey.50' },
-                    '& td': { py: 1.5, fontSize: 12, borderBottom: 1, borderColor: 'divider' } 
+                    '& td': { py: 1.5, fontSize: 12, borderBottom: 1, borderColor: 'divider' }
                   }}
                 >
-                  {/* Sport */}
                   <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography sx={{ fontSize: 16 }}>{prop.sportIcon}</Typography>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>{prop.sport}</Typography>
-                    </Box>
+                    <Typography sx={{ fontWeight: 600, fontSize: 12 }}>{prop.sport}</Typography>
                   </TableCell>
-                  
-                  {/* Game */}
                   <TableCell>
                     <Typography sx={{ fontSize: 11, fontWeight: 500 }}>{prop.gameDate} {prop.gameTime}</Typography>
                     <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{prop.teams}</Typography>
                   </TableCell>
-                  
-                  {/* Player */}
                   <TableCell>
                     <Typography sx={{ fontWeight: 600, fontSize: 12 }}>{prop.player}</Typography>
                     <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>{prop.playerPosition} • {prop.playerTeamSide}</Typography>
                   </TableCell>
-                  
-                  {/* Prop */}
                   <TableCell>{getPropChip(prop.propLabel, prop.propColor)}</TableCell>
-                  
-                  {/* Line */}
                   <TableCell align="center">
                     <Typography sx={{ fontWeight: 600, fontSize: 13 }}>{prop.line}</Typography>
                   </TableCell>
-                  
-                  {/* O/U */}
                   <TableCell align="center">
                     <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>O {prop.oddsOver}</Typography>
                     <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>U {prop.oddsUnder}</Typography>
                   </TableCell>
-                  
-                  {/* Pick */}
                   <TableCell align="center">{getPickChip(prop.pick)}</TableCell>
-                  
-                  {/* Proj */}
                   <TableCell align="center">
                     <Typography sx={{ fontWeight: 600, fontSize: 12, color: 'primary.main' }}>{prop.projection}</Typography>
                   </TableCell>
-                  
-                  {/* Prob */}
                   <TableCell align="center">
                     <Typography sx={{ fontSize: 12 }}>{(prop.probability * 100).toFixed(1)}%</Typography>
                   </TableCell>
-                  
-                  {/* Edge */}
                   <TableCell align="center">
                     <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'success.main' }}>+{prop.edge.toFixed(1)}%</Typography>
                   </TableCell>
-                  
-                  {/* Tier */}
                   <TableCell align="center">{getTierBadge(prop.tier)}</TableCell>
-                  
-                  {/* Avg */}
                   <TableCell align="center">
                     <Typography sx={{ fontSize: 12 }}>{prop.average}</Typography>
                   </TableCell>
-                  
-                  {/* LS */}
                   <TableCell align="center">{getLSTrend(prop.lastSeason, prop.lastSeasonTrend)}</TableCell>
-                  
-                  {/* Match */}
                   <TableCell align="center">{getTierBadge(prop.matchTier)}</TableCell>
-                  
-                  {/* W/L */}
                   <TableCell align="center">{getStatusIcon(prop.status)}</TableCell>
-                  
-                  {/* Act */}
                   <TableCell align="center">
-                    {prop.actual !== undefined ? (
+                    {prop.actual != null ? (
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>{prop.actual}</Typography>
                     ) : (
                       <IconButton size="small" onClick={() => setDetailDialog({ open: true, prop })}>
@@ -483,50 +460,6 @@ const GameProps: React.FC = () => {
       </Dialog>
     </Box>
   );
-};
-
-const generateDemoGameProps = (): GameProp[] => {
-  return [
-    // Player Stats - NFL
-    { id: 'ps1', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Patrick Mahomes', playerPosition: 'QB', playerTeamSide: 'AWAY', propType: 'pass_yds', propLabel: 'Pass Yds', propColor: 'blue', line: 285.5, oddsOver: '-115', oddsUnder: '-105', pick: 'OVER', projection: 302.5, probability: 0.65, edge: 4.2, tier: 'B', average: 292.4, lastSeason: '305.8', lastSeasonTrend: 'flat', matchTier: 'B', status: 'pending', category: 'player_stats' },
-    { id: 'ps2', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'BUF vs KC', player: 'Josh Allen', playerPosition: 'QB', playerTeamSide: 'HOME', propType: 'rush_yds', propLabel: 'Rush Yds', propColor: 'green', line: 38.5, oddsOver: '-110', oddsUnder: '-110', pick: 'OVER', projection: 45.2, probability: 0.62, edge: 3.5, tier: 'A', average: 42.6, lastSeason: '48.2', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'player_stats' },
-    { id: 'ps3', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Travis Kelce', playerPosition: 'TE', playerTeamSide: 'AWAY', propType: 'rec_yds', propLabel: 'Rec Yds', propColor: 'orange', line: 65.5, oddsOver: '-108', oddsUnder: '-112', pick: 'UNDER', projection: 58.4, probability: 0.58, edge: 2.1, tier: 'B', average: 62.8, lastSeason: '55.2', lastSeasonTrend: 'down', matchTier: 'C', status: 'pending', category: 'player_stats' },
-    { id: 'ps4', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'BUF vs KC', player: 'Stefon Diggs', playerPosition: 'WR', playerTeamSide: 'HOME', propType: 'rec', propLabel: 'Rec', propColor: 'red', line: 6.5, oddsOver: '-120', oddsUnder: '+100', pick: 'OVER', projection: 7.8, probability: 0.64, edge: 3.8, tier: 'A', average: 7.2, lastSeason: '8.4', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'player_stats' },
-    
-    // Player Stats - NBA
-    { id: 'ps5', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '7:30 PM', teams: 'LAL vs BOS', player: 'LeBron James', playerPosition: 'SF', playerTeamSide: 'HOME', propType: 'points', propLabel: 'Points', propColor: 'purple', line: 26.5, oddsOver: '-112', oddsUnder: '-108', pick: 'OVER', projection: 28.4, probability: 0.66, edge: 4.5, tier: 'A', average: 25.8, lastSeason: '28.2', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'player_stats' },
-    { id: 'ps6', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '7:30 PM', teams: 'LAL vs BOS', player: 'Anthony Davis', playerPosition: 'PF', playerTeamSide: 'HOME', propType: 'rebounds', propLabel: 'Reb', propColor: 'teal', line: 11.5, oddsOver: '-105', oddsUnder: '-115', pick: 'OVER', projection: 12.8, probability: 0.61, edge: 2.8, tier: 'B', average: 12.2, lastSeason: '13.4', lastSeasonTrend: 'up', matchTier: 'B', status: 'pending', category: 'player_stats' },
-    { id: 'ps7', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '10:00 PM', teams: 'GSW vs PHX', player: 'Stephen Curry', playerPosition: 'PG', playerTeamSide: 'AWAY', propType: 'threes', propLabel: '3PM', propColor: 'yellow', line: 4.5, oddsOver: '-105', oddsUnder: '-115', pick: 'OVER', projection: 5.2, probability: 0.63, edge: 3.2, tier: 'A', average: 4.8, lastSeason: '5.4', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'player_stats' },
-    { id: 'ps8', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '7:30 PM', teams: 'BOS vs LAL', player: 'Jayson Tatum', playerPosition: 'SF', playerTeamSide: 'AWAY', propType: 'assists', propLabel: 'Ast', propColor: 'pink', line: 4.5, oddsOver: '-108', oddsUnder: '-112', pick: 'UNDER', projection: 3.8, probability: 0.58, edge: 1.9, tier: 'C', average: 4.6, lastSeason: '3.6', lastSeasonTrend: 'down', matchTier: 'C', status: 'pending', category: 'player_stats' },
-    
-    // Player Stats - NHL
-    { id: 'ps9', sport: 'NHL', sportIcon: '🏒', gameDate: '1/20', gameTime: '7:00 PM', teams: 'EDM vs COL', player: 'Connor McDavid', playerPosition: 'C', playerTeamSide: 'HOME', propType: 'points', propLabel: 'Points', propColor: 'purple', line: 1.5, oddsOver: '-130', oddsUnder: '+110', pick: 'OVER', projection: 2.1, probability: 0.68, edge: 5.2, tier: 'A', average: 1.7, lastSeason: '2.2', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'player_stats' },
-    { id: 'ps10', sport: 'NHL', sportIcon: '🏒', gameDate: '1/20', gameTime: '7:00 PM', teams: 'COL vs EDM', player: 'Nathan MacKinnon', playerPosition: 'C', playerTeamSide: 'AWAY', propType: 'sog', propLabel: 'SOG', propColor: 'blue', line: 4.5, oddsOver: '-115', oddsUnder: '-105', pick: 'OVER', projection: 5.4, probability: 0.62, edge: 3.1, tier: 'B', average: 4.8, lastSeason: '5.2', lastSeasonTrend: 'up', matchTier: 'B', status: 'pending', category: 'player_stats' },
-    
-    // Player Stats - Graded
-    { id: 'ps11', sport: 'NBA', sportIcon: '🏀', gameDate: '1/18', gameTime: '8:00 PM', teams: 'MIL vs MIA', player: 'Giannis Antetokounmpo', playerPosition: 'PF', playerTeamSide: 'HOME', propType: 'pra', propLabel: 'PRA', propColor: 'teal', line: 55.5, oddsOver: '-110', oddsUnder: '-110', pick: 'OVER', projection: 58.4, probability: 0.64, edge: 3.5, tier: 'A', average: 56.8, lastSeason: '59.2', lastSeasonTrend: 'flat', matchTier: 'A', status: 'won', actual: 62, category: 'player_stats' },
-    { id: 'ps12', sport: 'NFL', sportIcon: '🏈', gameDate: '1/14', gameTime: '4:30 PM', teams: 'DAL vs GB', player: 'Lamar Jackson', playerPosition: 'QB', playerTeamSide: 'HOME', propType: 'pass_yds', propLabel: 'Pass Yds', propColor: 'blue', line: 245.5, oddsOver: '-110', oddsUnder: '-110', pick: 'OVER', projection: 268.2, probability: 0.61, edge: 2.8, tier: 'B', average: 252.4, lastSeason: '262.8', lastSeasonTrend: 'up', matchTier: 'B', status: 'lost', actual: 218, category: 'player_stats' },
-    
-    // Scoring Props
-    { id: 'sp1', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Isiah Pacheco', playerPosition: 'RB', playerTeamSide: 'AWAY', propType: 'atd', propLabel: 'Any TD', propColor: 'green', line: 0.5, oddsOver: '-125', oddsUnder: '+105', pick: 'OVER', projection: 0.8, probability: 0.58, edge: 2.4, tier: 'B', average: 0.6, lastSeason: '0.7', lastSeasonTrend: 'up', matchTier: 'B', status: 'pending', category: 'scoring_props' },
-    { id: 'sp2', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Travis Kelce', playerPosition: 'TE', playerTeamSide: 'AWAY', propType: 'ftd', propLabel: 'First TD', propColor: 'red', line: 0.5, oddsOver: '+850', oddsUnder: '-1200', pick: 'OVER', projection: 0.15, probability: 0.12, edge: 3.8, tier: 'A', average: 0.08, lastSeason: '0.1', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'scoring_props' },
-    { id: 'sp3', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '7:30 PM', teams: 'LAL vs BOS', player: 'LeBron James', playerPosition: 'SF', playerTeamSide: 'HOME', propType: 'dd', propLabel: 'Double-Dbl', propColor: 'purple', line: 0.5, oddsOver: '-180', oddsUnder: '+150', pick: 'OVER', projection: 0.75, probability: 0.72, edge: 4.1, tier: 'A', average: 0.68, lastSeason: '0.72', lastSeasonTrend: 'up', matchTier: 'A', status: 'pending', category: 'scoring_props' },
-    { id: 'sp4', sport: 'NHL', sportIcon: '🏒', gameDate: '1/20', gameTime: '7:00 PM', teams: 'EDM vs COL', player: 'Connor McDavid', playerPosition: 'C', playerTeamSide: 'HOME', propType: 'goal', propLabel: 'Goal', propColor: 'orange', line: 0.5, oddsOver: '-105', oddsUnder: '-115', pick: 'OVER', projection: 0.62, probability: 0.58, edge: 2.9, tier: 'B', average: 0.52, lastSeason: '0.58', lastSeasonTrend: 'up', matchTier: 'B', status: 'pending', category: 'scoring_props' },
-    { id: 'sp5', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'BUF vs KC', player: 'James Cook', playerPosition: 'RB', playerTeamSide: 'HOME', propType: 'atd', propLabel: 'Any TD', propColor: 'green', line: 0.5, oddsOver: '-140', oddsUnder: '+115', pick: 'OVER', projection: 0.72, probability: 0.62, edge: 3.1, tier: 'B', average: 0.58, lastSeason: '0.65', lastSeasonTrend: 'up', matchTier: 'B', status: 'pending', category: 'scoring_props' },
-    { id: 'sp6', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '10:00 PM', teams: 'GSW vs PHX', player: 'Kevin Durant', playerPosition: 'SF', playerTeamSide: 'HOME', propType: 'dd', propLabel: 'Double-Dbl', propColor: 'purple', line: 0.5, oddsOver: '+125', oddsUnder: '-150', pick: 'UNDER', projection: 0.38, probability: 0.55, edge: 1.8, tier: 'C', average: 0.42, lastSeason: '0.35', lastSeasonTrend: 'down', matchTier: 'C', status: 'pending', category: 'scoring_props' },
-    { id: 'sp7', sport: 'NFL', sportIcon: '🏈', gameDate: '1/14', gameTime: '1:00 PM', teams: 'PHI vs TB', player: 'Jalen Hurts', playerPosition: 'QB', playerTeamSide: 'AWAY', propType: 'atd', propLabel: 'Any TD', propColor: 'green', line: 0.5, oddsOver: '-165', oddsUnder: '+140', pick: 'OVER', projection: 0.82, probability: 0.68, edge: 4.2, tier: 'A', average: 0.72, lastSeason: '0.78', lastSeasonTrend: 'up', matchTier: 'A', status: 'won', actual: 1, category: 'scoring_props' },
-    { id: 'sp8', sport: 'NBA', sportIcon: '🏀', gameDate: '1/17', gameTime: '8:00 PM', teams: 'DEN vs MIN', player: 'Nikola Jokic', playerPosition: 'C', playerTeamSide: 'AWAY', propType: 'td', propLabel: 'Triple-Dbl', propColor: 'teal', line: 0.5, oddsOver: '+220', oddsUnder: '-280', pick: 'OVER', projection: 0.35, probability: 0.32, edge: 5.8, tier: 'A', average: 0.28, lastSeason: '0.32', lastSeasonTrend: 'up', matchTier: 'A', status: 'won', actual: 1, category: 'scoring_props' },
-    
-    // Game Events
-    { id: 'ge1', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Game', playerPosition: '-', playerTeamSide: '-', propType: 'ot', propLabel: 'Overtime', propColor: 'pink', line: 0.5, oddsOver: '+650', oddsUnder: '-950', pick: 'UNDER', projection: 0.08, probability: 0.92, edge: 2.1, tier: 'C', average: 0.05, lastSeason: '0.06', lastSeasonTrend: 'flat', matchTier: 'C', status: 'pending', category: 'game_events' },
-    { id: 'ge2', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Game', playerPosition: '-', playerTeamSide: '-', propType: 'safety', propLabel: 'Safety', propColor: 'red', line: 0.5, oddsOver: '+1200', oddsUnder: '-2000', pick: 'UNDER', projection: 0.04, probability: 0.96, edge: 1.5, tier: 'D', average: 0.02, lastSeason: '0.03', lastSeasonTrend: 'flat', matchTier: 'D', status: 'pending', category: 'game_events' },
-    { id: 'ge3', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'KC', playerPosition: '-', playerTeamSide: 'AWAY', propType: 'fts', propLabel: 'First Score', propColor: 'green', line: 0.5, oddsOver: '-105', oddsUnder: '-115', pick: 'OVER', projection: 0.52, probability: 0.54, edge: 1.8, tier: 'C', average: 0.48, lastSeason: '0.51', lastSeasonTrend: 'up', matchTier: 'C', status: 'pending', category: 'game_events' },
-    { id: 'ge4', sport: 'NBA', sportIcon: '🏀', gameDate: '1/20', gameTime: '7:30 PM', teams: 'LAL vs BOS', player: 'BOS', playerPosition: '-', playerTeamSide: 'AWAY', propType: 'fts', propLabel: 'First Score', propColor: 'green', line: 0.5, oddsOver: '-125', oddsUnder: '+105', pick: 'OVER', projection: 0.58, probability: 0.56, edge: 2.2, tier: 'B', average: 0.54, lastSeason: '0.56', lastSeasonTrend: 'flat', matchTier: 'B', status: 'pending', category: 'game_events' },
-    { id: 'ge5', sport: 'NHL', sportIcon: '🏒', gameDate: '1/20', gameTime: '7:00 PM', teams: 'EDM vs COL', player: 'Game', playerPosition: '-', playerTeamSide: '-', propType: 'ot', propLabel: 'Overtime', propColor: 'pink', line: 0.5, oddsOver: '+280', oddsUnder: '-360', pick: 'UNDER', projection: 0.22, probability: 0.78, edge: 2.8, tier: 'B', average: 0.25, lastSeason: '0.24', lastSeasonTrend: 'flat', matchTier: 'B', status: 'pending', category: 'game_events' },
-    { id: 'ge6', sport: 'NFL', sportIcon: '🏈', gameDate: '1/19', gameTime: '3:00 PM', teams: 'KC vs BUF', player: 'Game', playerPosition: '-', playerTeamSide: '-', propType: 'fgm', propLabel: '50+ FG', propColor: 'blue', line: 0.5, oddsOver: '+175', oddsUnder: '-220', pick: 'UNDER', projection: 0.32, probability: 0.68, edge: 2.4, tier: 'B', average: 0.28, lastSeason: '0.30', lastSeasonTrend: 'flat', matchTier: 'B', status: 'pending', category: 'game_events' },
-    { id: 'ge7', sport: 'NFL', sportIcon: '🏈', gameDate: '1/14', gameTime: '4:30 PM', teams: 'DAL vs GB', player: 'Game', playerPosition: '-', playerTeamSide: '-', propType: 'ot', propLabel: 'Overtime', propColor: 'pink', line: 0.5, oddsOver: '+600', oddsUnder: '-900', pick: 'UNDER', projection: 0.10, probability: 0.90, edge: 1.8, tier: 'C', average: 0.08, lastSeason: '0.09', lastSeasonTrend: 'flat', matchTier: 'C', status: 'won', actual: 0, category: 'game_events' },
-    { id: 'ge8', sport: 'NBA', sportIcon: '🏀', gameDate: '1/17', gameTime: '8:00 PM', teams: 'DEN vs MIN', player: 'DEN', playerPosition: '-', playerTeamSide: 'AWAY', propType: 'fts', propLabel: 'First Score', propColor: 'green', line: 0.5, oddsOver: '+105', oddsUnder: '-125', pick: 'OVER', projection: 0.48, probability: 0.52, edge: 3.2, tier: 'B', average: 0.46, lastSeason: '0.48', lastSeasonTrend: 'flat', matchTier: 'B', status: 'lost', actual: 0, category: 'game_events' },
-  ];
 };
 
 export default GameProps;

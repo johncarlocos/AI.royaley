@@ -1,16 +1,17 @@
 // src/pages/Settings/Settings.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Card, CardContent, Typography, Grid, Tabs, Tab, TextField, Button,
   Switch, FormControlLabel, Select, MenuItem, FormControl, InputLabel,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Chip, LinearProgress, Alert, Divider, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, List, ListItem, ListItemText, Paper,
-  Radio, RadioGroup
+  Radio, RadioGroup, Tooltip
 } from '@mui/material';
 import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer, Memory, Speed, Tune, CalendarMonth, Timeline, Science, Hub } from '@mui/icons-material';
 import { useSettingsStore, useBettingStore, useMLConfigStore } from '../../store';
 import { TIMEZONES } from '../../types';
+import { api } from '../../api/client';
 
 interface TabPanelProps { children?: React.ReactNode; index: number; value: number; }
 const TabPanel = ({ children, value, index }: TabPanelProps) => <Box hidden={value !== index} sx={{ py: 2, px: 4 }}>{value === index && children}</Box>;
@@ -25,6 +26,22 @@ const Settings: React.FC = () => {
   const ml = useMLConfigStore();
   const [telegramToken, setTelegramToken] = useState('');
   const [showToken, setShowToken] = useState(false);
+  const [dcData, setDcData] = useState<any>(null);
+  const [dcLoading, setDcLoading] = useState(false);
+
+  const loadDataCollectors = useCallback(async () => {
+    setDcLoading(true);
+    try {
+      const resp = await api.getDataCollectors();
+      setDcData(resp);
+    } catch { /* silent */ }
+    setDcLoading(false);
+  }, []);
+
+  // Load data collectors when Data Pipeline tab is selected
+  useEffect(() => {
+    if (tab === 4 && !dcData) loadDataCollectors();
+  }, [tab, dcData, loadDataCollectors]);
   
   // Multiple Telegram/Email accounts
   const [telegramAccounts, setTelegramAccounts] = useState<TelegramAccount[]>([
@@ -723,10 +740,57 @@ const Settings: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tab} index={4}>
-          {/* ── Section 1: Data Completeness per Sport ── */}
+          {dcLoading && !dcData && <LinearProgress sx={{ mb: 2, height: 3 }} />}
+
+          {/* ── Section 1: Summary Cards (from API) ── */}
+          {dcData && (
+            <Box sx={{ mb: 3 }}>
+              <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Storage sx={{ fontSize: 18, color: 'primary.main' }} />
+                  <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Pipeline Overview</Typography>
+                </Box>
+                <Button variant="outlined" size="small" startIcon={<Refresh sx={{ fontSize: 14 }} />}
+                  onClick={loadDataCollectors} sx={{ fontSize: 12 }}>Refresh</Button>
+              </Box>
+              <Grid container spacing={1.5} mb={2}>
+                {[
+                  { label: 'Total Collectors', value: dcData.summary.total, color: 'text.primary' },
+                  { label: 'Active', value: dcData.summary.status_counts.active, color: 'success.main' },
+                  { label: 'Ready', value: dcData.summary.status_counts.ready, color: 'info.main' },
+                  { label: 'Free / Paid', value: `${dcData.summary.free_count}/${dcData.summary.paid_count}`, color: 'text.primary' },
+                  { label: 'Sports', value: dcData.summary.sports_count, color: 'text.primary' },
+                  { label: 'Monthly Cost', value: dcData.summary.active_monthly_cost, color: 'error.main' },
+                ].map((s, idx) => (
+                  <Grid item xs={4} sm={2} key={idx}>
+                    <Paper variant="outlined" sx={{ textAlign: 'center', py: 1.5, px: 1 }}>
+                      <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{s.label}</Typography>
+                      <Typography sx={{ fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</Typography>
+                    </Paper>
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* DB Record Counts */}
+              <Grid container spacing={1.5}>
+                {Object.entries(dcData.db_counts).map(([label, count], idx) => (
+                  <Grid item xs={4} sm={2} md={1.5} key={idx}>
+                    <Paper variant="outlined" sx={{ textAlign: 'center', py: 1, px: 0.5 }}>
+                      <Typography sx={{ fontSize: 10, color: 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
+                      <Typography sx={{ fontSize: 15, fontWeight: 700 }}>{((count as number) || 0).toLocaleString()}</Typography>
+                    </Paper>
+                  </Grid>
+                ))}
+              </Grid>
+            </Box>
+          )}
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* ── Section 2: Data Completeness per Sport ── */}
           <Box sx={{ mb: 3 }}>
             <Box display="flex" alignItems="center" gap={1} mb={1.5}>
-              <Storage sx={{ fontSize: 18, color: 'primary.main' }} />
+              <TrendingUp sx={{ fontSize: 18, color: 'primary.main' }} />
               <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Data Completeness by Sport</Typography>
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
@@ -736,13 +800,13 @@ const Settings: React.FC = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Sport</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Completeness</TableCell>
-                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Complete</TableCell>
-                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Missing</TableCell>
-                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Bad Data</TableCell>
-                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Gaps</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Sport</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Completeness</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Complete</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Missing</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Bad Data</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Gaps</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Status</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -758,8 +822,8 @@ const Settings: React.FC = () => {
                     { sport: 'ATP', complete: 95.8, missing: 3.0, bad: 1.2, gaps: 0, status: 'excellent' },
                     { sport: 'WTA', complete: 94.5, missing: 4.0, bad: 1.5, gaps: 1, status: 'good' },
                   ].map((row) => (
-                    <TableRow key={row.sport} sx={{ '& td': { fontSize: 13 } }}>
-                      <TableCell><Chip label={row.sport} size="small" sx={{ fontSize: 12, height: 22, fontWeight: 500 }} /></TableCell>
+                    <TableRow key={row.sport} sx={{ '& td': { fontSize: 12, py: 0.6 } }}>
+                      <TableCell><Chip label={row.sport} size="small" sx={{ fontSize: 11, height: 22, fontWeight: 500 }} /></TableCell>
                       <TableCell>
                         <Box display="flex" alignItems="center" gap={1}>
                           <LinearProgress variant="determinate" value={row.complete}
@@ -775,112 +839,103 @@ const Settings: React.FC = () => {
                       <TableCell>
                         <Chip label={row.status} size="small"
                           color={row.status === 'excellent' ? 'success' : row.status === 'good' ? 'primary' : 'warning'}
-                          sx={{ fontSize: 12, height: 22 }} />
+                          sx={{ fontSize: 11, height: 22 }} />
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
-            <Box mt={2} display="flex" gap={1}>
-              <Button variant="outlined" size="small" startIcon={<Refresh />} sx={{ fontSize: 13 }}>Re-fetch Missing Data</Button>
-              <Button variant="outlined" size="small" color="warning" sx={{ fontSize: 13 }}>View All Gaps</Button>
+            <Box mt={1.5} display="flex" gap={1}>
+              <Button variant="outlined" size="small" startIcon={<Refresh sx={{ fontSize: 14 }} />} sx={{ fontSize: 12 }}>Re-fetch Missing Data</Button>
+              <Button variant="outlined" size="small" color="warning" sx={{ fontSize: 12 }}>View All Gaps</Button>
             </Box>
           </Box>
 
           <Divider sx={{ my: 3 }} />
 
-          {/* ── Section 2: All 27 Data Collectors ── */}
+          {/* ── Section 3: All Data Collectors (from API) ── */}
           <Box>
             <Box display="flex" alignItems="center" gap={1} mb={0.5}>
               <Api sx={{ fontSize: 18, color: 'primary.main' }} />
               <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Data Collectors</Typography>
-              <Chip label="27 sources" size="small" sx={{ fontSize: 11, height: 20 }} />
+              {dcData && <Chip label={`${dcData.summary.total} sources`} size="small" sx={{ fontSize: 11, height: 20 }} />}
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
               All APIs, R data packages, and web scrapers powering the prediction pipeline.
             </Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>#</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Source</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Type</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Status</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Cost</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Data Provided</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Sports</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {[
-                    { id: 1,  name: 'ESPN',                type: 'api',     status: 'active', cost: 'Free',     data: 'Injuries, lineups, scores',           sports: 'NFL NBA MLB NHL NCAAF NCAAB WNBA' },
-                    { id: 2,  name: 'The Odds API',        type: 'api',     status: 'active', cost: '$119/mo',  data: 'Odds from 40+ books',                 sports: 'NFL NBA MLB NHL NCAAF NCAAB WNBA ATP WTA CFL' },
-                    { id: 3,  name: 'Pinnacle (RapidAPI)', type: 'api',     status: 'active', cost: '$10/mo',   data: 'Sharp lines, CLV benchmark',          sports: 'NFL NBA MLB NHL NCAAF NCAAB ATP WTA' },
-                    { id: 4,  name: 'Tennis Stats',        type: 'scraper', status: 'ready',  cost: 'Free',     data: 'Tennis match stats',                  sports: 'ATP WTA' },
-                    { id: 5,  name: 'OpenWeatherMap',      type: 'api',     status: 'active', cost: 'Free',     data: 'Weather for outdoor games',           sports: 'NFL MLB NCAAF CFL' },
-                    { id: 6,  name: 'TheSportsDB',         type: 'api',     status: 'active', cost: '$295/mo',  data: 'Games, scores, livescores, lineups',  sports: 'NFL NBA MLB NHL NCAAF NCAAB CFL' },
-                    { id: 7,  name: 'nflfastR',            type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, EPA, WPA, CPOE',                sports: 'NFL' },
-                    { id: 8,  name: 'cfbfastR',            type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, EPA, SP+, recruiting',           sports: 'NCAAF' },
-                    { id: 9,  name: 'baseballR (MLB API)', type: 'file',    status: 'active', cost: 'Free',     data: 'Statcast, FanGraphs, 85+ features',  sports: 'MLB' },
-                    { id: 10, name: 'hockeyR (NHL API)',   type: 'file',    status: 'active', cost: 'Free',     data: 'xG, Corsi, Fenwick, 75+ features',   sports: 'NHL' },
-                    { id: 11, name: 'wehoop (ESPN/WNBA)',  type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, box scores, player stats',       sports: 'WNBA' },
-                    { id: 12, name: 'hoopR (ESPN/NBA)',    type: 'file',    status: 'active', cost: 'Free',     data: 'Games, rosters, player/team stats',   sports: 'NBA NCAAB' },
-                    { id: 13, name: 'CFL (SportsDB)',      type: 'api',     status: 'active', cost: 'Free',     data: 'CFL games, rosters, stats',           sports: 'CFL' },
-                    { id: 14, name: 'Action Network',      type: 'scraper', status: 'active', cost: 'Free',     data: 'Public betting %, sharp money',       sports: 'NFL NBA MLB NHL NCAAF NCAAB' },
-                    { id: 15, name: 'NHL Official API',    type: 'api',     status: 'active', cost: 'Free',     data: 'EDGE stats: shot speed, skating',     sports: 'NHL' },
-                    { id: 16, name: 'Sportsipy',           type: 'scraper', status: 'ready',  cost: 'Free',     data: 'Sports-Reference scraper',            sports: 'MLB NBA NFL NHL NCAAF NCAAB' },
-                    { id: 17, name: 'Basketball Reference', type: 'scraper', status: 'active', cost: 'Free',    data: 'Box scores, injuries, advanced stats', sports: 'NBA' },
-                    { id: 18, name: 'College Football Data', type: 'api',   status: 'active', cost: 'Free',     data: 'SP+, recruiting, betting lines',      sports: 'NCAAF' },
-                    { id: 19, name: 'Matchstat Tennis',    type: 'api',     status: 'active', cost: '$49/mo',   data: 'Rankings, H2H, surface stats',        sports: 'ATP WTA' },
-                    { id: 20, name: 'RealGM / ESPN',       type: 'scraper', status: 'active', cost: 'Free',     data: 'Salary data, contracts, rosters',     sports: 'NBA' },
-                    { id: 21, name: 'NFL Next Gen Stats',  type: 'file',    status: 'active', cost: 'Free',     data: 'Player tracking, time-to-throw',      sports: 'NFL' },
-                    { id: 22, name: 'Kaggle Datasets',     type: 'file',    status: 'ready',  cost: 'Free',     data: 'Historical data for backtesting',     sports: 'Multi-sport' },
-                    { id: 23, name: 'Tennis Abstract',     type: 'file',    status: 'active', cost: 'Free',     data: 'Matches, H2H, surface splits',        sports: 'ATP WTA' },
-                    { id: 24, name: 'Polymarket',          type: 'api',     status: 'active', cost: 'Free',     data: 'Prediction market crowd wisdom',      sports: 'NFL NBA MLB' },
-                    { id: 25, name: 'Kalshi',              type: 'api',     status: 'active', cost: 'Free',     data: 'CFTC-regulated prediction markets',   sports: 'NFL NBA MLB' },
-                    { id: 26, name: 'BallDontLie',         type: 'api',     status: 'active', cost: '$299/mo',  data: '9 sports: games, stats, odds, players', sports: 'NBA NFL MLB NHL WNBA NCAAF NCAAB ATP WTA' },
-                    { id: 27, name: 'Weatherstack',        type: 'api',     status: 'active', cost: '$9.99/mo', data: 'Backup weather, historical to 2015',  sports: 'NFL MLB CFL' },
-                  ].map((c) => (
-                    <TableRow key={c.id} sx={{ '& td': { fontSize: 12, py: 0.6 } }}>
-                      <TableCell sx={{ color: 'text.secondary', width: 30 }}>{c.id}</TableCell>
-                      <TableCell><Typography variant="body2" fontWeight={500} sx={{ fontSize: 12 }}>{c.name}</Typography></TableCell>
-                      <TableCell>
-                        <Chip label={c.type} size="small"
-                          sx={{ fontSize: 10, height: 20, fontWeight: 600,
-                            bgcolor: c.type === 'api' ? 'rgba(33,150,243,0.12)' : c.type === 'file' ? 'rgba(156,39,176,0.12)' : 'rgba(255,152,0,0.12)',
-                            color: c.type === 'api' ? '#2196f3' : c.type === 'file' ? '#9c27b0' : '#ff9800',
-                          }} />
-                      </TableCell>
-                      <TableCell>
-                        <Chip label={c.status} size="small"
-                          color={c.status === 'active' ? 'success' : 'default'}
-                          variant={c.status === 'ready' ? 'outlined' : 'filled'}
-                          sx={{ fontSize: 10, height: 20 }} />
-                      </TableCell>
-                      <TableCell sx={{ color: c.cost === 'Free' ? 'success.main' : 'warning.main', fontWeight: c.cost !== 'Free' ? 600 : 400 }}>
-                        {c.cost}
-                      </TableCell>
-                      <TableCell sx={{ color: 'text.secondary', maxWidth: 200 }}>{c.data}</TableCell>
-                      <TableCell>
-                        <Box display="flex" gap={0.3} flexWrap="wrap">
-                          {c.sports.split(' ').map(s => (
-                            <Chip key={s} label={s} size="small"
-                              sx={{ fontSize: 9, height: 18, '& .MuiChip-label': { px: 0.5 } }} />
-                          ))}
-                        </Box>
-                      </TableCell>
+            {dcData ? (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>#</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Name</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Status</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Key</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Tier</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Cost</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Sports</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Data Type</TableCell>
+                      <TableCell sx={{ fontSize: 11, fontWeight: 600, py: 0.6 }}>Notes</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-            <Box mt={2} display="flex" gap={2} alignItems="center">
-              <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11 }}>
-                27 collectors &nbsp;·&nbsp; 14 APIs &nbsp;·&nbsp; 8 R/File packages &nbsp;·&nbsp; 5 scrapers &nbsp;·&nbsp; Total: $782/mo
-              </Typography>
-            </Box>
+                  </TableHead>
+                  <TableBody>
+                    {dcData.collectors.map((c: any) => (
+                      <TableRow key={c.id} sx={{ '& td': { fontSize: 12, py: 0.5 } }}>
+                        <TableCell sx={{ color: 'text.secondary', width: 30 }}>{c.id}</TableCell>
+                        <TableCell>
+                          <Tooltip title={c.url} arrow>
+                            <Typography variant="body2" fontWeight={500} sx={{ fontSize: 12, whiteSpace: 'nowrap' }}>{c.name}</Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Chip label={c.status === 'active' ? 'Active' : 'Ready'} size="small"
+                            color={c.status === 'active' ? 'success' : 'info'}
+                            sx={{ fontSize: 10, height: 20, fontWeight: 600 }} />
+                        </TableCell>
+                        <TableCell>
+                          {c.api_key_configured
+                            ? <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />
+                            : <Warning sx={{ fontSize: 16, color: 'warning.main' }} />}
+                        </TableCell>
+                        <TableCell>
+                          <Chip label={c.subscription_tier} size="small" variant="outlined"
+                            color={c.subscription_tier === 'Premium' ? 'error' : c.subscription_tier === 'Pro' ? 'warning' : c.subscription_tier === 'Basic' ? 'info' : 'success'}
+                            sx={{ fontSize: 10, height: 18 }} />
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap', color: c.cost === 'Free' ? 'success.main' : 'warning.main', fontWeight: 600 }}>
+                          {c.cost}
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={c.sports.join(', ')} arrow>
+                            <Typography sx={{ fontSize: 11, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.sports.join(', ')}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={c.data_type} arrow>
+                            <Typography sx={{ fontSize: 11, maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.data_type}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Typography sx={{ fontSize: 11, color: c.notes?.includes('Pending') ? 'warning.main' : 'text.secondary', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.notes}
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <Typography color="text.secondary" sx={{ fontSize: 13 }}>Loading collectors...</Typography>
+              </Box>
+            )}
           </Box>
         </TabPanel>
 

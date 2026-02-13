@@ -8,7 +8,7 @@ import {
   DialogContent, DialogActions, List, ListItem, ListItemText, Paper,
   Radio, RadioGroup
 } from '@mui/material';
-import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, PlayArrow, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer, Memory, Speed, Tune, CalendarMonth, Timeline, Science, Hub } from '@mui/icons-material';
+import { Palette, Casino, Notifications, Psychology, Storage, Security, Api, Save, Telegram, Email, Visibility, VisibilityOff, Refresh, CheckCircle, Warning, Add, Delete, Send, AccountBalance, TrendingUp, Shield, SportsSoccer, Memory, Speed, Tune, CalendarMonth, Timeline, Science, Hub } from '@mui/icons-material';
 import { useSettingsStore, useBettingStore, useMLConfigStore } from '../../store';
 import { TIMEZONES } from '../../types';
 
@@ -790,118 +790,97 @@ const Settings: React.FC = () => {
 
           <Divider sx={{ my: 3 }} />
 
-          {/* ── Section 2: API Sources ── */}
-          <Box sx={{ mb: 3 }}>
-            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
-              <Api sx={{ fontSize: 18, color: 'primary.main' }} />
-              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>API Sources</Typography>
-            </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
-              Live connections to odds providers, scores feeds, and stats APIs.
-            </Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Source</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Calls / Limit</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Reset</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Latency</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {[
-                    { name: 'TheOddsAPI', status: 'active', calls: 450, limit: 500, reset: '23h 15m', latency: '120ms' },
-                    { name: 'Pinnacle RapidAPI', status: 'slow', calls: 890, limit: 1000, reset: '5h 30m', latency: '850ms' },
-                    { name: 'ESPN Hidden API', status: 'active', calls: 0, limit: 0, reset: '-', latency: '95ms' },
-                    { name: 'TheSportsDB', status: 'active', calls: 120, limit: 0, reset: '-', latency: '180ms' },
-                    { name: 'BallDontLie', status: 'active', calls: 45, limit: 300, reset: '12h 00m', latency: '110ms' },
-                    { name: 'Sportradar', status: 'error', calls: 0, limit: 100, reset: '-', latency: 'Timeout' },
-                  ].map((src) => (
-                    <TableRow key={src.name} sx={{ '& td': { fontSize: 13 } }}>
-                      <TableCell><Typography variant="body2" fontWeight={500}>{src.name}</Typography></TableCell>
-                      <TableCell>
-                        <Chip label={src.status} size="small"
-                          color={src.status === 'active' ? 'success' : src.status === 'slow' ? 'warning' : 'error'}
-                          sx={{ fontSize: 12, height: 22 }} />
-                      </TableCell>
-                      <TableCell>
-                        {src.limit > 0 ? (
-                          <Box display="flex" alignItems="center" gap={1}>
-                            <LinearProgress variant="determinate" value={(src.calls / src.limit) * 100}
-                              color={(src.calls / src.limit) > 0.9 ? 'error' : (src.calls / src.limit) > 0.7 ? 'warning' : 'primary'}
-                              sx={{ flex: 1, height: 5, borderRadius: 3 }} />
-                            <Typography variant="caption" sx={{ minWidth: 55, textAlign: 'right' }}>{src.calls}/{src.limit}</Typography>
-                          </Box>
-                        ) : 'Unlimited'}
-                      </TableCell>
-                      <TableCell>{src.reset}</TableCell>
-                      <TableCell sx={{ color: src.latency === 'Timeout' ? 'error.main' : parseInt(src.latency) > 500 ? 'warning.main' : 'success.main' }}>
-                        {src.latency}
-                      </TableCell>
-                      <TableCell>
-                        <Button size="small" sx={{ fontSize: 12, minWidth: 0 }}>Config</Button>
-                        {src.status === 'error' && <Button size="small" color="warning" sx={{ fontSize: 12, minWidth: 0, ml: 0.5 }}>Retry</Button>}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Box>
-
-          <Divider sx={{ my: 3 }} />
-
-          {/* ── Section 3: Web Scrapers ── */}
+          {/* ── Section 2: All 27 Data Collectors ── */}
           <Box>
-            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
-              <Hub sx={{ fontSize: 18, color: 'primary.main' }} />
-              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Web Scrapers</Typography>
+            <Box display="flex" alignItems="center" gap={1} mb={0.5}>
+              <Api sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Data Collectors</Typography>
+              <Chip label="27 sources" size="small" sx={{ fontSize: 11, height: 20 }} />
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
-              Automated data collection from sports reference sites, injury reports, and line history.
+              All APIs, R data packages, and web scrapers powering the prediction pipeline.
             </Typography>
             <TableContainer>
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Scraper</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Last Run</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Success Rate</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Records</TableCell>
-                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>#</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Source</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Type</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Status</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Cost</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Data Provided</TableCell>
+                    <TableCell sx={{ fontSize: 12, fontWeight: 600, py: 0.75 }}>Sports</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {[
-                    { name: 'ESPN Injuries', status: 'active', lastRun: '5 min ago', success: 100, records: 145 },
-                    { name: 'Pro-Football-Ref', status: 'active', lastRun: '1 hour ago', success: 98, records: 2450 },
-                    { name: 'Basketball-Ref', status: 'slow', lastRun: '2 hours ago', success: 85, records: 1200 },
-                    { name: 'Baseball-Ref', status: 'active', lastRun: '3 hours ago', success: 97, records: 1850 },
-                    { name: 'Hockey-Ref', status: 'active', lastRun: '1 hour ago', success: 99, records: 980 },
-                    { name: 'Covers.com', status: 'active', lastRun: '10 min ago', success: 100, records: 50 },
-                  ].map((scraper) => (
-                    <TableRow key={scraper.name} sx={{ '& td': { fontSize: 13 } }}>
-                      <TableCell><Typography variant="body2" fontWeight={500}>{scraper.name}</Typography></TableCell>
+                    { id: 1,  name: 'ESPN',                type: 'api',     status: 'active', cost: 'Free',     data: 'Injuries, lineups, scores',           sports: 'NFL NBA MLB NHL NCAAF NCAAB WNBA' },
+                    { id: 2,  name: 'The Odds API',        type: 'api',     status: 'active', cost: '$119/mo',  data: 'Odds from 40+ books',                 sports: 'NFL NBA MLB NHL NCAAF NCAAB WNBA ATP WTA CFL' },
+                    { id: 3,  name: 'Pinnacle (RapidAPI)', type: 'api',     status: 'active', cost: '$10/mo',   data: 'Sharp lines, CLV benchmark',          sports: 'NFL NBA MLB NHL NCAAF NCAAB ATP WTA' },
+                    { id: 4,  name: 'Tennis Stats',        type: 'scraper', status: 'ready',  cost: 'Free',     data: 'Tennis match stats',                  sports: 'ATP WTA' },
+                    { id: 5,  name: 'OpenWeatherMap',      type: 'api',     status: 'active', cost: 'Free',     data: 'Weather for outdoor games',           sports: 'NFL MLB NCAAF CFL' },
+                    { id: 6,  name: 'TheSportsDB',         type: 'api',     status: 'active', cost: '$295/mo',  data: 'Games, scores, livescores, lineups',  sports: 'NFL NBA MLB NHL NCAAF NCAAB CFL' },
+                    { id: 7,  name: 'nflfastR',            type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, EPA, WPA, CPOE',                sports: 'NFL' },
+                    { id: 8,  name: 'cfbfastR',            type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, EPA, SP+, recruiting',           sports: 'NCAAF' },
+                    { id: 9,  name: 'baseballR (MLB API)', type: 'file',    status: 'active', cost: 'Free',     data: 'Statcast, FanGraphs, 85+ features',  sports: 'MLB' },
+                    { id: 10, name: 'hockeyR (NHL API)',   type: 'file',    status: 'active', cost: 'Free',     data: 'xG, Corsi, Fenwick, 75+ features',   sports: 'NHL' },
+                    { id: 11, name: 'wehoop (ESPN/WNBA)',  type: 'file',    status: 'active', cost: 'Free',     data: 'PBP, box scores, player stats',       sports: 'WNBA' },
+                    { id: 12, name: 'hoopR (ESPN/NBA)',    type: 'file',    status: 'active', cost: 'Free',     data: 'Games, rosters, player/team stats',   sports: 'NBA NCAAB' },
+                    { id: 13, name: 'CFL (SportsDB)',      type: 'api',     status: 'active', cost: 'Free',     data: 'CFL games, rosters, stats',           sports: 'CFL' },
+                    { id: 14, name: 'Action Network',      type: 'scraper', status: 'active', cost: 'Free',     data: 'Public betting %, sharp money',       sports: 'NFL NBA MLB NHL NCAAF NCAAB' },
+                    { id: 15, name: 'NHL Official API',    type: 'api',     status: 'active', cost: 'Free',     data: 'EDGE stats: shot speed, skating',     sports: 'NHL' },
+                    { id: 16, name: 'Sportsipy',           type: 'scraper', status: 'ready',  cost: 'Free',     data: 'Sports-Reference scraper',            sports: 'MLB NBA NFL NHL NCAAF NCAAB' },
+                    { id: 17, name: 'Basketball Reference', type: 'scraper', status: 'active', cost: 'Free',    data: 'Box scores, injuries, advanced stats', sports: 'NBA' },
+                    { id: 18, name: 'College Football Data', type: 'api',   status: 'active', cost: 'Free',     data: 'SP+, recruiting, betting lines',      sports: 'NCAAF' },
+                    { id: 19, name: 'Matchstat Tennis',    type: 'api',     status: 'active', cost: '$49/mo',   data: 'Rankings, H2H, surface stats',        sports: 'ATP WTA' },
+                    { id: 20, name: 'RealGM / ESPN',       type: 'scraper', status: 'active', cost: 'Free',     data: 'Salary data, contracts, rosters',     sports: 'NBA' },
+                    { id: 21, name: 'NFL Next Gen Stats',  type: 'file',    status: 'active', cost: 'Free',     data: 'Player tracking, time-to-throw',      sports: 'NFL' },
+                    { id: 22, name: 'Kaggle Datasets',     type: 'file',    status: 'ready',  cost: 'Free',     data: 'Historical data for backtesting',     sports: 'Multi-sport' },
+                    { id: 23, name: 'Tennis Abstract',     type: 'file',    status: 'active', cost: 'Free',     data: 'Matches, H2H, surface splits',        sports: 'ATP WTA' },
+                    { id: 24, name: 'Polymarket',          type: 'api',     status: 'active', cost: 'Free',     data: 'Prediction market crowd wisdom',      sports: 'NFL NBA MLB' },
+                    { id: 25, name: 'Kalshi',              type: 'api',     status: 'active', cost: 'Free',     data: 'CFTC-regulated prediction markets',   sports: 'NFL NBA MLB' },
+                    { id: 26, name: 'BallDontLie',         type: 'api',     status: 'active', cost: '$299/mo',  data: '9 sports: games, stats, odds, players', sports: 'NBA NFL MLB NHL WNBA NCAAF NCAAB ATP WTA' },
+                    { id: 27, name: 'Weatherstack',        type: 'api',     status: 'active', cost: '$9.99/mo', data: 'Backup weather, historical to 2015',  sports: 'NFL MLB CFL' },
+                  ].map((c) => (
+                    <TableRow key={c.id} sx={{ '& td': { fontSize: 12, py: 0.6 } }}>
+                      <TableCell sx={{ color: 'text.secondary', width: 30 }}>{c.id}</TableCell>
+                      <TableCell><Typography variant="body2" fontWeight={500} sx={{ fontSize: 12 }}>{c.name}</Typography></TableCell>
                       <TableCell>
-                        <Chip label={scraper.status} size="small"
-                          color={scraper.status === 'active' ? 'success' : 'warning'}
-                          sx={{ fontSize: 12, height: 22 }} />
+                        <Chip label={c.type} size="small"
+                          sx={{ fontSize: 10, height: 20, fontWeight: 600,
+                            bgcolor: c.type === 'api' ? 'rgba(33,150,243,0.12)' : c.type === 'file' ? 'rgba(156,39,176,0.12)' : 'rgba(255,152,0,0.12)',
+                            color: c.type === 'api' ? '#2196f3' : c.type === 'file' ? '#9c27b0' : '#ff9800',
+                          }} />
                       </TableCell>
-                      <TableCell>{scraper.lastRun}</TableCell>
-                      <TableCell sx={{ color: scraper.success >= 95 ? 'success.main' : 'warning.main' }}>{scraper.success}%</TableCell>
-                      <TableCell>{scraper.records.toLocaleString()}</TableCell>
                       <TableCell>
-                        <Button size="small" startIcon={<PlayArrow sx={{ fontSize: 14 }} />} sx={{ fontSize: 12 }}>Run Now</Button>
+                        <Chip label={c.status} size="small"
+                          color={c.status === 'active' ? 'success' : 'default'}
+                          variant={c.status === 'ready' ? 'outlined' : 'filled'}
+                          sx={{ fontSize: 10, height: 20 }} />
+                      </TableCell>
+                      <TableCell sx={{ color: c.cost === 'Free' ? 'success.main' : 'warning.main', fontWeight: c.cost !== 'Free' ? 600 : 400 }}>
+                        {c.cost}
+                      </TableCell>
+                      <TableCell sx={{ color: 'text.secondary', maxWidth: 200 }}>{c.data}</TableCell>
+                      <TableCell>
+                        <Box display="flex" gap={0.3} flexWrap="wrap">
+                          {c.sports.split(' ').map(s => (
+                            <Chip key={s} label={s} size="small"
+                              sx={{ fontSize: 9, height: 18, '& .MuiChip-label': { px: 0.5 } }} />
+                          ))}
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
+            <Box mt={2} display="flex" gap={2} alignItems="center">
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11 }}>
+                27 collectors &nbsp;·&nbsp; 14 APIs &nbsp;·&nbsp; 8 R/File packages &nbsp;·&nbsp; 5 scrapers &nbsp;·&nbsp; Total: $782/mo
+              </Typography>
+            </Box>
           </Box>
         </TabPanel>
 

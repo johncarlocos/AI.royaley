@@ -109,6 +109,7 @@ async def lifespan(app: FastAPI):
         
         # Scheduler
         scheduler_service = get_scheduler_service()
+        await scheduler_service.initialize()
         await scheduler_service.start()
         logger.info("✓ Scheduler service started")
         

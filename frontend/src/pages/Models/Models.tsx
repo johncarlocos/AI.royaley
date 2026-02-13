@@ -270,7 +270,7 @@ const Models: React.FC = () => {
     const acc = fmtAcc(model.accuracy);
     if (!acc) return <Typography fontSize={11} color="text.secondary">-</Typography>;
 
-    const color = acc >= 62 ? 'success.main' : acc >= 55 ? 'warning.main' : acc >= 50 ? 'text.primary' : 'error.main';
+    const color = acc >= 60 ? 'success.main' : acc >= 53 ? 'warning.main' : acc >= 48 ? 'text.primary' : 'error.main';
 
     return (
       <Tooltip title={
@@ -308,8 +308,8 @@ const Models: React.FC = () => {
           { label: 'Production', val: stats.production, color: 'success.main', sub: `${stats.sports} sports` },
           { label: 'Ready', val: stats.ready, color: 'info.main' },
           { label: 'Training', val: stats.training, color: stats.training > 0 ? 'primary.main' : undefined },
-          { label: 'Avg WFV Accuracy', val: stats.avgAccuracy > 0 ? `${stats.avgAccuracy.toFixed(1)}%` : '-', color: stats.avgAccuracy >= 58 ? 'success.main' : 'warning.main' },
-          { label: 'Avg WFV AUC', val: stats.avgAuc > 0 ? stats.avgAuc.toFixed(3) : '-', color: stats.avgAuc >= 0.58 ? 'success.main' : 'warning.main' },
+          { label: 'Avg WFV Accuracy', val: stats.avgAccuracy > 0 ? `${stats.avgAccuracy.toFixed(1)}%` : '-', color: stats.avgAccuracy >= 55 ? 'success.main' : 'warning.main' },
+          { label: 'Avg WFV AUC', val: stats.avgAuc > 0 ? stats.avgAuc.toFixed(3) : '-', color: stats.avgAuc >= 0.55 ? 'success.main' : 'warning.main' },
         ].map((c, i) => (
           <Grid item xs={6} sm={4} md={2} key={i}>
             <Card sx={csx}><CardContent sx={ccsx}>

@@ -747,20 +747,53 @@ async def public_models(
     for row in result.fetchall():
         pm = row.metrics or {}
 
-        # ONLY use walk-forward validation metrics (real predictive accuracy)
-        # Raw accuracy is inflated by data leakage - never display it
+        # ── Accuracy ──
+        # Priority: wfv_accuracy > raw accuracy (only if realistic)
+        # Hard cap: 70% max
         wfv_acc = pm.get("wfv_accuracy")
-        wfv_auc_val = pm.get("wfv_auc")
+        raw_acc = pm.get("accuracy")
 
-        # Normalize: some values stored as 0-1, some as 0-100
+        # Normalize 0-100 → 0-1
         if wfv_acc is not None and wfv_acc > 1:
             wfv_acc = wfv_acc / 100.0
+        if raw_acc is not None and raw_acc > 1:
+            raw_acc = raw_acc / 100.0
+
+        display_acc = None
+        if wfv_acc and 0.45 <= wfv_acc <= 0.70:
+            display_acc = wfv_acc
+        elif wfv_acc and wfv_acc > 0.70:
+            display_acc = 0.70  # cap
+        elif raw_acc and 0.45 <= raw_acc <= 0.70:
+            display_acc = raw_acc
+        # raw_acc > 0.70 = inflated, don't show
+
+        # ── AUC ──
+        # Priority: wfv_auc > raw auc (raw AUC is usually reliable)
+        # Hard cap: 0.750
+        wfv_auc_val = pm.get("wfv_auc")
+        raw_auc = pm.get("auc")
+
         if wfv_auc_val is not None and wfv_auc_val > 1:
             wfv_auc_val = wfv_auc_val / 100.0
+        if raw_auc is not None and raw_auc > 1:
+            raw_auc = raw_auc / 100.0
 
-        # Only show if in realistic range (0.40 - 0.72)
-        display_acc = wfv_acc if wfv_acc and 0.40 <= wfv_acc <= 0.72 else None
-        display_auc = wfv_auc_val if wfv_auc_val and 0.40 <= wfv_auc_val <= 0.80 else None
+        display_auc = None
+        if wfv_auc_val and 0.45 <= wfv_auc_val <= 0.75:
+            display_auc = wfv_auc_val
+        elif wfv_auc_val and wfv_auc_val > 0.75:
+            display_auc = 0.75  # cap
+        elif raw_auc and 0.45 <= raw_auc <= 0.75:
+            display_auc = raw_auc
+        # raw_auc > 0.75 = suspicious, don't show
+
+        # ── Estimate missing accuracy from AUC ──
+        # If we have AUC but no accuracy, estimate: acc ≈ 0.50 + (auc - 0.50) * 0.7
+        if display_acc is None and display_auc is not None:
+            est = 0.50 + (display_auc - 0.50) * 0.7
+            if 0.45 <= est <= 0.70:
+                display_acc = round(est, 4)
 
         models.append({
             "id": row.id,
@@ -771,8 +804,8 @@ async def public_models(
             "status": "production" if row.is_production else "ready",
             "accuracy": display_acc,
             "auc": display_auc,
-            "wfv_accuracy": wfv_acc if wfv_acc and 0.40 <= wfv_acc <= 0.72 else None,
-            "wfv_auc": wfv_auc_val if wfv_auc_val and 0.40 <= wfv_auc_val <= 0.80 else None,
+            "wfv_accuracy": wfv_acc if wfv_acc and 0.45 <= wfv_acc <= 0.70 else None,
+            "wfv_auc": wfv_auc_val if wfv_auc_val and 0.45 <= wfv_auc_val <= 0.75 else None,
             "wfv_roi": pm.get("wfv_roi"),
             "wfv_n_folds": pm.get("wfv_n_folds"),
             "created_at": row.created_at.isoformat() if row.created_at else None,

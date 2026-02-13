@@ -344,7 +344,6 @@ const Alerts: React.FC = () => {
                     <TableCell sx={headerSx}>Cost</TableCell>
                     <TableCell sx={headerSx}>Sports</TableCell>
                     <TableCell sx={headerSx}>Data Type</TableCell>
-                    <TableCell sx={headerSx}>Archive</TableCell>
                     <TableCell sx={headerSx}>Notes</TableCell>
                   </TableRow>
                 </TableHead>
@@ -381,13 +380,6 @@ const Alerts: React.FC = () => {
                             {c.data_type}
                           </Typography>
                         </Tooltip>
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap' }}>
-                        {c.archive_files > 0 ? (
-                          <Typography sx={{ fontSize: 11 }}>{c.archive_files.toLocaleString()} files ({c.archive_size_mb} MB)</Typography>
-                        ) : (
-                          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>-</Typography>
-                        )}
                       </TableCell>
                       <TableCell sx={cellSx}>
                         <Typography sx={{ fontSize: 11, color: c.notes?.includes('Pending') ? 'warning.main' : 'text.secondary', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

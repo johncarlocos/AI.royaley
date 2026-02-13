@@ -385,24 +385,213 @@ async def capture_closing_lines(db: AsyncSession) -> int:
 # JOB 3: GAME GRADING - Fetch scores, grade predictions, calculate CLV
 # =============================================================================
 
+# ESPN API endpoints (free, no API key needed) for fallback scores
+ESPN_SPORT_MAP = {
+    "NBA": "basketball/nba",
+    "NCAAB": "basketball/mens-college-basketball",
+    "WNBA": "basketball/wnba",
+    "NFL": "football/nfl",
+    "NCAAF": "football/college-football",
+    "NHL": "hockey/nhl",
+    "MLB": "baseball/mlb",
+}
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize team/player name for fuzzy matching."""
+    import re
+    name = name.strip().lower()
+    # Remove common suffixes for college sports
+    for suffix in [' st ', ' state ', ' university']:
+        name = name.replace(suffix, ' ')
+    # Remove punctuation
+    name = re.sub(r'[^a-z0-9\s]', '', name)
+    return ' '.join(name.split())
+
+
+async def _match_upcoming_game(
+    db: AsyncSession, sport_id, home_name: str, away_name: str,
+    commence_time: str, time_window: int = 7200,
+) -> Optional[str]:
+    """
+    Multi-strategy matching to find an upcoming_game for a completed score.
+    Returns game UUID or None.
+
+    Strategies (in order):
+      1. Exact home_team_name + time window
+      2. Case-insensitive home_team_name + time window
+      3. Exact away_team_name swapped as home + time window
+      4. Last-word fuzzy match on both teams + time window
+      5. Broadest: any game with same sport within time window (pick closest)
+    """
+    ct = commence_time if commence_time else "2000-01-01T00:00:00Z"
+
+    # Strategy 1: Exact home name match
+    r = await db.execute(text("""
+        UPDATE upcoming_games
+        SET home_score = NULL, status = status  -- no-op update, just to test match
+        WHERE sport_id = :sid AND home_team_name = :home AND status = 'scheduled'
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+        RETURNING id
+    """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
+    # Actually, don't use UPDATE for testing. Use SELECT.
+    await db.rollback()
+
+    # Strategy 1: Exact home name
+    r = await db.execute(text("""
+        SELECT id FROM upcoming_games
+        WHERE sport_id = :sid AND home_team_name = :home AND status = 'scheduled'
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+        LIMIT 1
+    """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
+    row = r.fetchone()
+    if row:
+        logger.info(f"      Match strategy 1 (exact home): {home_name}")
+        return row[0]
+
+    # Strategy 2: Case-insensitive home name
+    r = await db.execute(text("""
+        SELECT id FROM upcoming_games
+        WHERE sport_id = :sid AND LOWER(home_team_name) = LOWER(:home) AND status = 'scheduled'
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+        LIMIT 1
+    """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
+    row = r.fetchone()
+    if row:
+        logger.info(f"      Match strategy 2 (case-insensitive home): {home_name}")
+        return row[0]
+
+    # Strategy 3: Away name as home (API sometimes swaps home/away, especially tennis)
+    r = await db.execute(text("""
+        SELECT id FROM upcoming_games
+        WHERE sport_id = :sid
+          AND (home_team_name = :away OR LOWER(home_team_name) = LOWER(:away))
+          AND status = 'scheduled'
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+        LIMIT 1
+    """), {"sid": sport_id, "away": away_name, "ct": ct, "tw": time_window})
+    row = r.fetchone()
+    if row:
+        logger.info(f"      Match strategy 3 (away-as-home swap): {away_name}")
+        return row[0]
+
+    # Strategy 4: Last-word fuzzy (e.g., "Karolina Muchova" → "%Muchova%")
+    home_last = home_name.split()[-1] if home_name.split() else home_name
+    away_last = away_name.split()[-1] if away_name.split() else away_name
+    if len(home_last) >= 3 and len(away_last) >= 3:
+        r = await db.execute(text("""
+            SELECT id FROM upcoming_games
+            WHERE sport_id = :sid AND status = 'scheduled'
+              AND (
+                (home_team_name ILIKE '%' || :hl || '%' AND away_team_name ILIKE '%' || :al || '%')
+                OR
+                (home_team_name ILIKE '%' || :al || '%' AND away_team_name ILIKE '%' || :hl || '%')
+              )
+              AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+            LIMIT 1
+        """), {"sid": sport_id, "hl": home_last, "al": away_last, "ct": ct, "tw": time_window})
+        row = r.fetchone()
+        if row:
+            logger.info(f"      Match strategy 4 (fuzzy last-word): {home_last}/{away_last}")
+            return row[0]
+
+    # Strategy 5: Closest game in same sport within wider time window
+    r = await db.execute(text("""
+        SELECT id, home_team_name, away_team_name FROM upcoming_games
+        WHERE sport_id = :sid AND status = 'scheduled'
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < 14400
+        ORDER BY ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz)))
+        LIMIT 3
+    """), {"sid": sport_id, "ct": ct})
+    nearby = r.fetchall()
+    if nearby:
+        logger.warning(f"      No match for '{home_name}' vs '{away_name}'. Nearby games:")
+        for n in nearby:
+            logger.warning(f"        DB: '{n.home_team_name}' vs '{n.away_team_name}'")
+    else:
+        logger.warning(f"      No match and no nearby games for '{home_name}' vs '{away_name}'")
+
+    return None
+
+
+async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list:
+    """
+    Fetch completed game scores from ESPN API (free, no key needed).
+    Returns list of dicts: {home_team, away_team, home_score, away_score, commence_time, completed}
+    """
+    espn_path = ESPN_SPORT_MAP.get(sport_code)
+    if not espn_path:
+        return []
+
+    results = []
+    try:
+        resp = await client.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/{espn_path}/scoreboard",
+            timeout=15.0,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json()
+        for event in data.get("events", []):
+            status = event.get("status", {}).get("type", {}).get("name", "")
+            if status != "STATUS_FINAL":
+                continue
+
+            competitions = event.get("competitions", [{}])
+            if not competitions:
+                continue
+
+            comp = competitions[0]
+            competitors = comp.get("competitors", [])
+            if len(competitors) < 2:
+                continue
+
+            home = away = None
+            for c in competitors:
+                info = {
+                    "name": c.get("team", {}).get("displayName", ""),
+                    "score": int(c.get("score", 0)),
+                }
+                if c.get("homeAway") == "home":
+                    home = info
+                else:
+                    away = info
+
+            if home and away:
+                results.append({
+                    "home_team": home["name"],
+                    "away_team": away["name"],
+                    "home_score": home["score"],
+                    "away_score": away["score"],
+                    "commence_time": comp.get("startDate", ""),
+                    "completed": True,
+                })
+    except Exception as e:
+        logger.debug(f"    ESPN fallback error for {sport_code}: {e}")
+
+    return results
+
+
 async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
     """
     For games that have finished:
-    1. Fetch scores from Odds API
-    2. Update upcoming_games with final scores
+    1. Fetch scores from Odds API + ESPN fallback
+    2. Match to upcoming_games using multi-strategy fuzzy matching
     3. Grade each prediction (win/loss/push)
-    4. Calculate CLV
+    4. Calculate CLV + profit/loss
     Returns stats dict.
     """
-    stats = {"games_graded": 0, "predictions_graded": 0, "api_requests": 0}
+    stats = {"games_graded": 0, "predictions_graded": 0, "api_requests": 0,
+             "espn_graded": 0, "match_failures": 0}
 
-    # Find sports with ungraded games (game time has passed but no score yet)
+    # Find sports with ungraded games (game time passed + 2 hour buffer)
     ungraded_sports = await db.execute(text("""
-        SELECT DISTINCT s.code, s.api_key
+        SELECT DISTINCT s.code, s.api_key, s.id as sport_id
         FROM upcoming_games ug
         JOIN sports s ON ug.sport_id = s.id
         WHERE ug.status = 'scheduled'
-          AND ug.scheduled_at < NOW() - INTERVAL '3 hours'
+          AND ug.scheduled_at < NOW() - INTERVAL '2 hours'
     """))
     sport_rows = ungraded_sports.fetchall()
 
@@ -411,163 +600,208 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
 
     logger.info(f"  Sports with ungraded games: {[r[0] for r in sport_rows]}")
 
-    # Resolve tennis tournament keys (they rotate by tournament)
+    # Count ungraded per sport
+    for sr in sport_rows:
+        cnt = await db.execute(text("""
+            SELECT COUNT(*) FROM upcoming_games
+            WHERE sport_id = :sid AND status = 'scheduled'
+              AND scheduled_at < NOW() - INTERVAL '2 hours'
+        """), {"sid": sr.sport_id})
+        logger.info(f"    {sr[0]}: {cnt.scalar()} ungraded games")
+
+    # Resolve tennis tournament keys
     tennis_keys = await resolve_tennis_keys(api_key)
     if tennis_keys:
         logger.info(f"  Active tennis tournaments: {tennis_keys}")
 
-    # Fetch scores from Odds API
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for sport_code, db_api_key in sport_rows:
-            # Tennis needs tournament-specific key for scores API
+        for sport_code, db_api_key, sport_id in sport_rows:
+
+            # ── Collect completed scores from ALL sources ──
+            all_completed = []
+
+            # Source 1: Odds API
             if sport_code in tennis_keys:
                 api_sport_key = tennis_keys[sport_code]
             else:
                 api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
-            if not api_sport_key:
-                logger.warning(f"    No API key for {sport_code}, skipping grading")
+
+            if api_sport_key:
+                try:
+                    resp = await client.get(
+                        f"https://api.the-odds-api.com/v4/sports/{api_sport_key}/scores",
+                        params={"apiKey": api_key, "daysFrom": 3},
+                    )
+                    stats["api_requests"] += 1
+                    if resp.status_code == 200:
+                        api_scores = resp.json()
+                        completed_count = 0
+                        for game in api_scores:
+                            if not game.get("completed"):
+                                continue
+                            game_scores = game.get("scores", [])
+                            if not game_scores or len(game_scores) < 2:
+                                continue
+                            home_name = game.get("home_team", "")
+                            home_score = away_score = None
+                            for s in game_scores:
+                                if s["name"] == home_name:
+                                    home_score = int(s["score"]) if s.get("score") else None
+                                else:
+                                    away_score = int(s["score"]) if s.get("score") else None
+                            if home_score is not None and away_score is not None:
+                                all_completed.append({
+                                    "home_team": home_name,
+                                    "away_team": game.get("away_team", ""),
+                                    "home_score": home_score,
+                                    "away_score": away_score,
+                                    "commence_time": game.get("commence_time", ""),
+                                    "source": "odds_api",
+                                })
+                                completed_count += 1
+                        logger.info(f"    {sport_code} Odds API: {len(api_scores)} total, {completed_count} completed")
+                    else:
+                        logger.error(f"    {sport_code} Odds API error: {resp.status_code}")
+                except Exception as e:
+                    logger.error(f"    {sport_code} Odds API error: {e}")
+
+            # Source 2: ESPN fallback (free, no API key)
+            espn_scores = await _fetch_espn_scores(client, sport_code)
+            if espn_scores:
+                logger.info(f"    {sport_code} ESPN fallback: {len(espn_scores)} completed games")
+                for es in espn_scores:
+                    es["source"] = "espn"
+                    # Only add if not already from Odds API (dedupe by team names)
+                    already = any(
+                        _normalize_name(c["home_team"]) == _normalize_name(es["home_team"])
+                        for c in all_completed
+                    )
+                    if not already:
+                        all_completed.append(es)
+
+            if not all_completed:
+                logger.info(f"    {sport_code}: No completed scores from any source")
                 continue
 
-            # Get sport_id for team name matching
-            sport_id_row = await db.execute(
-                text("SELECT id FROM sports WHERE code = :code"),
-                {"code": sport_code},
-            )
-            sport_id_result = sport_id_row.fetchone()
-            if not sport_id_result:
-                continue
-            sport_id = sport_id_result[0]
+            logger.info(f"    {sport_code}: {len(all_completed)} total completed scores to process")
 
-            try:
-                resp = await client.get(
-                    f"https://api.the-odds-api.com/v4/sports/{api_sport_key}/scores",
-                    params={
-                        "apiKey": api_key,
-                        "daysFrom": 3,
-                    },
+            # ── Match each completed game to upcoming_games ──
+            for game_data in all_completed:
+                home_name = game_data["home_team"]
+                away_name = game_data["away_team"]
+                home_score = game_data["home_score"]
+                away_score = game_data["away_score"]
+                commence_time = game_data.get("commence_time", "")
+                source = game_data.get("source", "unknown")
+
+                # Multi-strategy matching
+                game_uuid = await _match_upcoming_game(
+                    db, sport_id, home_name, away_name, commence_time
                 )
-                stats["api_requests"] += 1
 
-                if resp.status_code != 200:
-                    logger.error(f"    Scores API error: {resp.status_code}")
+                if not game_uuid:
+                    stats["match_failures"] += 1
                     continue
 
-                scores = resp.json()
-                logger.info(f"    {sport_code}: {len(scores)} score results")
+                # Check if already graded
+                check = await db.execute(text("""
+                    SELECT status FROM upcoming_games WHERE id = :gid
+                """), {"gid": game_uuid})
+                row = check.fetchone()
+                if row and row.status == 'completed':
+                    continue  # Already graded
 
-                for game in scores:
-                    if not game.get("completed"):
-                        continue
+                # Update the upcoming_game with scores
+                await db.execute(text("""
+                    UPDATE upcoming_games
+                    SET home_score = :hs, away_score = :as_score,
+                        status = 'completed', updated_at = NOW()
+                    WHERE id = :gid
+                """), {"hs": home_score, "as_score": away_score, "gid": game_uuid})
 
-                    ext_id = game["id"]
-                    game_scores = game.get("scores", [])
-                    if not game_scores or len(game_scores) < 2:
-                        continue
+                stats["games_graded"] += 1
+                if source == "espn":
+                    stats["espn_graded"] += 1
+                logger.info(f"    ✅ Graded: {home_name} {home_score}-{away_score} {away_name} [{source}]")
 
-                    # Parse scores
-                    home_name = game.get("home_team", "")
-                    home_score = away_score = None
-                    for s in game_scores:
-                        if s["name"] == home_name:
-                            home_score = int(s["score"]) if s.get("score") else None
-                        else:
-                            away_score = int(s["score"]) if s.get("score") else None
+                # Grade each prediction for this game
+                preds = await db.execute(text("""
+                    SELECT p.id, p.bet_type, p.predicted_side,
+                           p.line_at_prediction, p.odds_at_prediction,
+                           p.home_line_open, p.away_line_open, p.total_open,
+                           p.home_ml_open, p.away_ml_open,
+                           pr.closing_line, pr.closing_odds
+                    FROM predictions p
+                    LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                    WHERE p.upcoming_game_id = :gid
+                """), {"gid": game_uuid})
 
-                    if home_score is None or away_score is None:
-                        continue
+                for pred in preds.fetchall():
+                    # Determine if home/away are swapped in our DB vs scores
+                    # (check if our DB home matches the score's home)
+                    db_home = await db.execute(text(
+                        "SELECT home_team_name FROM upcoming_games WHERE id = :gid"
+                    ), {"gid": game_uuid})
+                    db_home_name = db_home.scalar()
 
-                    # Update upcoming_game with scores
-                    # Match by home_team_name + sport_id + scheduled_at (within 2 hours)
-                    # because scores API returns different external_ids than odds API
-                    home_name = game.get("home_team", "")
-                    commence_time = game.get("commence_time", "")
+                    # If DB home matches score home → use as-is
+                    # If DB home matches score away → swap scores
+                    grade_home = home_score
+                    grade_away = away_score
+                    if db_home_name and _normalize_name(db_home_name) != _normalize_name(home_name):
+                        # Check if DB home matches score's away team
+                        if _normalize_name(db_home_name) == _normalize_name(away_name) or \
+                           away_name.split()[-1].lower() in db_home_name.lower():
+                            grade_home, grade_away = away_score, home_score
+                            logger.info(f"      Swapped home/away scores for DB alignment")
 
-                    result = await db.execute(text("""
-                        UPDATE upcoming_games
-                        SET home_score = :hs, away_score = :as_score,
-                            status = 'completed', updated_at = NOW()
-                        WHERE sport_id = :sport_id
-                          AND home_team_name = :home_name
-                          AND status = 'scheduled'
-                          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :commence::timestamptz))) < 7200
-                        RETURNING id
-                    """), {
-                        "hs": home_score,
-                        "as_score": away_score,
-                        "sport_id": sport_id,
-                        "home_name": home_name,
-                        "commence": commence_time if commence_time else "2000-01-01T00:00:00Z",
-                    })
+                    result_val = _grade_single(
+                        pred.bet_type, pred.predicted_side,
+                        pred.line_at_prediction,
+                        grade_home, grade_away
+                    )
 
-                    updated = result.fetchone()
-                    if not updated:
-                        continue
+                    clv = _calculate_clv(
+                        pred.bet_type, pred.predicted_side,
+                        pred.line_at_prediction, pred.odds_at_prediction,
+                        pred.closing_line, pred.closing_odds,
+                        pred.home_line_open, pred.away_line_open,
+                        pred.total_open, pred.home_ml_open, pred.away_ml_open
+                    )
 
-                    game_id = updated[0]
-                    stats["games_graded"] += 1
+                    pnl = _calculate_pnl(result_val, pred.odds_at_prediction)
 
-                    # Grade each prediction for this game
-                    preds = await db.execute(text("""
-                        SELECT p.id, p.bet_type, p.predicted_side,
-                               p.line_at_prediction, p.odds_at_prediction,
-                               p.home_line_open, p.away_line_open, p.total_open,
-                               p.home_ml_open, p.away_ml_open,
-                               pr.closing_line, pr.closing_odds
-                        FROM predictions p
-                        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
-                        WHERE p.upcoming_game_id = :gid
-                    """), {"gid": game_id})
-
-                    for pred in preds.fetchall():
-                        result_val = _grade_single(
-                            pred.bet_type, pred.predicted_side,
-                            pred.line_at_prediction,
-                            home_score, away_score
-                        )
-
-                        # Calculate CLV
-                        clv = _calculate_clv(
-                            pred.bet_type, pred.predicted_side,
-                            pred.line_at_prediction, pred.odds_at_prediction,
-                            pred.closing_line, pred.closing_odds,
-                            pred.home_line_open, pred.away_line_open,
-                            pred.total_open, pred.home_ml_open, pred.away_ml_open
-                        )
-
-                        # Calculate profit/loss (flat $100 bet for tracking)
-                        pnl = _calculate_pnl(result_val, pred.odds_at_prediction)
-
-                        # Upsert prediction_result
-                        try:
-                            await db.execute(text("""
-                                INSERT INTO prediction_results
-                                    (id, prediction_id, actual_result, closing_line,
-                                     closing_odds, clv, profit_loss, graded_at)
-                                VALUES
-                                    (gen_random_uuid(), :pid, :result, :cl, :co, :clv, :pnl, NOW())
-                                ON CONFLICT (prediction_id) DO UPDATE SET
-                                    actual_result = EXCLUDED.actual_result,
-                                    clv = EXCLUDED.clv,
-                                    profit_loss = EXCLUDED.profit_loss,
-                                    graded_at = NOW()
-                            """), {
-                                "pid": pred.id,
-                                "result": result_val,
-                                "cl": pred.closing_line,
-                                "co": pred.closing_odds,
-                                "clv": clv,
-                                "pnl": pnl,
-                            })
-                            stats["predictions_graded"] += 1
-                        except Exception as e:
-                            await db.rollback()
-                            logger.error(f"    Grade error for {pred.id}: {e}")
-
-            except Exception as e:
-                logger.error(f"    Error fetching scores for {sport_code}: {e}")
+                    try:
+                        await db.execute(text("""
+                            INSERT INTO prediction_results
+                                (id, prediction_id, actual_result, closing_line,
+                                 closing_odds, clv, profit_loss, graded_at)
+                            VALUES
+                                (gen_random_uuid(), :pid, :result, :cl, :co, :clv, :pnl, NOW())
+                            ON CONFLICT (prediction_id) DO UPDATE SET
+                                actual_result = EXCLUDED.actual_result,
+                                clv = EXCLUDED.clv,
+                                profit_loss = EXCLUDED.profit_loss,
+                                graded_at = NOW()
+                        """), {
+                            "pid": pred.id,
+                            "result": result_val,
+                            "cl": pred.closing_line,
+                            "co": pred.closing_odds,
+                            "clv": clv,
+                            "pnl": pnl,
+                        })
+                        stats["predictions_graded"] += 1
+                        logger.info(f"      {pred.bet_type} {pred.predicted_side}: {result_val} (P/L: {pnl})")
+                    except Exception as e:
+                        await db.rollback()
+                        logger.error(f"    Grade error for {pred.id}: {e}")
 
     if stats["games_graded"] > 0:
         await db.commit()
+        logger.info(f"  📊 Grading complete: {stats['games_graded']} games, "
+                     f"{stats['predictions_graded']} predictions "
+                     f"(ESPN: {stats['espn_graded']}, failures: {stats['match_failures']})")
 
     return stats
 

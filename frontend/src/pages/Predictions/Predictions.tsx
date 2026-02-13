@@ -9,9 +9,10 @@ import {
 } from '@mui/material';
 import { Refresh, ExpandMore, CheckCircle, Cancel, Schedule, Remove, TrendingUp, TrendingDown, Assessment, EmojiEvents, Casino, SportsSoccer, Timer, CalendarToday, RestartAlt } from '@mui/icons-material';
 import { api } from '../../api/client';
-import { useFilterStore } from '../../store';
+import { useFilterStore, useSettingsStore } from '../../store';
 import { SPORTS } from '../../types';
 import { formatPercent } from '../../utils';
+import { formatDateTime, formatTime, formatOdds as fmtOdds, getTimezoneAbbr } from '../../utils/formatters';
 
 // Types
 interface FlatRow {
@@ -197,6 +198,7 @@ const Predictions: React.FC = () => {
   const [positiveEdgeOnly, setPositiveEdgeOnly] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const { selectedSport, setSelectedSport, selectedTier, setSelectedTier } = useFilterStore();
+  const { timezone, timeFormat, oddsFormat } = useSettingsStore();
 
   // Summary stats computed from real data
   const graded = rows.filter(r => r.result !== 'pending');
@@ -231,7 +233,7 @@ const Predictions: React.FC = () => {
     if (showLoading) setLoading(true);
     try {
       const data = await api.getAllPublicPredictions({ sport: selectedSport !== 'all' ? selectedSport : undefined });
-      setRows(transformToFlatRows(data?.predictions || (Array.isArray(data) ? data : [])));
+      setRows(transformToFlatRows(data?.predictions || (Array.isArray(data) ? data : []), timezone, timeFormat));
       setLastUpdated(new Date());
     } catch (err) { console.error('Load predictions error:', err); setRows([]); }
     if (showLoading) setLoading(false);
@@ -311,11 +313,15 @@ const Predictions: React.FC = () => {
   const handleSort = (field: SortField) => { if (sortField === field) setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortField(field); setSortOrder('desc'); } };
   const handleResetSort = () => { setSortField('datetime'); setSortOrder('asc'); };
 
-  const formatLine = (value: number | string | undefined | null) => {
+  const formatLine = (value: number | string | undefined | null, betType?: string) => {
     if (value == null || value === '' || value === '-') return '-';
     const num = typeof value === 'string' ? parseFloat(value) : value;
     if (isNaN(num)) return String(value);
-    // Round to clean number: integers stay integer, halves stay .5
+    // For moneyline values, apply odds format conversion
+    if (betType === 'moneyline' || betType === 'h2h') {
+      return fmtOdds(num, oddsFormat);
+    }
+    // Spread/Total: keep as point values
     const rounded = Math.round(num * 2) / 2;  // Snap to nearest 0.5
     const display = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(1);
     return rounded > 0 ? `+${display}` : display;
@@ -413,7 +419,7 @@ const Predictions: React.FC = () => {
           />
           <Box sx={{ textAlign: 'right' }}>
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11, display: 'block' }}>{totalRows} predictions • {totalGames} games</Typography>
-            {lastUpdated && <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10, display: 'block' }}>Updated {lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' })} PST</Typography>}
+            {lastUpdated && <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10, display: 'block' }}>Updated {formatTime(lastUpdated, timezone, timeFormat)} {getTimezoneAbbr(timezone)}</Typography>}
           </Box>
         </Box>
       </Box>
@@ -481,10 +487,10 @@ const Predictions: React.FC = () => {
                             </>}
                             <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0, ...pickHighlight('away') }}>{row.away_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', borderBottom: 0 }}>{row.away_record}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_circa_current)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', borderBottom: 0 }}>{formatLine(row.away_system_open)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_circa_current, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', borderBottom: 0 }}>{formatLine(row.away_system_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current, row.bet_type)}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>
                               <Typography sx={{ fontSize: 11, fontWeight: 600, color: isNegEdge ? 'text.secondary' : 'success.main', lineHeight: 1.3 }}>{row.system_pick}</Typography>
                               <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>{row.bet_type_label}</Typography>
@@ -502,10 +508,10 @@ const Predictions: React.FC = () => {
                           <TableRow sx={{ bgcolor: tierBg }}>
                             <TableCell sx={{ py: 0.75, fontSize: 11, ...betDivider, ...pickHighlight('home') }}>{row.home_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', ...betDivider }}>{row.home_record}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, ...betDivider }}>{formatLine(row.home_circa_open)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, ...betDivider }}>{formatLine(row.home_circa_current)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', ...betDivider }}>{formatLine(row.home_system_open)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, ...betDivider }}>{formatLine(row.home_system_current)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, ...betDivider }}>{formatLine(row.home_circa_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, ...betDivider }}>{formatLine(row.home_circa_current, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', ...betDivider }}>{formatLine(row.home_system_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, ...betDivider }}>{formatLine(row.home_system_current, row.bet_type)}</TableCell>
                           </TableRow>
                         </React.Fragment>
                       );
@@ -552,12 +558,12 @@ const Predictions: React.FC = () => {
 // =============================================================================
 // Transform API response → FlatRows with opening vs current line mapping
 // =============================================================================
-const transformToFlatRows = (data: any[]): FlatRow[] => {
+const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '12h' | '24h' = '12h'): FlatRow[] => {
   if (!data || data.length === 0) return [];
   return data.map((pred: any, idx: number) => {
     const gameTime = pred.game_time ? new Date(pred.game_time) : new Date();
-    const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' });
-    const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' });
+    const dateStr = gameTime.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: tz });
+    const timeStr = gameTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: tf === '12h', timeZone: tz });
     const side = pred.predicted_side || '';
     const bt = pred.bet_type || 'spread';
     const line = pred.line_at_prediction;

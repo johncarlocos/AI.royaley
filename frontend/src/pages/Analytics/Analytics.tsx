@@ -11,6 +11,8 @@ import {
   PieChart, Pie, Cell, LineChart, Line, ReferenceLine
 } from 'recharts';
 import { api } from '../../api/client';
+import { useSettingsStore } from '../../store';
+import { formatDateTime, formatTime, getTimezoneAbbr } from '../../utils/formatters';
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Bet {
@@ -55,13 +57,8 @@ const formatPnL = (v: number) => {
   return `${sign}$${Math.abs(v).toFixed(2)}`;
 };
 
-const formatGameTime = (gt: string | null) => {
-  if (!gt) return { date: '-', time: '-' };
-  const d = new Date(gt);
-  return {
-    date: d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' }),
-    time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }),
-  };
+const formatGameTime = (gt: string | null, tz: string = 'America/New_York', tf: '12h' | '24h' = '12h') => {
+  return formatDateTime(gt, tz, tf);
 };
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -72,6 +69,7 @@ const Analytics: React.FC = () => {
   const [allBets, setAllBets] = useState<Bet[]>([]);
   const [equityCurve, setEquityCurve] = useState<{ date: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
+  const { timezone, timeFormat } = useSettingsStore();
 
   // Filters
   const [sportFilter, setSportFilter] = useState('all');
@@ -535,7 +533,7 @@ const Analytics: React.FC = () => {
             </TableHead>
             <TableBody>
               {paginatedBets.map((bet) => {
-                const { date: betDate, time: betTime } = formatGameTime(bet.game_time);
+                const { date: betDate, time: betTime } = formatGameTime(bet.game_time, timezone, timeFormat);
                 const edgeVal = (bet.edge || 0) * 100;
                 const isPending = bet.result === 'pending';
                 return (

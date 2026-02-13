@@ -10,7 +10,8 @@ import {
   Circle, CloudDownload
 } from '@mui/icons-material';
 import { api } from '../../api/client';
-import { useAlertStore } from '../../store';
+import { useAlertStore, useSettingsStore } from '../../store';
+import { formatTime, getTimezoneAbbr } from '../../utils/formatters';
 
 /* ─── Types ─────────────────────────────────────────────── */
 
@@ -92,6 +93,7 @@ const Alerts: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const { markAllRead } = useAlertStore();
+  const { timezone, timeFormat } = useSettingsStore();
 
   const loadHealth = useCallback(async () => {
     setLoading(true);
@@ -188,7 +190,7 @@ const Alerts: React.FC = () => {
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Box display="flex" alignItems="center" gap={2}>
           <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>System Health</Typography>
-          <Typography variant="caption" color="text.secondary">Updated: {lastUpdate.toLocaleTimeString()}</Typography>
+          <Typography variant="caption" color="text.secondary">Updated: {formatTime(lastUpdate, timezone, timeFormat)} {getTimezoneAbbr(timezone)}</Typography>
         </Box>
         <Box display="flex" gap={1.5}>
           <Button variant="outlined" size="small" onClick={markAllRead} sx={{ fontSize: 12, py: 0.75 }}>Mark All Read</Button>

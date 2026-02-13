@@ -9,6 +9,8 @@ import {
 import { PlayArrow, CheckCircle, Cancel, Schedule, Remove } from '@mui/icons-material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar } from 'recharts';
 import { api } from '../../api/client';
+import { useSettingsStore } from '../../store';
+import { formatDateTime, formatShortDate } from '../../utils/formatters';
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Bet {
@@ -76,19 +78,15 @@ const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
 const formatPnL = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`;
 const formatBetType = (bt: string) => bt === 'spread' ? 'Spread' : bt === 'total' ? 'Total' : bt === 'moneyline' ? 'ML' : bt;
 
-const formatGameTime = (gt: string | null) => {
-  if (!gt) return { date: '-', time: '-' };
-  const d = new Date(gt);
-  return {
-    date: d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' }),
-    time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }),
-  };
+const formatGameTime = (gt: string | null, tz: string = 'America/New_York', tf: '12h' | '24h' = '12h') => {
+  return formatDateTime(gt, tz, tf);
 };
 
 // ─── Component ───────────────────────────────────────────────────────
 const Backtesting: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+  const { timezone, timeFormat } = useSettingsStore();
 
   // All bets from API (fetched once)
   const [allBets, setAllBets] = useState<Bet[]>([]);
@@ -213,7 +211,7 @@ const Backtesting: React.FC = () => {
         if (dd > maxDrawdown) maxDrawdown = dd;
 
         const dt = b.game_time ? new Date(b.game_time) : null;
-        const label = dt ? dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' }) : '?';
+        const label = dt ? formatShortDate(dt, timezone) : '?';
         equityCurve.push({ date: label, value: Math.round(runningBalance * 100) / 100 });
       });
 
@@ -626,7 +624,7 @@ const Backtesting: React.FC = () => {
                     </TableHead>
                     <TableBody>
                       {paginatedBets.map((bet) => {
-                        const { date: betDate, time: betTime } = formatGameTime(bet.game_time);
+                        const { date: betDate, time: betTime } = formatGameTime(bet.game_time, timezone, timeFormat);
                         const edgeVal = (bet.edge || 0) * 100;
                         const isPending = bet.result === 'pending';
                         const scaledPnl = bet.profit_loss != null ? bet.profit_loss * stakeScale : null;

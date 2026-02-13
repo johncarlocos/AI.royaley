@@ -7,7 +7,9 @@ import {
 } from '@mui/material';
 import { PlayCircle, Refresh, FiberManualRecord, SportsScore } from '@mui/icons-material';
 import { api } from '../../api/client';
+import { useSettingsStore } from '../../store';
 import { SPORTS } from '../../types';
+import { formatTime, getTimezoneAbbr } from '../../utils/formatters';
 
 interface LiveGame {
   id: string;
@@ -112,6 +114,7 @@ const Live: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [sportFilter, setSportFilter] = useState('all');
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const { timezone, timeFormat } = useSettingsStore();
 
   const isDark = theme.palette.mode === 'dark';
   const headerBg = isDark ? '#1a2332' : '#f5f5f5';
@@ -167,7 +170,7 @@ const Live: React.FC = () => {
             />
           )}
           <Typography variant="caption" color="text.secondary">
-            Updated: {lastUpdate.toLocaleTimeString()}
+            Updated: {formatTime(lastUpdate, timezone, timeFormat)} {getTimezoneAbbr(timezone)}
           </Typography>
         </Box>
         <Box display="flex" gap={2}>

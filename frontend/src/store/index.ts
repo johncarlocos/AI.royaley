@@ -58,9 +58,11 @@ interface SettingsState {
   theme: 'light' | 'dark';
   oddsFormat: 'american' | 'decimal' | 'fractional';
   timezone: string;
+  timeFormat: '12h' | '24h';
   setTheme: (theme: 'light' | 'dark') => void;
   setOddsFormat: (format: 'american' | 'decimal' | 'fractional') => void;
   setTimezone: (tz: string) => void;
+  setTimeFormat: (tf: '12h' | '24h') => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -69,9 +71,11 @@ export const useSettingsStore = create<SettingsState>()(
       theme: 'dark',
       oddsFormat: 'american',
       timezone: 'America/New_York',
+      timeFormat: '12h',
       setTheme: (theme) => set({ theme }),
       setOddsFormat: (oddsFormat) => set({ oddsFormat }),
       setTimezone: (timezone) => set({ timezone }),
+      setTimeFormat: (timeFormat) => set({ timeFormat }),
     }),
     { name: 'settings-storage' }
   )

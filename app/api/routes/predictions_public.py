@@ -2011,7 +2011,7 @@ async def get_system_health(
 # Static registry: all 27 collectors with metadata
 _COLLECTOR_REGISTRY = [
     {"id": 1,  "name": "ESPN",                "key": "espn",              "url": "site.api.espn.com",            "cost": "Free",      "cost_val": 0,     "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA"], "data_type": "Injuries, lineups, scores",          "api_key_config": None,              "notes": "No key required"},
-    {"id": 2,  "name": "The Odds API",         "key": "odds_api",          "url": "api.the-odds-api.com",         "cost": "$79/mo",    "cost_val": 79,    "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA","MLS","EPL","WTA","ATP"], "data_type": "Odds from 40+ books",    "api_key_config": "ODDS_API_KEY",    "notes": "Primary odds source"},
+    {"id": 2,  "name": "The Odds API",         "key": "odds_api",          "url": "api.the-odds-api.com",         "cost": "$119/mo",   "cost_val": 119,   "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB","WNBA","MLS","EPL","WTA","ATP"], "data_type": "Odds from 40+ books",    "api_key_config": "ODDS_API_KEY",    "notes": "Primary odds source"},
     {"id": 3,  "name": "Pinnacle (RapidAPI)",  "key": "pinnacle",          "url": "pinnacle-odds.p.rapidapi.com", "cost": "$10/mo",    "cost_val": 10,    "sports": ["NFL","NBA","MLB","NHL","NCAAF","NCAAB"],  "data_type": "Sharp lines, CLV benchmark",          "api_key_config": "RAPIDAPI_KEY",    "notes": "CLV tracking benchmark"},
     {"id": 4,  "name": "Tennis Stats",          "key": "tennis",            "url": "N/A (class only)",             "cost": "Free",      "cost_val": 0,     "sports": ["ATP","WTA"],                              "data_type": "Tennis match stats",                   "api_key_config": None,              "notes": "Class only, no singleton"},
     {"id": 5,  "name": "OpenWeatherMap",        "key": "weather",           "url": "api.openweathermap.org",       "cost": "Free",      "cost_val": 0,     "sports": ["NFL","MLB","MLS"],                        "data_type": "Weather for outdoor games",            "api_key_config": "WEATHER_API_KEY", "notes": "1000 calls/day free tier"},
@@ -2089,15 +2089,11 @@ async def get_data_collectors(
         key_ok = _key_configured(c["api_key_config"])
         is_registered = c["key"] in registered
 
-        # Determine status
-        if not key_ok:
-            status = "no_key"
-        elif c["notes"] and "BROKEN" in c["notes"]:
-            status = "broken"
-        elif is_registered:
-            status = "active"
+        # Status: active (working) or ready (needs setup)
+        if not key_ok or (c["notes"] and "BROKEN" in c["notes"]):
+            status = "ready"
         else:
-            status = "available"  # Key configured but not registered in manager
+            status = "active"
 
         # Get archive info for this collector
         archive_info = archive_stats.get(c["key"], {"files": 0, "size_mb": 0})
@@ -2133,9 +2129,9 @@ async def get_data_collectors(
     # DB table counts for key data
     db_counts = {}
     for table, label in [
-        ("games", "Historical Games"),
+        ("games", "Games"),
         ("upcoming_games", "Upcoming Games"),
-        ("upcoming_odds", "Odds Lines"),
+        ("upcoming_odds", "Odds"),
         ("predictions", "Predictions"),
         ("ml_models", "ML Models"),
         ("player_props", "Player Props"),
@@ -2152,13 +2148,11 @@ async def get_data_collectors(
     total_cost = sum(c["cost_val"] for c in _COLLECTOR_REGISTRY)
     active_cost = sum(
         c["cost_val"] for c in _COLLECTOR_REGISTRY
-        if _key_configured(c["api_key_config"]) and c["key"] in registered
+        if _key_configured(c["api_key_config"]) and not (c["notes"] and "BROKEN" in c["notes"])
     )
     status_counts = {
         "active": sum(1 for c in collectors if c["status"] == "active"),
-        "available": sum(1 for c in collectors if c["status"] == "available"),
-        "no_key": sum(1 for c in collectors if c["status"] == "no_key"),
-        "broken": sum(1 for c in collectors if c["status"] == "broken"),
+        "ready": sum(1 for c in collectors if c["status"] == "ready"),
     }
     free_count = sum(1 for c in _COLLECTOR_REGISTRY if c["cost_val"] == 0)
     paid_count = sum(1 for c in _COLLECTOR_REGISTRY if c["cost_val"] > 0)

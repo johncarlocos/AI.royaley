@@ -53,7 +53,7 @@ interface Collector {
   name: string;
   key: string;
   url: string;
-  status: 'active' | 'available' | 'no_key' | 'broken';
+  status: 'active' | 'ready';
   api_key_configured: boolean;
   registered: boolean;
   cost: string;
@@ -70,7 +70,7 @@ interface DataCollectorsResponse {
   collectors: Collector[];
   summary: {
     total: number;
-    status_counts: { active: number; available: number; no_key: number; broken: number };
+    status_counts: { active: number; ready: number };
     free_count: number;
     paid_count: number;
     total_monthly_cost: string;
@@ -159,18 +159,14 @@ const Alerts: React.FC = () => {
   const statusColor = (s: string) => {
     switch (s) {
       case 'active': return 'success';
-      case 'available': return 'info';
-      case 'no_key': return 'warning';
-      case 'broken': return 'error';
+      case 'ready': return 'info';
       default: return 'default';
     }
   };
   const statusLabel = (s: string) => {
     switch (s) {
       case 'active': return 'Active';
-      case 'available': return 'Ready';
-      case 'no_key': return 'No Key';
-      case 'broken': return 'Broken';
+      case 'ready': return 'Ready';
       default: return s;
     }
   };
@@ -299,9 +295,9 @@ const Alerts: React.FC = () => {
             {[
               { label: 'Total Collectors', value: dcData.summary.total, color: 'text.primary' },
               { label: 'Active', value: dcData.summary.status_counts.active, color: 'success.main' },
-              { label: 'Ready', value: dcData.summary.status_counts.available, color: 'info.main' },
-              { label: 'No Key', value: dcData.summary.status_counts.no_key, color: 'warning.main' },
+              { label: 'Ready', value: dcData.summary.status_counts.ready, color: 'info.main' },
               { label: 'Free / Paid', value: `${dcData.summary.free_count}/${dcData.summary.paid_count}`, color: 'text.primary' },
+              { label: 'Sports', value: dcData.summary.sports_count, color: 'text.primary' },
               { label: 'Monthly Cost', value: dcData.summary.active_monthly_cost, color: 'error.main' },
             ].map((s, idx) => (
               <Grid item xs={4} sm={2} key={idx}>

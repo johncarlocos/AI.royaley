@@ -72,8 +72,7 @@ const Settings: React.FC = () => {
             <Tab icon={<Casino sx={{ fontSize: 18 }} />} label="Betting" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
             <Tab icon={<Notifications sx={{ fontSize: 18 }} />} label="Notifications" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
             <Tab icon={<Psychology sx={{ fontSize: 18 }} />} label="ML Models" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
-            <Tab icon={<Storage sx={{ fontSize: 18 }} />} label="Data Collection" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
-            <Tab icon={<Api sx={{ fontSize: 18 }} />} label="Data Pipeline" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
+            <Tab icon={<Storage sx={{ fontSize: 18 }} />} label="Data Pipeline" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
             <Tab icon={<Security sx={{ fontSize: 18 }} />} label="Security" iconPosition="start" sx={{ fontSize: 13, minHeight: 48 }} />
           </Tabs>
         </Box>
@@ -724,26 +723,189 @@ const Settings: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tab} index={4}>
-          <Alert severity="info" sx={{ mb: 2, fontSize: 13 }}>Monitor data completeness per sport. Target: 95%+ for accurate predictions.</Alert>
-          <TableContainer><Table size="small"><TableHead><TableRow><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Sport</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Completeness</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Complete</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Missing</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Bad Data</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Gaps</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell></TableRow></TableHead><TableBody>
-            {[{ sport: 'NBA', complete: 98.5, missing: 1.2, bad: 0.3, gaps: 0, status: 'excellent' },{ sport: 'NFL', complete: 97.2, missing: 2.0, bad: 0.8, gaps: 0, status: 'excellent' },{ sport: 'MLB', complete: 94.1, missing: 4.5, bad: 1.4, gaps: 2, status: 'good' },{ sport: 'NHL', complete: 96.8, missing: 2.5, bad: 0.7, gaps: 0, status: 'excellent' },{ sport: 'NCAAB', complete: 89.3, missing: 8.2, bad: 2.5, gaps: 5, status: 'warning' },{ sport: 'NCAAF', complete: 91.5, missing: 6.0, bad: 2.5, gaps: 3, status: 'warning' }].map((row) => <TableRow key={row.sport} sx={{ '& td': { fontSize: 13 } }}><TableCell><Chip label={row.sport} size="small" sx={{ fontSize: 12, height: 20 }} /></TableCell><TableCell><Box display="flex" alignItems="center" gap={1}><LinearProgress variant="determinate" value={row.complete} sx={{ flex: 1, height: 6, borderRadius: 3 }} /><Typography variant="caption">{row.complete}%</Typography></Box></TableCell><TableCell align="center" sx={{ color: 'success.main' }}>{row.complete}%</TableCell><TableCell align="center" sx={{ color: row.missing > 5 ? 'error.main' : 'warning.main' }}>{row.missing}%</TableCell><TableCell align="center" sx={{ color: row.bad > 1 ? 'error.main' : 'inherit' }}>{row.bad}%</TableCell><TableCell align="center">{row.gaps}</TableCell><TableCell><Chip label={row.status} size="small" color={row.status === 'excellent' ? 'success' : row.status === 'good' ? 'primary' : 'warning'} sx={{ fontSize: 12, height: 20 }} /></TableCell></TableRow>)}
-          </TableBody></Table></TableContainer>
-          <Box mt={2}><Button variant="outlined" size="small" startIcon={<Refresh />} sx={{ mr: 1, fontSize: 13 }}>Re-fetch Missing Data</Button><Button variant="outlined" size="small" color="warning" sx={{ fontSize: 13 }}>View All Gaps</Button></Box>
+          {/* ── Section 1: Data Completeness per Sport ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Storage sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Data Completeness by Sport</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Target: 95%+ completeness for accurate predictions. Sports below threshold may produce lower-quality signals.
+            </Typography>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Sport</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Completeness</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Complete</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Missing</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Bad Data</TableCell>
+                    <TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Gaps</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {[
+                    { sport: 'NBA', complete: 98.5, missing: 1.2, bad: 0.3, gaps: 0, status: 'excellent' },
+                    { sport: 'NFL', complete: 97.2, missing: 2.0, bad: 0.8, gaps: 0, status: 'excellent' },
+                    { sport: 'MLB', complete: 94.1, missing: 4.5, bad: 1.4, gaps: 2, status: 'good' },
+                    { sport: 'NHL', complete: 96.8, missing: 2.5, bad: 0.7, gaps: 0, status: 'excellent' },
+                    { sport: 'NCAAB', complete: 89.3, missing: 8.2, bad: 2.5, gaps: 5, status: 'warning' },
+                    { sport: 'NCAAF', complete: 91.5, missing: 6.0, bad: 2.5, gaps: 3, status: 'warning' },
+                    { sport: 'WNBA', complete: 93.0, missing: 5.5, bad: 1.5, gaps: 1, status: 'good' },
+                    { sport: 'CFL', complete: 87.5, missing: 9.0, bad: 3.5, gaps: 4, status: 'warning' },
+                    { sport: 'ATP', complete: 95.8, missing: 3.0, bad: 1.2, gaps: 0, status: 'excellent' },
+                    { sport: 'WTA', complete: 94.5, missing: 4.0, bad: 1.5, gaps: 1, status: 'good' },
+                  ].map((row) => (
+                    <TableRow key={row.sport} sx={{ '& td': { fontSize: 13 } }}>
+                      <TableCell><Chip label={row.sport} size="small" sx={{ fontSize: 12, height: 22, fontWeight: 500 }} /></TableCell>
+                      <TableCell>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <LinearProgress variant="determinate" value={row.complete}
+                            color={row.complete >= 95 ? 'success' : row.complete >= 90 ? 'primary' : 'warning'}
+                            sx={{ flex: 1, height: 6, borderRadius: 3 }} />
+                          <Typography variant="caption" sx={{ minWidth: 40, textAlign: 'right' }}>{row.complete}%</Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell align="center" sx={{ color: 'success.main' }}>{row.complete}%</TableCell>
+                      <TableCell align="center" sx={{ color: row.missing > 5 ? 'error.main' : 'warning.main' }}>{row.missing}%</TableCell>
+                      <TableCell align="center" sx={{ color: row.bad > 1 ? 'error.main' : 'inherit' }}>{row.bad}%</TableCell>
+                      <TableCell align="center">{row.gaps}</TableCell>
+                      <TableCell>
+                        <Chip label={row.status} size="small"
+                          color={row.status === 'excellent' ? 'success' : row.status === 'good' ? 'primary' : 'warning'}
+                          sx={{ fontSize: 12, height: 22 }} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            <Box mt={2} display="flex" gap={1}>
+              <Button variant="outlined" size="small" startIcon={<Refresh />} sx={{ fontSize: 13 }}>Re-fetch Missing Data</Button>
+              <Button variant="outlined" size="small" color="warning" sx={{ fontSize: 13 }}>View All Gaps</Button>
+            </Box>
+          </Box>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* ── Section 2: API Sources ── */}
+          <Box sx={{ mb: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Api sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>API Sources</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Live connections to odds providers, scores feeds, and stats APIs.
+            </Typography>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Source</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Calls / Limit</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Reset</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Latency</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {[
+                    { name: 'TheOddsAPI', status: 'active', calls: 450, limit: 500, reset: '23h 15m', latency: '120ms' },
+                    { name: 'Pinnacle RapidAPI', status: 'slow', calls: 890, limit: 1000, reset: '5h 30m', latency: '850ms' },
+                    { name: 'ESPN Hidden API', status: 'active', calls: 0, limit: 0, reset: '-', latency: '95ms' },
+                    { name: 'TheSportsDB', status: 'active', calls: 120, limit: 0, reset: '-', latency: '180ms' },
+                    { name: 'BallDontLie', status: 'active', calls: 45, limit: 300, reset: '12h 00m', latency: '110ms' },
+                    { name: 'Sportradar', status: 'error', calls: 0, limit: 100, reset: '-', latency: 'Timeout' },
+                  ].map((src) => (
+                    <TableRow key={src.name} sx={{ '& td': { fontSize: 13 } }}>
+                      <TableCell><Typography variant="body2" fontWeight={500}>{src.name}</Typography></TableCell>
+                      <TableCell>
+                        <Chip label={src.status} size="small"
+                          color={src.status === 'active' ? 'success' : src.status === 'slow' ? 'warning' : 'error'}
+                          sx={{ fontSize: 12, height: 22 }} />
+                      </TableCell>
+                      <TableCell>
+                        {src.limit > 0 ? (
+                          <Box display="flex" alignItems="center" gap={1}>
+                            <LinearProgress variant="determinate" value={(src.calls / src.limit) * 100}
+                              color={(src.calls / src.limit) > 0.9 ? 'error' : (src.calls / src.limit) > 0.7 ? 'warning' : 'primary'}
+                              sx={{ flex: 1, height: 5, borderRadius: 3 }} />
+                            <Typography variant="caption" sx={{ minWidth: 55, textAlign: 'right' }}>{src.calls}/{src.limit}</Typography>
+                          </Box>
+                        ) : 'Unlimited'}
+                      </TableCell>
+                      <TableCell>{src.reset}</TableCell>
+                      <TableCell sx={{ color: src.latency === 'Timeout' ? 'error.main' : parseInt(src.latency) > 500 ? 'warning.main' : 'success.main' }}>
+                        {src.latency}
+                      </TableCell>
+                      <TableCell>
+                        <Button size="small" sx={{ fontSize: 12, minWidth: 0 }}>Config</Button>
+                        {src.status === 'error' && <Button size="small" color="warning" sx={{ fontSize: 12, minWidth: 0, ml: 0.5 }}>Retry</Button>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* ── Section 3: Web Scrapers ── */}
+          <Box>
+            <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+              <Hub sx={{ fontSize: 18, color: 'primary.main' }} />
+              <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 15 }}>Web Scrapers</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, mb: 1.5 }}>
+              Automated data collection from sports reference sites, injury reports, and line history.
+            </Typography>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Scraper</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Last Run</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Success Rate</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Records</TableCell>
+                    <TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {[
+                    { name: 'ESPN Injuries', status: 'active', lastRun: '5 min ago', success: 100, records: 145 },
+                    { name: 'Pro-Football-Ref', status: 'active', lastRun: '1 hour ago', success: 98, records: 2450 },
+                    { name: 'Basketball-Ref', status: 'slow', lastRun: '2 hours ago', success: 85, records: 1200 },
+                    { name: 'Baseball-Ref', status: 'active', lastRun: '3 hours ago', success: 97, records: 1850 },
+                    { name: 'Hockey-Ref', status: 'active', lastRun: '1 hour ago', success: 99, records: 980 },
+                    { name: 'Covers.com', status: 'active', lastRun: '10 min ago', success: 100, records: 50 },
+                  ].map((scraper) => (
+                    <TableRow key={scraper.name} sx={{ '& td': { fontSize: 13 } }}>
+                      <TableCell><Typography variant="body2" fontWeight={500}>{scraper.name}</Typography></TableCell>
+                      <TableCell>
+                        <Chip label={scraper.status} size="small"
+                          color={scraper.status === 'active' ? 'success' : 'warning'}
+                          sx={{ fontSize: 12, height: 22 }} />
+                      </TableCell>
+                      <TableCell>{scraper.lastRun}</TableCell>
+                      <TableCell sx={{ color: scraper.success >= 95 ? 'success.main' : 'warning.main' }}>{scraper.success}%</TableCell>
+                      <TableCell>{scraper.records.toLocaleString()}</TableCell>
+                      <TableCell>
+                        <Button size="small" startIcon={<PlayArrow sx={{ fontSize: 14 }} />} sx={{ fontSize: 12 }}>Run Now</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
         </TabPanel>
 
         <TabPanel value={tab} index={5}>
-          <Alert severity="info" sx={{ mb: 2, fontSize: 13 }}>Manage all data sources: APIs, Scrapers, and WebSockets.</Alert>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>API Sources</Typography>
-          <TableContainer sx={{ mb: 2 }}><Table size="small"><TableHead><TableRow><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Source</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Calls / Limit</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Reset</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Latency</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell></TableRow></TableHead><TableBody>
-            {[{ name: 'TheOddsAPI', status: 'active', calls: 450, limit: 500, reset: '23h 15m', latency: '120ms' },{ name: 'Pinnacle RapidAPI', status: 'slow', calls: 890, limit: 1000, reset: '5h 30m', latency: '850ms' },{ name: 'ESPN Hidden API', status: 'active', calls: 0, limit: 0, reset: '-', latency: '95ms' },{ name: 'Sportradar', status: 'error', calls: 0, limit: 100, reset: '-', latency: 'Timeout' }].map((api) => <TableRow key={api.name} sx={{ '& td': { fontSize: 13 } }}><TableCell><Typography variant="body2" fontWeight={500}>{api.name}</Typography></TableCell><TableCell><Chip label={api.status} size="small" color={api.status === 'active' ? 'success' : api.status === 'slow' ? 'warning' : 'error'} sx={{ fontSize: 12, height: 20 }} /></TableCell><TableCell>{api.limit > 0 ? <Box display="flex" alignItems="center" gap={1}><LinearProgress variant="determinate" value={(api.calls / api.limit) * 100} sx={{ flex: 1, height: 5, borderRadius: 3 }} /><Typography variant="caption">{api.calls}/{api.limit}</Typography></Box> : 'Unlimited'}</TableCell><TableCell>{api.reset}</TableCell><TableCell sx={{ color: api.latency === 'Timeout' ? 'error.main' : parseInt(api.latency) > 500 ? 'warning.main' : 'success.main' }}>{api.latency}</TableCell><TableCell><Button size="small" sx={{ fontSize: 12 }}>Config</Button>{api.status === 'error' && <Button size="small" color="warning" sx={{ fontSize: 12 }}>Retry</Button>}</TableCell></TableRow>)}
-          </TableBody></Table></TableContainer>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>Web Scrapers</Typography>
-          <TableContainer><Table size="small"><TableHead><TableRow><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Scraper</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Status</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Last Run</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Success Rate</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Records</TableCell><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Actions</TableCell></TableRow></TableHead><TableBody>
-            {[{ name: 'ESPN Injuries', status: 'active', lastRun: '5 min ago', success: 100, records: 145 },{ name: 'Pro-Football-Ref', status: 'active', lastRun: '1 hour ago', success: 98, records: 2450 },{ name: 'Basketball-Ref', status: 'slow', lastRun: '2 hours ago', success: 85, records: 1200 },{ name: 'Covers.com', status: 'active', lastRun: '10 min ago', success: 100, records: 50 }].map((scraper) => <TableRow key={scraper.name} sx={{ '& td': { fontSize: 13 } }}><TableCell><Typography variant="body2" fontWeight={500}>{scraper.name}</Typography></TableCell><TableCell><Chip label={scraper.status} size="small" color={scraper.status === 'active' ? 'success' : 'warning'} sx={{ fontSize: 12, height: 20 }} /></TableCell><TableCell>{scraper.lastRun}</TableCell><TableCell sx={{ color: scraper.success >= 95 ? 'success.main' : 'warning.main' }}>{scraper.success}%</TableCell><TableCell>{scraper.records}</TableCell><TableCell><Button size="small" startIcon={<PlayArrow sx={{ fontSize: 14 }} />} sx={{ fontSize: 12 }}>Run Now</Button></TableCell></TableRow>)}
-          </TableBody></Table></TableContainer>
-        </TabPanel>
-
-        <TabPanel value={tab} index={6}>
           <Grid container spacing={2}>
             <Grid item xs={12}><Typography variant="subtitle2" fontWeight={600} gutterBottom sx={{ fontSize: 14 }}>Account</Typography><TextField fullWidth size="small" label="Email" defaultValue="admin@example.com" disabled sx={{ mb: 1 }} InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid>
             <Grid item xs={12}><Typography variant="subtitle2" fontWeight={600} gutterBottom sx={{ fontSize: 14 }}>Change Password</Typography><Grid container spacing={2}><Grid item xs={12} sm={4}><TextField fullWidth size="small" label="Current Password" type="password" InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid><Grid item xs={12} sm={4}><TextField fullWidth size="small" label="New Password" type="password" InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid><Grid item xs={12} sm={4}><TextField fullWidth size="small" label="Confirm Password" type="password" InputLabelProps={{ sx: { fontSize: 13 } }} inputProps={{ style: { fontSize: 13 } }} /></Grid></Grid></Grid>

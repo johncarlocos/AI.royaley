@@ -1303,19 +1303,19 @@ async def get_live_games(
             -- Get consensus spread/total from Pinnacle (preferred) or average
             SELECT
                 upcoming_game_id,
-                -- Spread (from 'spreads' bet_type)
+                -- Spread
                 COALESCE(
-                    MAX(CASE WHEN bet_type = 'spreads' AND sportsbook_key = 'pinnacle' THEN home_line END),
-                    AVG(CASE WHEN bet_type = 'spreads' THEN home_line END)
+                    MAX(CASE WHEN bet_type = 'spread' AND sportsbook_key = 'pinnacle' THEN home_line END),
+                    AVG(CASE WHEN bet_type = 'spread' THEN home_line END)
                 ) as home_spread,
                 COALESCE(
-                    MAX(CASE WHEN bet_type = 'spreads' AND sportsbook_key = 'pinnacle' THEN away_line END),
-                    AVG(CASE WHEN bet_type = 'spreads' THEN away_line END)
+                    MAX(CASE WHEN bet_type = 'spread' AND sportsbook_key = 'pinnacle' THEN away_line END),
+                    AVG(CASE WHEN bet_type = 'spread' THEN away_line END)
                 ) as away_spread,
-                -- Total (from 'totals' bet_type)
+                -- Total
                 COALESCE(
-                    MAX(CASE WHEN bet_type = 'totals' AND sportsbook_key = 'pinnacle' THEN total END),
-                    AVG(CASE WHEN bet_type = 'totals' THEN total END)
+                    MAX(CASE WHEN bet_type = 'total' AND sportsbook_key = 'pinnacle' THEN total END),
+                    AVG(CASE WHEN bet_type = 'total' THEN total END)
                 ) as total_line
             FROM upcoming_odds
             GROUP BY upcoming_game_id
@@ -1434,9 +1434,9 @@ async def get_live_games(
                 home_spread_val, away_spread_val, total_val
             )
             bet_type_display = {
-                "spreads": "Spread",
-                "totals": "Total",
-                "h2h": "Moneyline",
+                "spreads": "Spread", "spread": "Spread",
+                "totals": "Total", "total": "Total",
+                "h2h": "Moneyline", "moneyline": "Moneyline",
             }.get(row.pred_bet_type, row.pred_bet_type or "")
 
             prediction = {
@@ -1520,28 +1520,57 @@ def _build_pick_label(
         return ""
 
     side_lower = (side or "").lower()
+    bt = (bet_type or "").lower()
 
-    if bet_type == "spreads":
+    # Short team names (last word)
+    home_short = home_name.split()[-1] if home_name else "Home"
+    away_short = away_name.split()[-1] if away_name else "Away"
+
+    if bt in ("spread", "spreads"):
         if side_lower == "home":
-            spread_str = f"+{home_spread}" if home_spread and home_spread > 0 else str(home_spread or "")
-            # Use short team name (last word)
-            team_short = home_name.split()[-1] if home_name else "Home"
-            return f"{team_short} {spread_str}"
+            spread_val = home_spread
+            if spread_val is not None:
+                spread_str = f"+{spread_val}" if spread_val > 0 else str(spread_val)
+            elif line is not None:
+                try:
+                    line_f = float(line)
+                    spread_str = f"+{line_f}" if line_f > 0 else str(line_f)
+                except (ValueError, TypeError):
+                    spread_str = ""
+            else:
+                spread_str = ""
+            return f"{home_short} {spread_str}".strip()
         else:
-            spread_str = f"+{away_spread}" if away_spread and away_spread > 0 else str(away_spread or "")
-            team_short = away_name.split()[-1] if away_name else "Away"
-            return f"{team_short} {spread_str}"
+            spread_val = away_spread
+            if spread_val is not None:
+                spread_str = f"+{spread_val}" if spread_val > 0 else str(spread_val)
+            elif line is not None:
+                try:
+                    line_f = float(line)
+                    spread_str = f"+{line_f}" if line_f > 0 else str(line_f)
+                except (ValueError, TypeError):
+                    spread_str = ""
+            else:
+                spread_str = ""
+            return f"{away_short} {spread_str}".strip()
 
-    elif bet_type == "totals":
+    elif bt in ("total", "totals"):
+        # Use total_val from odds, fallback to line from prediction
+        display_total = total_val
+        if display_total is None and line is not None:
+            try:
+                display_total = float(line)
+            except (ValueError, TypeError):
+                display_total = None
         if side_lower in ("over", "o"):
-            return f"Over {total_val}" if total_val else "Over"
+            return f"Over {display_total}" if display_total else "Over"
         else:
-            return f"Under {total_val}" if total_val else "Under"
+            return f"Under {display_total}" if display_total else "Under"
 
-    elif bet_type == "h2h":
+    elif bt in ("moneyline", "h2h"):
         if side_lower == "home":
-            return home_name.split()[-1] if home_name else "Home"
+            return f"{home_short} ML"
         else:
-            return away_name.split()[-1] if away_name else "Away"
+            return f"{away_short} ML"
 
     return side

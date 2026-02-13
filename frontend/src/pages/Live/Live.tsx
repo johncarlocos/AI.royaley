@@ -263,8 +263,8 @@ const Live: React.FC = () => {
                       <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>
                         {game.prediction ? `${(game.prediction.probability * 100).toFixed(0)}%` : '-'}
                       </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', color: game.prediction && game.prediction.edge > 0 ? 'success.main' : 'text.secondary' }}>
-                        {game.prediction ? `+${game.prediction.edge.toFixed(1)}%` : '-'}
+                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', color: game.prediction && game.prediction.edge >= 0.1 ? 'success.main' : 'text.secondary' }}>
+                        {game.prediction ? (game.prediction.edge >= 0.1 ? `+${game.prediction.edge.toFixed(1)}%` : '-') : '-'}
                       </TableCell>
                       <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', borderRight: 'none' }}>
                         {game.prediction ? <TierBadge tier={game.prediction.tier} /> : '-'}

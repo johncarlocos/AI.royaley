@@ -1,18 +1,21 @@
-// src/pages/Alerts/Alerts.tsx - System Health Dashboard (Card-based, No Scroll)
-import React, { useState, useEffect } from 'react';
+// src/pages/Alerts/Alerts.tsx - System Health Dashboard (Real Data)
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Card, Typography, Grid, Chip, Button, LinearProgress, useTheme, Tooltip
 } from '@mui/material';
-import { CheckCircle, Warning, Error, Info, Refresh, Storage, Memory, Speed, Cloud, Psychology, Api, DataObject, MonitorHeart, Dns, Security, Timer, TrendingUp, Circle } from '@mui/icons-material';
+import {
+  CheckCircle, Warning, Error as ErrorIcon, Info, Refresh, Storage, Memory, Speed,
+  Cloud, Psychology, Api, DataObject, MonitorHeart, Dns, Security, Timer, TrendingUp, Circle
+} from '@mui/icons-material';
 import { api } from '../../api/client';
 import { useAlertStore } from '../../store';
 
-interface HealthIndicator {
+interface HealthComponent {
   name: string;
+  icon: string;
   status: 'good' | 'warning' | 'error';
   value: string;
   details?: string;
-  icon: string;
 }
 
 interface AlertItem {
@@ -22,28 +25,61 @@ interface AlertItem {
   timestamp: string;
 }
 
+interface SystemHealthResponse {
+  health_score: number;
+  components: HealthComponent[];
+  alerts: AlertItem[];
+  quick_stats: {
+    uptime: string;
+    cpu_percent: number;
+    cpu_cores: number;
+    memory_percent: number;
+    memory_used_gb: number;
+    memory_total_gb: number;
+    disk_percent: number;
+    disk_used_gb: number;
+    disk_total_gb: number;
+  };
+  counts: {
+    good: number;
+    warning: number;
+    error: number;
+    total: number;
+  };
+  updated_at: string;
+}
+
 const Alerts: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  const [indicators, setIndicators] = useState<HealthIndicator[]>([]);
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [data, setData] = useState<SystemHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [overallHealth] = useState(85);
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const { markAllRead } = useAlertStore();
+
+  const loadHealth = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await api.getSystemHealth();
+      setData(resp);
+      if (resp.updated_at) setLastUpdate(new Date(resp.updated_at));
+    } catch {
+      // Keep existing data on error
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
     loadHealth();
     const interval = setInterval(loadHealth, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadHealth]);
 
-  const loadHealth = async () => {
-    setLoading(true);
-    try { await api.getHealth(); } catch { /* ignore */ }
-    setIndicators(generateDemoIndicators());
-    setAlerts(generateDemoAlerts());
-    setLoading(false);
-  };
+  const healthScore = data?.health_score ?? 0;
+  const components = data?.components ?? [];
+  const alerts = data?.alerts ?? [];
+  const counts = data?.counts ?? { good: 0, warning: 0, error: 0, total: 0 };
+  const qs = data?.quick_stats;
 
   const getIcon = (iconName: string) => {
     const iconMap: Record<string, React.ReactNode> = {
@@ -64,161 +100,160 @@ const Alerts: React.FC = () => {
 
   const getAlertIcon = (type: string) => {
     switch (type) {
-      case 'error': return <Error sx={{ fontSize: 18, color: 'error.main' }} />;
+      case 'error': return <ErrorIcon sx={{ fontSize: 18, color: 'error.main' }} />;
       case 'warning': return <Warning sx={{ fontSize: 18, color: 'warning.main' }} />;
       case 'success': return <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />;
       default: return <Info sx={{ fontSize: 18, color: 'info.main' }} />;
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'good': return 'success.main';
-      case 'warning': return 'warning.main';
-      case 'error': return 'error.main';
-      default: return 'text.secondary';
-    }
-  };
-
-  const goodCount = indicators.filter(i => i.status === 'good').length;
-  const warningCount = indicators.filter(i => i.status === 'warning').length;
-  const errorCount = indicators.filter(i => i.status === 'error').length;
-
-  // Quick stats data
-  const quickStats = [
-    { label: 'Uptime', value: '99.9%', sub: '30 days', color: 'success.main' },
-    { label: 'API Calls', value: '12.4K', sub: 'Today', color: 'text.primary' },
-    { label: 'Latency', value: '45ms', sub: 'p95: 89ms', color: 'success.main' },
-    { label: 'CPU', value: '34%', sub: '24 cores', color: 'text.primary' },
-    { label: 'Memory', value: '82%', sub: '420/512 GB', color: 'warning.main' },
-    { label: 'GPU', value: '28%', sub: 'RTX 6000', color: 'success.main' },
-  ];
+  const quickStats = qs ? [
+    { label: 'Uptime', value: qs.uptime, sub: 'since restart', color: 'success.main' },
+    { label: 'CPU', value: `${qs.cpu_percent}%`, sub: `${qs.cpu_cores} cores`, color: qs.cpu_percent >= 80 ? 'warning.main' : qs.cpu_percent >= 90 ? 'error.main' : 'success.main' },
+    { label: 'Memory', value: `${qs.memory_percent}%`, sub: `${qs.memory_used_gb}/${qs.memory_total_gb} GB`, color: qs.memory_percent >= 80 ? 'warning.main' : qs.memory_percent >= 90 ? 'error.main' : 'text.primary' },
+    { label: 'Disk', value: `${qs.disk_percent}%`, sub: `${qs.disk_used_gb}/${qs.disk_total_gb} GB`, color: qs.disk_percent >= 80 ? 'warning.main' : qs.disk_percent >= 90 ? 'error.main' : 'text.primary' },
+    { label: 'Components', value: `${counts.total}`, sub: `${counts.good} healthy`, color: counts.error > 0 ? 'error.main' : counts.warning > 0 ? 'warning.main' : 'success.main' },
+    { label: 'Health', value: `${healthScore}%`, sub: 'overall', color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main' },
+  ] : [];
 
   return (
     <Box>
       {/* Header */}
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>System Health</Typography>
+        <Box display="flex" alignItems="center" gap={2}>
+          <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>System Health</Typography>
+          <Typography variant="caption" color="text.secondary">
+            Updated: {lastUpdate.toLocaleTimeString()}
+          </Typography>
+        </Box>
         <Box display="flex" gap={1.5}>
           <Button variant="outlined" size="small" onClick={markAllRead} sx={{ fontSize: 12, py: 0.75 }}>Mark All Read</Button>
           <Button variant="outlined" size="small" startIcon={<Refresh sx={{ fontSize: 16 }} />} onClick={loadHealth} sx={{ fontSize: 12, py: 0.75 }}>Refresh</Button>
         </Box>
       </Box>
 
-      {loading && <LinearProgress sx={{ mb: 1.5, height: 3 }} />}
+      {loading && !data && <LinearProgress sx={{ mb: 1.5, height: 3 }} />}
 
-      {/* Overall Health Bar - Compact */}
+      {/* Overall Health Bar */}
       <Card sx={{ mb: 2 }}>
         <Box sx={{ px: 2.5, py: 1.5 }}>
           <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
             <Box display="flex" alignItems="center" gap={1.5}>
-              <Circle sx={{ fontSize: 12, color: overallHealth >= 80 ? 'success.main' : overallHealth >= 60 ? 'warning.main' : 'error.main' }} />
+              <Circle sx={{ fontSize: 12, color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main' }} />
               <Typography sx={{ fontSize: 15, fontWeight: 600 }}>Overall System Health</Typography>
             </Box>
             <Box display="flex" alignItems="center" gap={2}>
               <Box display="flex" alignItems="center" gap={0.5}>
                 <CheckCircle sx={{ fontSize: 14, color: 'success.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'success.main' }}>{goodCount}</Typography>
+                <Typography sx={{ fontSize: 12, color: 'success.main' }}>{counts.good}</Typography>
               </Box>
               <Box display="flex" alignItems="center" gap={0.5}>
                 <Warning sx={{ fontSize: 14, color: 'warning.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'warning.main' }}>{warningCount}</Typography>
+                <Typography sx={{ fontSize: 12, color: 'warning.main' }}>{counts.warning}</Typography>
               </Box>
               <Box display="flex" alignItems="center" gap={0.5}>
-                <Error sx={{ fontSize: 14, color: 'error.main' }} />
-                <Typography sx={{ fontSize: 12, color: 'error.main' }}>{errorCount}</Typography>
+                <ErrorIcon sx={{ fontSize: 14, color: 'error.main' }} />
+                <Typography sx={{ fontSize: 12, color: 'error.main' }}>{counts.error}</Typography>
               </Box>
-              <Typography sx={{ fontSize: 18, fontWeight: 700, color: overallHealth >= 80 ? 'success.main' : overallHealth >= 60 ? 'warning.main' : 'error.main', ml: 1 }}>
-                {overallHealth}%
+              <Typography sx={{ fontSize: 18, fontWeight: 700, color: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main', ml: 1 }}>
+                {healthScore}%
               </Typography>
             </Box>
           </Box>
-          <LinearProgress 
-            variant="determinate" 
-            value={overallHealth} 
-            sx={{ 
-              height: 6, 
-              borderRadius: 3, 
+          <LinearProgress
+            variant="determinate"
+            value={healthScore}
+            sx={{
+              height: 6,
+              borderRadius: 3,
               bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-              '& .MuiLinearProgress-bar': { 
-                bgcolor: overallHealth >= 80 ? 'success.main' : overallHealth >= 60 ? 'warning.main' : 'error.main',
+              '& .MuiLinearProgress-bar': {
+                bgcolor: healthScore >= 80 ? 'success.main' : healthScore >= 60 ? 'warning.main' : 'error.main',
                 borderRadius: 3
               }
-            }} 
+            }}
           />
         </Box>
       </Card>
 
       {/* Quick Stats Row */}
-      <Grid container spacing={1.5} mb={2}>
-        {quickStats.map((stat, idx) => (
-          <Grid item xs={4} sm={2} key={idx}>
-            <Card sx={{ textAlign: 'center', py: 1.5, px: 1 }}>
-              <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{stat.label}</Typography>
-              <Typography sx={{ fontSize: 20, fontWeight: 700, color: stat.color }}>{stat.value}</Typography>
-              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{stat.sub}</Typography>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
+      {quickStats.length > 0 && (
+        <Grid container spacing={1.5} mb={2}>
+          {quickStats.map((stat, idx) => (
+            <Grid item xs={4} sm={2} key={idx}>
+              <Card sx={{ textAlign: 'center', py: 1.5, px: 1 }}>
+                <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{stat.label}</Typography>
+                <Typography sx={{ fontSize: 20, fontWeight: 700, color: stat.color }}>{stat.value}</Typography>
+                <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{stat.sub}</Typography>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      )}
 
       <Grid container spacing={2}>
-        {/* System Components - Card Grid */}
+        {/* System Components */}
         <Grid item xs={12} md={7}>
           <Card sx={{ height: '100%' }}>
             <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
-              <Typography sx={{ fontSize: 16, fontWeight: 600 }}>System Components</Typography>
+              <Typography sx={{ fontSize: 16, fontWeight: 600 }}>System Components ({components.length})</Typography>
             </Box>
             <Box sx={{ p: 1.5 }}>
-              <Grid container spacing={1}>
-                {indicators.map((ind, idx) => (
-                  <Grid item xs={6} sm={4} md={3} key={idx}>
-                    <Tooltip title={ind.details || ''} arrow>
-                      <Box sx={{ 
-                        p: 1.25, 
-                        borderRadius: 2, 
-                        bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                        border: 1,
-                        borderColor: ind.status === 'error' ? 'error.main' : ind.status === 'warning' ? 'warning.main' : 'transparent',
-                        '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }
-                      }}>
-                        <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
-                          <Box display="flex" alignItems="center" gap={0.75}>
-                            <Box sx={{ color: 'text.secondary' }}>{getIcon(ind.icon)}</Box>
-                            <Typography sx={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 80 }}>{ind.name}</Typography>
+              {components.length > 0 ? (
+                <Grid container spacing={1}>
+                  {components.map((ind, idx) => (
+                    <Grid item xs={6} sm={4} md={3} key={idx}>
+                      <Tooltip title={ind.details || ''} arrow>
+                        <Box sx={{
+                          p: 1.25,
+                          borderRadius: 2,
+                          bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                          border: 1,
+                          borderColor: ind.status === 'error' ? 'error.main' : ind.status === 'warning' ? 'warning.main' : 'transparent',
+                          '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }
+                        }}>
+                          <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                            <Box display="flex" alignItems="center" gap={0.75}>
+                              <Box sx={{ color: 'text.secondary' }}>{getIcon(ind.icon)}</Box>
+                              <Typography sx={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 80 }}>{ind.name}</Typography>
+                            </Box>
+                            {ind.status === 'good' && <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />}
+                            {ind.status === 'warning' && <Warning sx={{ fontSize: 16, color: 'warning.main' }} />}
+                            {ind.status === 'error' && <ErrorIcon sx={{ fontSize: 16, color: 'error.main' }} />}
                           </Box>
-                          {ind.status === 'good' && <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />}
-                          {ind.status === 'warning' && <Warning sx={{ fontSize: 16, color: 'warning.main' }} />}
-                          {ind.status === 'error' && <Error sx={{ fontSize: 16, color: 'error.main' }} />}
+                          <Chip
+                            label={ind.value}
+                            size="small"
+                            color={ind.status === 'good' ? 'success' : ind.status === 'warning' ? 'warning' : 'error'}
+                            sx={{ fontSize: 10, height: 20, width: '100%', '& .MuiChip-label': { px: 0.75 } }}
+                          />
                         </Box>
-                        <Chip 
-                          label={ind.value} 
-                          size="small" 
-                          color={ind.status === 'good' ? 'success' : ind.status === 'warning' ? 'warning' : 'error'}
-                          sx={{ fontSize: 10, height: 20, width: '100%', '& .MuiChip-label': { px: 0.75 } }}
-                        />
-                      </Box>
-                    </Tooltip>
-                  </Grid>
-                ))}
-              </Grid>
+                      </Tooltip>
+                    </Grid>
+                  ))}
+                </Grid>
+              ) : (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <Typography color="text.secondary">Loading health data...</Typography>
+                </Box>
+              )}
             </Box>
           </Card>
         </Grid>
 
-        {/* Recent Alerts - Compact List */}
+        {/* Recent Alerts */}
         <Grid item xs={12} md={5}>
           <Card sx={{ height: '100%' }}>
             <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
-              <Typography sx={{ fontSize: 16, fontWeight: 600 }}>Recent Alerts ({alerts.length})</Typography>
+              <Typography sx={{ fontSize: 16, fontWeight: 600 }}>System Events ({alerts.length})</Typography>
             </Box>
-            <Box sx={{ p: 1.5 }}>
-              {alerts.map((alert) => (
-                <Box key={alert.id} sx={{ 
-                  display: 'flex', 
-                  alignItems: 'flex-start', 
-                  gap: 1.5, 
-                  py: 1, 
+            <Box sx={{ p: 1.5, maxHeight: 500, overflow: 'auto' }}>
+              {alerts.length > 0 ? alerts.map((alert) => (
+                <Box key={alert.id} sx={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 1.5,
+                  py: 1,
                   px: 1.25,
                   mb: 0.75,
                   borderRadius: 1.5,
@@ -231,7 +266,11 @@ const Alerts: React.FC = () => {
                   </Box>
                   <Typography sx={{ fontSize: 11, color: 'text.secondary', whiteSpace: 'nowrap' }}>{alert.timestamp}</Typography>
                 </Box>
-              ))}
+              )) : (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <Typography color="text.secondary" sx={{ fontSize: 13 }}>No events to display</Typography>
+                </Box>
+              )}
             </Box>
           </Card>
         </Grid>
@@ -239,37 +278,5 @@ const Alerts: React.FC = () => {
     </Box>
   );
 };
-
-const generateDemoIndicators = (): HealthIndicator[] => [
-  { name: 'PostgreSQL', status: 'good', value: 'Connected', details: 'Latency: 2ms', icon: 'database' },
-  { name: 'Redis', status: 'good', value: '94% Hit', details: 'Memory: 2.1GB', icon: 'redis' },
-  { name: 'API Server', status: 'good', value: 'Running', details: '4 workers', icon: 'server' },
-  { name: 'Latency', status: 'good', value: '45ms', details: 'p95 OK', icon: 'speed' },
-  { name: 'OddsAPI', status: 'good', value: '450/500', details: 'Resets 23h', icon: 'cloud' },
-  { name: 'Pinnacle', status: 'good', value: '890/1K', details: 'CLV active', icon: 'cloud' },
-  { name: 'ESPN', status: 'error', value: 'Limited', details: 'Retry 15m', icon: 'api' },
-  { name: 'Accuracy', status: 'good', value: '64.2%', details: '>60% target', icon: 'model' },
-  { name: 'CLV Avg', status: 'good', value: '+1.8%', details: 'Positive', icon: 'trend' },
-  { name: 'Disk', status: 'warning', value: '78%', details: '1.56/2TB', icon: 'disk' },
-  { name: 'Memory', status: 'warning', value: '82%', details: '420/512GB', icon: 'disk' },
-  { name: 'Worker', status: 'good', value: 'Active', details: '12 queued', icon: 'timer' },
-  { name: 'SSL', status: 'good', value: 'Valid', details: '89 days', icon: 'security' },
-  { name: 'GPU', status: 'good', value: 'Ready', details: 'RTX 6000', icon: 'server' },
-  { name: 'Scheduler', status: 'good', value: 'Running', details: '5 jobs', icon: 'timer' },
-  { name: 'Backup', status: 'good', value: 'OK', details: '4h ago', icon: 'database' },
-];
-
-const generateDemoAlerts = (): AlertItem[] => [
-  { id: '1', type: 'error', message: 'ESPN API rate limit (429)', timestamp: '2m' },
-  { id: '2', type: 'warning', message: 'Memory usage > 80%', timestamp: '15m' },
-  { id: '3', type: 'success', message: 'Tier A: Lakers -3.5 @ 67.2%', timestamp: '1h' },
-  { id: '4', type: 'success', message: 'Model trained (AUC: 0.68)', timestamp: '2h' },
-  { id: '5', type: 'info', message: 'Daily backup done', timestamp: '4h' },
-  { id: '6', type: 'success', message: 'Tier B: Celtics +2 @ 62.1%', timestamp: '5h' },
-  { id: '7', type: 'info', message: 'Odds refresh complete', timestamp: '6h' },
-  { id: '8', type: 'warning', message: 'Disk approaching 80%', timestamp: '8h' },
-  { id: '9', type: 'success', message: 'Tier A: Warriors -5 @ 66.8%', timestamp: '10h' },
-  { id: '10', type: 'info', message: 'System restart complete', timestamp: '12h' },
-];
 
 export default Alerts;

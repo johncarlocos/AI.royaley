@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.config import settings
 
 router = APIRouter(tags=["public"])
 
@@ -1574,3 +1575,430 @@ def _build_pick_label(
             return f"{away_short} ML"
 
     return side
+
+
+# ============================================================================
+# SYSTEM HEALTH - Public endpoint for System Health dashboard
+# ============================================================================
+
+@router.get("/system-health")
+async def get_system_health(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Comprehensive system health: DB, Redis, CPU, memory, disk,
+    scheduler, predictions, models, odds, games — all real data.
+    No auth required.
+    """
+    import psutil
+    import time as _time
+
+    from app.core.database import db_manager
+    from app.core.cache import cache_manager
+
+    now = datetime.utcnow()
+    components = []
+    alerts = []
+
+    # ── 1. DATABASE ──────────────────────────────────────────
+    try:
+        db_health = await db_manager.health_check()
+        db_ok = db_health.get("status") == "healthy"
+        db_latency = db_health.get("latency_ms", 0)
+        pool = db_health.get("pool", {})
+        components.append({
+            "name": "PostgreSQL",
+            "icon": "database",
+            "status": "good" if db_ok else "error",
+            "value": "Connected" if db_ok else "Down",
+            "details": f"Latency: {db_latency:.0f}ms | Pool: {pool.get('checked_out', 0)} active, {pool.get('checked_in', 0)} idle",
+        })
+        if not db_ok:
+            alerts.append({"type": "error", "message": f"PostgreSQL unhealthy: {db_health.get('error', 'unknown')}", "timestamp": "now"})
+    except Exception as e:
+        components.append({"name": "PostgreSQL", "icon": "database", "status": "error", "value": "Error", "details": str(e)})
+        alerts.append({"type": "error", "message": f"PostgreSQL check failed: {e}", "timestamp": "now"})
+
+    # ── 2. REDIS ─────────────────────────────────────────────
+    try:
+        redis_health = await cache_manager.health_check()
+        redis_ok = redis_health.get("status") == "healthy"
+        redis_mem = redis_health.get("memory_used", "?")
+        redis_latency = redis_health.get("latency_ms", 0)
+        cache_stats = cache_manager.get_stats()
+        hit_rate = cache_stats.get("hit_rate_percent", 0)
+        components.append({
+            "name": "Redis",
+            "icon": "redis",
+            "status": "good" if redis_ok else ("warning" if redis_health.get("status") == "disconnected" else "error"),
+            "value": f"{hit_rate:.0f}% Hit" if redis_ok else "Down",
+            "details": f"Memory: {redis_mem} | Latency: {redis_latency:.0f}ms | CB: {cache_stats.get('circuit_breaker_state', '?')}",
+        })
+        if not redis_ok:
+            alerts.append({"type": "warning", "message": f"Redis degraded: {redis_health.get('error', redis_health.get('status', ''))}", "timestamp": "now"})
+    except Exception as e:
+        components.append({"name": "Redis", "icon": "redis", "status": "error", "value": "Error", "details": str(e)})
+
+    # ── 3. API SERVER ────────────────────────────────────────
+    from app.api.routes.health import _start_time as api_start
+    uptime_secs = (now - api_start).total_seconds()
+    uptime_days = uptime_secs / 86400
+    components.append({
+        "name": "API Server",
+        "icon": "server",
+        "status": "good",
+        "value": "Running",
+        "details": f"Uptime: {uptime_days:.1f}d | PID: {psutil.Process().pid}",
+    })
+
+    # ── 4. CPU ───────────────────────────────────────────────
+    cpu_pct = psutil.cpu_percent(interval=0.1)
+    cpu_count = psutil.cpu_count()
+    cpu_status = "good" if cpu_pct < 70 else ("warning" if cpu_pct < 90 else "error")
+    components.append({
+        "name": "CPU",
+        "icon": "speed",
+        "status": cpu_status,
+        "value": f"{cpu_pct:.0f}%",
+        "details": f"{cpu_count} cores | Load: {', '.join(f'{x:.1f}' for x in psutil.getloadavg())}",
+    })
+    if cpu_pct >= 80:
+        alerts.append({"type": "warning", "message": f"CPU usage high: {cpu_pct:.0f}%", "timestamp": "now"})
+
+    # ── 5. MEMORY ────────────────────────────────────────────
+    mem = psutil.virtual_memory()
+    mem_used_gb = mem.used / (1024**3)
+    mem_total_gb = mem.total / (1024**3)
+    mem_status = "good" if mem.percent < 70 else ("warning" if mem.percent < 90 else "error")
+    components.append({
+        "name": "Memory",
+        "icon": "disk",
+        "status": mem_status,
+        "value": f"{mem.percent:.0f}%",
+        "details": f"{mem_used_gb:.1f} / {mem_total_gb:.1f} GB",
+    })
+    if mem.percent >= 80:
+        alerts.append({"type": "warning", "message": f"Memory usage: {mem.percent:.0f}% ({mem_used_gb:.1f}/{mem_total_gb:.1f} GB)", "timestamp": "now"})
+
+    # ── 6. DISK ──────────────────────────────────────────────
+    disk = psutil.disk_usage('/')
+    disk_used_gb = disk.used / (1024**3)
+    disk_total_gb = disk.total / (1024**3)
+    disk_status = "good" if disk.percent < 70 else ("warning" if disk.percent < 90 else "error")
+    components.append({
+        "name": "Disk",
+        "icon": "disk",
+        "status": disk_status,
+        "value": f"{disk.percent:.0f}%",
+        "details": f"{disk_used_gb:.1f} / {disk_total_gb:.1f} GB",
+    })
+    if disk.percent >= 80:
+        alerts.append({"type": "warning", "message": f"Disk usage: {disk.percent:.0f}% ({disk_used_gb:.1f}/{disk_total_gb:.1f} GB)", "timestamp": "now"})
+
+    # ── 7. SCHEDULER ─────────────────────────────────────────
+    try:
+        from app.services.scheduling.scheduler_service import scheduler_service
+        sched_status = scheduler_service.get_status()
+        sched_running = sched_status.get("running", False)
+        total_jobs = sched_status.get("total_jobs", 0)
+        enabled_jobs = sched_status.get("enabled_jobs", 0)
+        components.append({
+            "name": "Scheduler",
+            "icon": "timer",
+            "status": "good" if sched_running else "error",
+            "value": "Running" if sched_running else "Stopped",
+            "details": f"{enabled_jobs}/{total_jobs} jobs enabled",
+        })
+        if not sched_running:
+            alerts.append({"type": "error", "message": "Scheduler is not running", "timestamp": "now"})
+    except Exception as e:
+        components.append({"name": "Scheduler", "icon": "timer", "status": "error", "value": "Error", "details": str(e)})
+
+    # ── 8. ODDS API ──────────────────────────────────────────
+    try:
+        odds_api_key = settings.ODDS_API_KEY
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://api.the-odds-api.com/v4/sports",
+                params={"apiKey": odds_api_key},
+            )
+            remaining = int(resp.headers.get("x-requests-remaining", 0))
+            used = int(resp.headers.get("x-requests-used", 0))
+            total_quota = remaining + used
+            pct_used = (used / total_quota * 100) if total_quota > 0 else 0
+            quota_status = "good" if pct_used < 70 else ("warning" if pct_used < 90 else "error")
+            components.append({
+                "name": "Odds API",
+                "icon": "cloud",
+                "status": quota_status,
+                "value": f"{remaining:,}",
+                "details": f"Used: {used:,} | Remaining: {remaining:,}",
+            })
+            if pct_used >= 80:
+                alerts.append({"type": "warning", "message": f"Odds API quota {pct_used:.0f}% used ({remaining:,} remaining)", "timestamp": "now"})
+    except Exception as e:
+        components.append({"name": "Odds API", "icon": "cloud", "status": "warning", "value": "Unknown", "details": f"Check failed: {e}"})
+
+    # ── 9. PREDICTIONS STATS ─────────────────────────────────
+    try:
+        pred_result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') as today,
+                COUNT(*) FILTER (WHERE CAST(signal_tier AS TEXT) = 'A') as tier_a,
+                COUNT(*) FILTER (WHERE CAST(signal_tier AS TEXT) = 'B') as tier_b,
+                COUNT(*) FILTER (WHERE CAST(signal_tier AS TEXT) = 'C') as tier_c
+            FROM predictions
+        """))
+        pr = pred_result.fetchone()
+        components.append({
+            "name": "Predictions",
+            "icon": "model",
+            "status": "good" if (pr.today or 0) > 0 else "warning",
+            "value": f"{pr.total:,}" if pr.total else "0",
+            "details": f"Today: {pr.today or 0} | A: {pr.tier_a or 0} B: {pr.tier_b or 0} C: {pr.tier_c or 0}",
+        })
+        if pr.today and pr.today > 0:
+            alerts.append({"type": "success", "message": f"{pr.today} predictions generated today (A:{pr.tier_a or 0} B:{pr.tier_b or 0} C:{pr.tier_c or 0})", "timestamp": "today"})
+    except Exception as e:
+        components.append({"name": "Predictions", "icon": "model", "status": "warning", "value": "Error", "details": str(e)})
+
+    # ── 10. ML MODELS ────────────────────────────────────────
+    try:
+        model_result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE is_production = TRUE) as production,
+                COUNT(*) FILTER (WHERE performance_metrics != '{}'::jsonb AND performance_metrics IS NOT NULL) as trained,
+                MAX(created_at) as last_trained
+            FROM ml_models
+        """))
+        mr = model_result.fetchone()
+        last_str = ""
+        if mr.last_trained:
+            delta = now - mr.last_trained
+            if delta.days > 0:
+                last_str = f"{delta.days}d ago"
+            else:
+                last_str = f"{delta.seconds // 3600}h ago"
+        components.append({
+            "name": "ML Models",
+            "icon": "model",
+            "status": "good" if (mr.trained or 0) > 0 else "warning",
+            "value": f"{mr.trained or 0} trained",
+            "details": f"Production: {mr.production or 0} | Total: {mr.total or 0} | Last: {last_str}",
+        })
+    except Exception as e:
+        components.append({"name": "ML Models", "icon": "model", "status": "warning", "value": "Error", "details": str(e)})
+
+    # ── 11. GAMES TRACKING ───────────────────────────────────
+    try:
+        games_result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'scheduled') as scheduled,
+                COUNT(*) FILTER (WHERE status = 'in_progress') as live,
+                COUNT(*) FILTER (WHERE COALESCE(completed, FALSE) = TRUE OR status = 'final') as completed
+            FROM upcoming_games
+            WHERE scheduled_at >= NOW() - INTERVAL '24 hours'
+        """))
+        gr = games_result.fetchone()
+        components.append({
+            "name": "Games",
+            "icon": "timer",
+            "status": "good" if (gr.total or 0) > 0 else "warning",
+            "value": f"{gr.total or 0} tracked",
+            "details": f"Live: {gr.live or 0} | Upcoming: {gr.scheduled or 0} | Final: {gr.completed or 0}",
+        })
+        if (gr.live or 0) > 0:
+            alerts.append({"type": "success", "message": f"{gr.live} games currently live", "timestamp": "now"})
+    except Exception as e:
+        components.append({"name": "Games", "icon": "timer", "status": "warning", "value": "Error", "details": str(e)})
+
+    # ── 12. ODDS DATA ────────────────────────────────────────
+    try:
+        odds_result = await db.execute(text("""
+            SELECT
+                COUNT(DISTINCT upcoming_game_id) as games_with_odds,
+                COUNT(DISTINCT sportsbook_key) as bookmakers,
+                COUNT(*) as total_lines,
+                MAX(updated_at) as last_update
+            FROM upcoming_odds
+            WHERE updated_at >= NOW() - INTERVAL '24 hours'
+        """))
+        odr = odds_result.fetchone()
+        last_odds_str = ""
+        if odr.last_update:
+            delta = now - odr.last_update
+            mins = delta.seconds // 60
+            last_odds_str = f"{mins}m ago" if mins < 120 else f"{mins // 60}h ago"
+        components.append({
+            "name": "Odds Data",
+            "icon": "trend",
+            "status": "good" if (odr.total_lines or 0) > 0 else "warning",
+            "value": f"{odr.total_lines or 0:,} lines",
+            "details": f"Games: {odr.games_with_odds or 0} | Books: {odr.bookmakers or 0} | Updated: {last_odds_str}",
+        })
+    except Exception as e:
+        components.append({"name": "Odds Data", "icon": "trend", "status": "warning", "value": "Error", "details": str(e)})
+
+    # ── 13. PLAYER PROPS ─────────────────────────────────────
+    try:
+        props_result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'pending') as pending,
+                COUNT(*) FILTER (WHERE CAST(tier AS TEXT) IN ('A','B','C')) as graded
+            FROM player_props
+        """))
+        ppr = props_result.fetchone()
+        components.append({
+            "name": "Player Props",
+            "icon": "trend",
+            "status": "good" if (ppr.total or 0) > 0 else "warning",
+            "value": f"{ppr.total or 0:,}",
+            "details": f"Pending: {ppr.pending or 0} | Tiered: {ppr.graded or 0}",
+        })
+    except Exception as e:
+        components.append({"name": "Player Props", "icon": "trend", "status": "warning", "value": "N/A", "details": str(e)})
+
+    # ── 14. GPU (optional) ───────────────────────────────────
+    try:
+        import subprocess
+        gpu_result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total,name', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5
+        )
+        if gpu_result.returncode == 0:
+            parts = gpu_result.stdout.strip().split(',')
+            if len(parts) >= 4:
+                gpu_util = float(parts[0].strip())
+                gpu_mem_used = float(parts[1].strip())
+                gpu_mem_total = float(parts[2].strip())
+                gpu_name = parts[3].strip()
+                gpu_status = "good" if gpu_util < 70 else ("warning" if gpu_util < 90 else "error")
+                components.append({
+                    "name": "GPU",
+                    "icon": "server",
+                    "status": gpu_status,
+                    "value": f"{gpu_util:.0f}%",
+                    "details": f"{gpu_name} | {gpu_mem_used:.0f}/{gpu_mem_total:.0f} MB",
+                })
+        else:
+            components.append({"name": "GPU", "icon": "server", "status": "good", "value": "N/A", "details": "No GPU detected"})
+    except Exception:
+        components.append({"name": "GPU", "icon": "server", "status": "good", "value": "N/A", "details": "No GPU available"})
+
+    # ── 15. RECENT PREDICTION ALERTS ─────────────────────────
+    try:
+        recent_preds = await db.execute(text("""
+            SELECT
+                CAST(p.signal_tier AS TEXT) as tier,
+                p.probability,
+                p.edge,
+                p.bet_type,
+                p.predicted_side,
+                COALESCE(ug.home_team_name, '') as home,
+                COALESCE(ug.away_team_name, '') as away,
+                p.created_at
+            FROM predictions p
+            LEFT JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+            WHERE p.created_at >= NOW() - INTERVAL '24 hours'
+              AND CAST(p.signal_tier AS TEXT) = 'A'
+            ORDER BY p.created_at DESC
+            LIMIT 5
+        """))
+        for rp in recent_preds.fetchall():
+            home_short = rp.home.split()[-1] if rp.home else "?"
+            away_short = rp.away.split()[-1] if rp.away else "?"
+            prob_pct = f"{float(rp.probability) * 100:.1f}" if rp.probability else "?"
+            edge_str = f"+{float(rp.edge):.1f}%" if rp.edge else ""
+            delta = now - rp.created_at
+            time_str = f"{delta.seconds // 3600}h" if delta.seconds >= 3600 else f"{delta.seconds // 60}m"
+            alerts.append({
+                "type": "success",
+                "message": f"Tier {rp.tier}: {away_short} vs {home_short} ({rp.bet_type}) @ {prob_pct}% {edge_str}",
+                "timestamp": time_str,
+            })
+    except Exception:
+        pass  # Non-critical
+
+    # ── 16. GRADING STATS ────────────────────────────────────
+    try:
+        grade_result = await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE result = 'win') as wins,
+                COUNT(*) FILTER (WHERE result = 'loss') as losses,
+                COUNT(*) FILTER (WHERE result IS NOT NULL AND result != 'pending') as graded
+            FROM predictions
+            WHERE created_at >= NOW() - INTERVAL '30 days'
+        """))
+        gg = grade_result.fetchone()
+        graded = gg.graded or 0
+        wins = gg.wins or 0
+        win_rate = (wins / graded * 100) if graded > 0 else 0
+        accuracy_status = "good" if win_rate >= 55 else ("warning" if win_rate >= 50 else "error") if graded > 0 else "warning"
+        components.append({
+            "name": "Accuracy",
+            "icon": "model",
+            "status": accuracy_status,
+            "value": f"{win_rate:.1f}%" if graded > 0 else "N/A",
+            "details": f"W: {wins} L: {gg.losses or 0} | {graded} graded (30d)",
+        })
+        if graded > 10:
+            alerts.append({"type": "info", "message": f"30d accuracy: {win_rate:.1f}% ({wins}W-{gg.losses or 0}L, {graded} graded)", "timestamp": "30d"})
+    except Exception as e:
+        components.append({"name": "Accuracy", "icon": "model", "status": "warning", "value": "N/A", "details": str(e)})
+
+    # ══════════════════════════════════════════════════════════
+    # CALCULATE OVERALL HEALTH SCORE
+    # ══════════════════════════════════════════════════════════
+    good_count = sum(1 for c in components if c["status"] == "good")
+    warn_count = sum(1 for c in components if c["status"] == "warning")
+    error_count = sum(1 for c in components if c["status"] == "error")
+    total_count = len(components)
+
+    if total_count > 0:
+        health_score = int((good_count * 100 + warn_count * 50) / total_count)
+    else:
+        health_score = 0
+
+    # Quick stats
+    quick_stats = {
+        "uptime": f"{uptime_days:.1f}d",
+        "cpu_percent": round(cpu_pct, 1),
+        "cpu_cores": cpu_count,
+        "memory_percent": round(mem.percent, 1),
+        "memory_used_gb": round(mem_used_gb, 1),
+        "memory_total_gb": round(mem_total_gb, 1),
+        "disk_percent": round(disk.percent, 1),
+        "disk_used_gb": round(disk_used_gb, 1),
+        "disk_total_gb": round(disk_total_gb, 1),
+    }
+
+    # Sort alerts: errors first, then warnings, then success, then info
+    alert_order = {"error": 0, "warning": 1, "success": 2, "info": 3}
+    alerts.sort(key=lambda a: alert_order.get(a["type"], 4))
+
+    # Deduplicate alerts by message
+    seen = set()
+    unique_alerts = []
+    for a in alerts:
+        if a["message"] not in seen:
+            seen.add(a["message"])
+            unique_alerts.append({**a, "id": str(len(unique_alerts) + 1)})
+
+    return {
+        "health_score": health_score,
+        "components": components,
+        "alerts": unique_alerts,
+        "quick_stats": quick_stats,
+        "counts": {
+            "good": good_count,
+            "warning": warn_count,
+            "error": error_count,
+            "total": total_count,
+        },
+        "updated_at": now.isoformat() + "Z",
+    }

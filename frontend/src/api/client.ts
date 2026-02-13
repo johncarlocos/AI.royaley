@@ -149,6 +149,11 @@ export const api = {
     return data;
   },
 
+  getSystemHealth: async () => {
+    const { data } = await axiosClient.get('/public/system-health');
+    return data;
+  },
+
   // Backtest
   runBacktest: async (config: Record<string, unknown>) => {
     const { data } = await axiosClient.post('/backtest/run', config);

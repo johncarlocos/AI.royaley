@@ -2131,15 +2131,12 @@ async def get_data_collectors(
     for table, label in [
         ("games", "Games"),
         ("odds", "Odds"),
-        ("player_props", "Player Props"),
         ("player_stats", "Player Stats"),
         ("team_stats", "Team Stats"),
-        ("game_features", "Features"),
         ("predictions", "Predictions"),
         ("ml_models", "ML Models"),
         ("teams", "Teams"),
         ("players", "Players"),
-        ("sportsbooks", "Sportsbooks"),
         ("sports", "Sports"),
     ]:
         try:

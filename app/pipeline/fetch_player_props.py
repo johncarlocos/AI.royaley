@@ -569,7 +569,7 @@ async def write_player_props(
     """
     # Delete old pending props for this game (keep graded ones)
     await db.execute(
-        text("DELETE FROM player_props WHERE game_id = :gid AND result = 'pending'"),
+        text("DELETE FROM player_props WHERE game_id = :gid AND result = 'pending'::betresult"),
         {"gid": game_id},
     )
 
@@ -584,9 +584,10 @@ async def write_player_props(
                 db, prop["player_name"], home_team, sport_id
             )
 
-            # Insert prop
+            # Insert prop (cast tier via SQL string concatenation to avoid asyncpg param issue)
+            tier_val = prop["tier"].upper()
             await db.execute(
-                text("""
+                text(f"""
                     INSERT INTO player_props
                         (id, game_id, player_id, prop_type, line,
                          over_odds, under_odds, predicted_value,
@@ -595,8 +596,8 @@ async def write_player_props(
                     VALUES
                         (gen_random_uuid(), :game_id, :player_id, :prop_type, :line,
                          :over_odds, :under_odds, :predicted_value,
-                         :predicted_side, :probability, :tier::signaltier,
-                         'pending', NOW())
+                         :predicted_side, :probability, '{tier_val}'::signaltier,
+                         'pending'::betresult, NOW())
                 """),
                 {
                     "game_id": game_id,
@@ -608,12 +609,12 @@ async def write_player_props(
                     "predicted_value": prop["predicted_value"],
                     "predicted_side": prop["predicted_side"],
                     "probability": prop["probability"],
-                    "tier": prop["tier"],
                 },
             )
             written += 1
 
         except Exception as e:
+            await db.rollback()
             logger.warning(f"  Failed to write prop {prop['player_name']} {prop['prop_type']}: {e}")
 
     return written

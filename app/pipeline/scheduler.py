@@ -573,19 +573,115 @@ async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list
     return results
 
 
+async def _grade_game_predictions(db: AsyncSession, game_id, home_score: int, away_score: int) -> int:
+    """
+    Grade all predictions for a single game that already has scores.
+    Returns count of predictions graded.
+    """
+    preds = await db.execute(text("""
+        SELECT p.id, p.bet_type, p.predicted_side,
+               p.line_at_prediction, p.odds_at_prediction,
+               p.home_line_open, p.away_line_open, p.total_open,
+               p.home_ml_open, p.away_ml_open,
+               pr.closing_line, pr.closing_odds
+        FROM predictions p
+        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+        WHERE p.upcoming_game_id = :gid
+    """), {"gid": game_id})
+
+    count = 0
+    for pred in preds.fetchall():
+        result_val = _grade_single(
+            pred.bet_type, pred.predicted_side,
+            pred.line_at_prediction,
+            home_score, away_score
+        )
+        clv = _calculate_clv(
+            pred.bet_type, pred.predicted_side,
+            pred.line_at_prediction, pred.odds_at_prediction,
+            pred.closing_line, pred.closing_odds,
+            pred.home_line_open, pred.away_line_open,
+            pred.total_open, pred.home_ml_open, pred.away_ml_open
+        )
+        pnl = _calculate_pnl(result_val, pred.odds_at_prediction)
+
+        try:
+            await db.execute(text("""
+                INSERT INTO prediction_results
+                    (id, prediction_id, actual_result, closing_line,
+                     closing_odds, clv, profit_loss, graded_at)
+                VALUES
+                    (gen_random_uuid(), :pid, :result, :cl, :co, :clv, :pnl, NOW())
+                ON CONFLICT (prediction_id) DO UPDATE SET
+                    actual_result = EXCLUDED.actual_result,
+                    clv = EXCLUDED.clv,
+                    profit_loss = EXCLUDED.profit_loss,
+                    graded_at = NOW()
+            """), {
+                "pid": pred.id,
+                "result": result_val,
+                "cl": pred.closing_line,
+                "co": pred.closing_odds,
+                "clv": clv,
+                "pnl": pnl,
+            })
+            count += 1
+            logger.info(f"      {pred.bet_type} {pred.predicted_side}: {result_val} (P/L: {pnl})")
+        except Exception as e:
+            logger.error(f"    Grade error for {pred.id}: {e}")
+
+    return count
+
+
 async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
     """
     For games that have finished:
-    1. Fetch scores from Odds API + ESPN fallback
-    2. Match to upcoming_games using multi-strategy fuzzy matching
-    3. Grade each prediction (win/loss/push)
-    4. Calculate CLV + profit/loss
+    Phase 1: Grade games already marked final/completed with scores but ungraded predictions
+    Phase 2: Fetch scores from Odds API + ESPN for still-scheduled games
     Returns stats dict.
     """
     stats = {"games_graded": 0, "predictions_graded": 0, "api_requests": 0,
-             "espn_graded": 0, "match_failures": 0}
+             "espn_graded": 0, "match_failures": 0, "already_scored": 0}
 
-    # Find sports with ungraded games (game time passed + 2 hour buffer)
+    # =========================================================================
+    # PHASE 1: Grade games that already have scores but ungraded predictions
+    # (e.g., live scores system set status='final' with scores, but didn't grade)
+    # =========================================================================
+    already_scored = await db.execute(text("""
+        SELECT DISTINCT ug.id, ug.home_team_name, ug.away_team_name,
+               ug.home_score, ug.away_score, s.code as sport
+        FROM upcoming_games ug
+        JOIN sports s ON ug.sport_id = s.id
+        JOIN predictions p ON p.upcoming_game_id = ug.id
+        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                  AND pr.actual_result NOT IN ('pending')
+        WHERE ug.status IN ('final', 'completed', 'closed')
+          AND ug.home_score IS NOT NULL
+          AND ug.away_score IS NOT NULL
+          AND pr.id IS NULL
+    """))
+    scored_games = already_scored.fetchall()
+
+    if scored_games:
+        logger.info(f"  Phase 1: {len(scored_games)} games with scores but ungraded predictions")
+        for game in scored_games:
+            logger.info(f"    Grading: {game.sport} {game.home_team_name} {game.home_score}-{game.away_score} {game.away_team_name}")
+            cnt = await _grade_game_predictions(db, game.id, game.home_score, game.away_score)
+            if cnt > 0:
+                stats["games_graded"] += 1
+                stats["predictions_graded"] += cnt
+                stats["already_scored"] += 1
+
+        if stats["predictions_graded"] > 0:
+            await db.commit()
+            logger.info(f"  Phase 1 complete: graded {stats['predictions_graded']} predictions "
+                         f"across {stats['already_scored']} games")
+
+    # =========================================================================
+    # PHASE 2: Fetch scores from APIs for games still marked 'scheduled'
+    # =========================================================================
+
+    # Find sports with still-scheduled games past game time
     ungraded_sports = await db.execute(text("""
         SELECT DISTINCT s.code, s.api_key, s.id as sport_id
         FROM upcoming_games ug
@@ -595,6 +691,9 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
     """))
     sport_rows = ungraded_sports.fetchall()
 
+    if not sport_rows and not scored_games:
+        return stats
+    
     if not sport_rows:
         return stats
 
@@ -722,80 +821,32 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 stats["games_graded"] += 1
                 if source == "espn":
                     stats["espn_graded"] += 1
-                logger.info(f"    ✅ Graded: {home_name} {home_score}-{away_score} {away_name} [{source}]")
+                logger.info(f"    ✅ Scored: {home_name} {home_score}-{away_score} {away_name} [{source}]")
 
-                # Grade each prediction for this game
-                preds = await db.execute(text("""
-                    SELECT p.id, p.bet_type, p.predicted_side,
-                           p.line_at_prediction, p.odds_at_prediction,
-                           p.home_line_open, p.away_line_open, p.total_open,
-                           p.home_ml_open, p.away_ml_open,
-                           pr.closing_line, pr.closing_odds
-                    FROM predictions p
-                    LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
-                    WHERE p.upcoming_game_id = :gid
-                """), {"gid": game_uuid})
+                # Check if home/away are swapped in our DB vs API scores
+                db_home = await db.execute(text(
+                    "SELECT home_team_name FROM upcoming_games WHERE id = :gid"
+                ), {"gid": game_uuid})
+                db_home_name = db_home.scalar()
 
-                for pred in preds.fetchall():
-                    # Determine if home/away are swapped in our DB vs scores
-                    # (check if our DB home matches the score's home)
-                    db_home = await db.execute(text(
-                        "SELECT home_team_name FROM upcoming_games WHERE id = :gid"
-                    ), {"gid": game_uuid})
-                    db_home_name = db_home.scalar()
+                grade_home = home_score
+                grade_away = away_score
+                if db_home_name and _normalize_name(db_home_name) != _normalize_name(home_name):
+                    if _normalize_name(db_home_name) == _normalize_name(away_name) or \
+                       away_name.split()[-1].lower() in db_home_name.lower():
+                        grade_home, grade_away = away_score, home_score
+                        logger.info(f"      Swapped home/away scores for DB alignment")
 
-                    # If DB home matches score home → use as-is
-                    # If DB home matches score away → swap scores
-                    grade_home = home_score
-                    grade_away = away_score
-                    if db_home_name and _normalize_name(db_home_name) != _normalize_name(home_name):
-                        # Check if DB home matches score's away team
-                        if _normalize_name(db_home_name) == _normalize_name(away_name) or \
-                           away_name.split()[-1].lower() in db_home_name.lower():
-                            grade_home, grade_away = away_score, home_score
-                            logger.info(f"      Swapped home/away scores for DB alignment")
+                # Update game with correct oriented scores
+                await db.execute(text("""
+                    UPDATE upcoming_games
+                    SET home_score = :hs, away_score = :as_score
+                    WHERE id = :gid
+                """), {"hs": grade_home, "as_score": grade_away, "gid": game_uuid})
 
-                    result_val = _grade_single(
-                        pred.bet_type, pred.predicted_side,
-                        pred.line_at_prediction,
-                        grade_home, grade_away
-                    )
-
-                    clv = _calculate_clv(
-                        pred.bet_type, pred.predicted_side,
-                        pred.line_at_prediction, pred.odds_at_prediction,
-                        pred.closing_line, pred.closing_odds,
-                        pred.home_line_open, pred.away_line_open,
-                        pred.total_open, pred.home_ml_open, pred.away_ml_open
-                    )
-
-                    pnl = _calculate_pnl(result_val, pred.odds_at_prediction)
-
-                    try:
-                        await db.execute(text("""
-                            INSERT INTO prediction_results
-                                (id, prediction_id, actual_result, closing_line,
-                                 closing_odds, clv, profit_loss, graded_at)
-                            VALUES
-                                (gen_random_uuid(), :pid, :result, :cl, :co, :clv, :pnl, NOW())
-                            ON CONFLICT (prediction_id) DO UPDATE SET
-                                actual_result = EXCLUDED.actual_result,
-                                clv = EXCLUDED.clv,
-                                profit_loss = EXCLUDED.profit_loss,
-                                graded_at = NOW()
-                        """), {
-                            "pid": pred.id,
-                            "result": result_val,
-                            "cl": pred.closing_line,
-                            "co": pred.closing_odds,
-                            "clv": clv,
-                            "pnl": pnl,
-                        })
-                        stats["predictions_graded"] += 1
-                        logger.info(f"      {pred.bet_type} {pred.predicted_side}: {result_val} (P/L: {pnl})")
-                    except Exception as e:
-                        await db.rollback()
-                        logger.error(f"    Grade error for {pred.id}: {e}")
+                # Grade predictions using shared helper
+                cnt = await _grade_game_predictions(db, game_uuid, grade_home, grade_away)
+                stats["predictions_graded"] += cnt
 
     if stats["games_graded"] > 0:
         await db.commit()

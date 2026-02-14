@@ -43,22 +43,71 @@ const Settings: React.FC = () => {
     if (tab === 4 && !dcData) loadDataCollectors();
   }, [tab, dcData, loadDataCollectors]);
   
-  // Multiple Telegram/Email accounts
-  const [telegramAccounts, setTelegramAccounts] = useState<TelegramAccount[]>([
-    { id: '1', name: 'Main Account', chatId: '123456789', enabled: true },
-  ]);
-  const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>([
-    { id: '1', email: 'main@example.com', enabled: true },
-  ]);
+  // Notification state - loaded from API
+  const [telegramAccounts, setTelegramAccounts] = useState<TelegramAccount[]>([]);
+  const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>([]);
   const [telegramDialog, setTelegramDialog] = useState(false);
   const [emailDialog, setEmailDialog] = useState(false);
   const [newTelegram, setNewTelegram] = useState({ name: '', chatId: '' });
   const [newEmail, setNewEmail] = useState('');
+  const [notifPrefs, setNotifPrefs] = useState<{event: string; label: string; telegram: boolean; email: boolean}[]>([]);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [notifLoaded, setNotifLoaded] = useState(false);
 
-  const handleSave = () => alert('Settings saved!');
-  const testTelegram = (chatId: string) => alert(`Telegram test sent to: ${chatId}`);
-  const testEmail = (email: string) => alert(`Email test sent to: ${email}`);
-  
+  // Load notification settings from API when tab is selected
+  useEffect(() => {
+    if (tab === 2 && !notifLoaded) {
+      (async () => {
+        try {
+          const data = await api.getNotificationSettings();
+          setTelegramToken(data.telegram_token || '');
+          setTelegramAccounts((data.telegram_accounts || []).map((a: any) => ({
+            id: a.id, name: a.name, chatId: a.chat_id, enabled: a.enabled,
+          })));
+          setEmailAccounts(data.email_accounts || []);
+          setNotifPrefs(data.preferences || []);
+          setNotifLoaded(true);
+        } catch { /* use defaults on error */ }
+      })();
+    }
+  }, [tab, notifLoaded]);
+
+  const handleSave = async () => {
+    setSaveStatus(null);
+    try {
+      await api.saveNotificationSettings({
+        telegram_token: telegramToken,
+        telegram_accounts: telegramAccounts.map(a => ({
+          id: a.id, name: a.name, chat_id: a.chatId, enabled: a.enabled,
+        })),
+        email_accounts: emailAccounts,
+        preferences: notifPrefs,
+      });
+      setSaveStatus('Settings saved successfully!');
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch {
+      setSaveStatus('Failed to save settings');
+      setTimeout(() => setSaveStatus(null), 3000);
+    }
+  };
+  const testTelegram = async (chatId: string) => {
+    setTestStatus(null);
+    try {
+      const resp = await api.testTelegram(telegramToken, chatId);
+      setTestStatus(resp.success ? `✅ Test sent to ${chatId}` : `❌ ${resp.error}`);
+    } catch { setTestStatus('❌ Test failed - check token'); }
+    setTimeout(() => setTestStatus(null), 4000);
+  };
+  const testEmail = async (email: string) => {
+    setTestStatus(null);
+    try {
+      const resp = await api.testEmail(email);
+      setTestStatus(resp.success ? `✅ Test sent to ${email}` : `❌ ${resp.error}`);
+    } catch { setTestStatus('❌ Email test failed'); }
+    setTimeout(() => setTestStatus(null), 4000);
+  };
+
   const addTelegramAccount = () => {
     if (newTelegram.name && newTelegram.chatId) {
       setTelegramAccounts([...telegramAccounts, { id: Date.now().toString(), ...newTelegram, enabled: true }]);
@@ -68,7 +117,7 @@ const Settings: React.FC = () => {
   };
   const removeTelegramAccount = (id: string) => setTelegramAccounts(telegramAccounts.filter(t => t.id !== id));
   const toggleTelegramAccount = (id: string) => setTelegramAccounts(telegramAccounts.map(t => t.id === id ? { ...t, enabled: !t.enabled } : t));
-  
+
   const addEmailAccount = () => {
     if (newEmail && newEmail.includes('@')) {
       setEmailAccounts([...emailAccounts, { id: Date.now().toString(), email: newEmail, enabled: true }]);
@@ -78,6 +127,9 @@ const Settings: React.FC = () => {
   };
   const removeEmailAccount = (id: string) => setEmailAccounts(emailAccounts.filter(e => e.id !== id));
   const toggleEmailAccount = (id: string) => setEmailAccounts(emailAccounts.map(e => e.id === id ? { ...e, enabled: !e.enabled } : e));
+  const togglePref = (event: string, channel: 'telegram' | 'email') => {
+    setNotifPrefs(notifPrefs.map(p => p.event === event ? { ...p, [channel]: !p[channel] } : p));
+  };
 
   return (
     <Box>
@@ -373,8 +425,12 @@ const Settings: React.FC = () => {
               </Paper>
             </Grid>
             
+            {/* Status Banners */}
+            {saveStatus && <Grid item xs={12}><Alert severity={saveStatus.includes('success') ? 'success' : 'error'} sx={{ fontSize: 13 }} onClose={() => setSaveStatus(null)}>{saveStatus}</Alert></Grid>}
+            {testStatus && <Grid item xs={12}><Alert severity={testStatus.startsWith('✅') ? 'success' : 'error'} sx={{ fontSize: 13 }} onClose={() => setTestStatus(null)}>{testStatus}</Alert></Grid>}
+
             {/* Notification Preferences */}
-            <Grid item xs={12}><Typography variant="subtitle1" fontWeight={600} gutterBottom>Notification Preferences</Typography><TableContainer><Table size="small"><TableHead><TableRow><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Event</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Telegram</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Email</TableCell></TableRow></TableHead><TableBody><TableRow><TableCell sx={{ fontSize: 13 }}>Tier A Predictions (65%+)</TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Tier B Predictions (60-65%)</TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell><TableCell align="center"><Switch size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Tier C Predictions (55-60%)</TableCell><TableCell align="center"><Switch size="small" /></TableCell><TableCell align="center"><Switch size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Tier D Predictions (&lt;55%)</TableCell><TableCell align="center"><Switch size="small" /></TableCell><TableCell align="center"><Switch size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>System Errors</TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Model Training Complete</TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell><TableCell align="center"><Switch size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Daily Summary</TableCell><TableCell align="center"><Switch size="small" /></TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell></TableRow><TableRow><TableCell sx={{ fontSize: 13 }}>Live Game Alerts</TableCell><TableCell align="center"><Switch defaultChecked size="small" /></TableCell><TableCell align="center"><Switch size="small" /></TableCell></TableRow></TableBody></Table></TableContainer></Grid>
+            <Grid item xs={12}><Typography variant="subtitle1" fontWeight={600} gutterBottom>Notification Preferences</Typography><TableContainer><Table size="small"><TableHead><TableRow><TableCell sx={{ fontSize: 13, fontWeight: 600 }}>Event</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Telegram</TableCell><TableCell align="center" sx={{ fontSize: 13, fontWeight: 600 }}>Email</TableCell></TableRow></TableHead><TableBody>{notifPrefs.map(pref => (<TableRow key={pref.event}><TableCell sx={{ fontSize: 13 }}>{pref.label || pref.event}</TableCell><TableCell align="center"><Switch checked={pref.telegram} onChange={() => togglePref(pref.event, 'telegram')} size="small" /></TableCell><TableCell align="center"><Switch checked={pref.email} onChange={() => togglePref(pref.event, 'email')} size="small" /></TableCell></TableRow>))}{notifPrefs.length === 0 && <TableRow><TableCell colSpan={3} sx={{ fontSize: 13, textAlign: 'center', py: 2 }}>Loading preferences...</TableCell></TableRow>}</TableBody></Table></TableContainer></Grid>
           </Grid>
         </TabPanel>
 
@@ -946,7 +1002,7 @@ const Settings: React.FC = () => {
           </Grid>
         </TabPanel>
 
-        <Box sx={{ px: 3, py: 2, borderTop: 1, borderColor: 'divider' }}><Button variant="contained" size="small" startIcon={<Save />} onClick={handleSave} sx={{ fontSize: 13 }}>Save All Settings</Button></Box>
+        <Box sx={{ px: 3, py: 2, borderTop: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 2 }}><Button variant="contained" size="small" startIcon={<Save />} onClick={handleSave} sx={{ fontSize: 13 }}>Save All Settings</Button>{saveStatus && <Typography variant="body2" sx={{ fontSize: 12, color: saveStatus.includes('success') ? 'success.main' : 'error.main' }}>{saveStatus}</Typography>}</Box>
       </Card>
       
       {/* Add Telegram Dialog */}

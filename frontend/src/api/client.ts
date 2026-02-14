@@ -164,6 +164,27 @@ export const api = {
     const { data } = await axiosClient.post('/backtest/run', config);
     return data;
   },
+
+  // Notifications
+  getNotificationSettings: async () => {
+    const { data } = await axiosClient.get('/public/notifications/settings');
+    return data;
+  },
+
+  saveNotificationSettings: async (payload: Record<string, unknown>) => {
+    const { data } = await axiosClient.put('/public/notifications/settings', payload);
+    return data;
+  },
+
+  testTelegram: async (token: string, chatId: string) => {
+    const { data } = await axiosClient.post('/public/notifications/test-telegram', { token, chat_id: chatId });
+    return data;
+  },
+
+  testEmail: async (email: string) => {
+    const { data } = await axiosClient.post('/public/notifications/test-email', { email });
+    return data;
+  },
 };
 
 export default api;

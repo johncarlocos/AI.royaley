@@ -4,6 +4,7 @@ No authentication required - read-only access for frontend dashboard.
 Returns opening snapshot (from predictions table) + current consensus (from upcoming_odds).
 """
 from datetime import datetime, date, timedelta
+import json
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -2348,3 +2349,165 @@ async def get_data_collectors(
         "archive_stats": archive_stats,
         "updated_at": now.isoformat() + "Z",
     }
+
+
+# =============================================================================
+# NOTIFICATION SETTINGS ENDPOINTS
+# =============================================================================
+
+from pydantic import BaseModel, Field
+from typing import List as TList
+
+class TelegramAccountSchema(BaseModel):
+    id: str
+    name: str
+    chat_id: str
+    enabled: bool = True
+
+class EmailAccountSchema(BaseModel):
+    id: str
+    email: str
+    enabled: bool = True
+
+class NotificationPreference(BaseModel):
+    event: str
+    label: str = ""
+    telegram: bool = False
+    email: bool = False
+
+class NotificationSettingsPayload(BaseModel):
+    telegram_token: str = ""
+    telegram_accounts: TList[TelegramAccountSchema] = []
+    email_accounts: TList[EmailAccountSchema] = []
+    preferences: TList[NotificationPreference] = []
+
+
+@router.get("/notifications/settings")
+async def get_notification_settings(db: AsyncSession = Depends(get_db)):
+    """Load notification settings from user_preferences."""
+    result = await db.execute(text("""
+        SELECT notification_settings FROM user_preferences LIMIT 1
+    """))
+    row = result.fetchone()
+
+    defaults = {
+        "telegram_token": "",
+        "telegram_accounts": [],
+        "email_accounts": [],
+        "preferences": [
+            {"event": "tier_a", "label": "Tier A Predictions (58%+)", "telegram": True, "email": True},
+            {"event": "tier_b", "label": "Tier B Predictions (55-58%)", "telegram": True, "email": False},
+            {"event": "tier_c", "label": "Tier C Predictions (52-55%)", "telegram": False, "email": False},
+            {"event": "tier_d", "label": "Tier D Predictions (<52%)", "telegram": False, "email": False},
+            {"event": "system_errors", "label": "System Errors", "telegram": True, "email": True},
+            {"event": "model_training", "label": "Model Training Complete", "telegram": True, "email": False},
+            {"event": "daily_summary", "label": "Daily Summary", "telegram": False, "email": True},
+            {"event": "live_game", "label": "Live Game Alerts", "telegram": True, "email": False},
+            {"event": "grading_complete", "label": "Grading Complete", "telegram": True, "email": False},
+            {"event": "clv_alert", "label": "High CLV Alerts (>5%)", "telegram": True, "email": False},
+        ],
+    }
+
+    if row and row.notification_settings:
+        saved = row.notification_settings
+        # Merge saved prefs with defaults (add any new events)
+        saved_events = {p["event"] for p in saved.get("preferences", [])}
+        for dp in defaults["preferences"]:
+            if dp["event"] not in saved_events:
+                saved.setdefault("preferences", []).append(dp)
+        return saved
+
+    return defaults
+
+
+@router.put("/notifications/settings")
+async def save_notification_settings(
+    payload: NotificationSettingsPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save notification settings to user_preferences."""
+    settings_json = payload.dict()
+
+    # Check if user_preferences row exists
+    existing = await db.execute(text("SELECT id FROM user_preferences LIMIT 1"))
+    row = existing.fetchone()
+
+    if row:
+        await db.execute(text("""
+            UPDATE user_preferences
+            SET notification_settings = CAST(:ns AS jsonb), updated_at = NOW()
+            WHERE id = :pid
+        """), {"ns": json.dumps(settings_json), "pid": str(row.id)})
+    else:
+        await db.execute(text("""
+            INSERT INTO user_preferences (id, user_id, timezone, notification_settings, display_preferences, odds_format, updated_at)
+            VALUES (gen_random_uuid(), (SELECT id FROM users LIMIT 1), 'UTC', CAST(:ns AS jsonb), '{}', 'american', NOW())
+        """), {"ns": json.dumps(settings_json)})
+
+    await db.commit()
+    return {"status": "saved", "accounts": len(settings_json.get("telegram_accounts", [])) + len(settings_json.get("email_accounts", []))}
+
+
+@router.post("/notifications/test-telegram")
+async def test_telegram(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test Telegram message."""
+    token = body.get("token", "")
+    chat_id = body.get("chat_id", "")
+
+    if not token or not chat_id:
+        return {"success": False, "error": "Token and Chat ID required"}
+
+    try:
+        import httpx as hx
+        async with hx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "✅ <b>ROYALEY Test</b>\n\nTelegram notifications are working!",
+                    "parse_mode": "HTML",
+                },
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return {"success": True, "message": f"Test sent to {chat_id}"}
+            else:
+                return {"success": False, "error": data.get("description", "Unknown error")}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/notifications/test-email")
+async def test_email(body: dict):
+    """Send a test email (requires SMTP configuration in .env)."""
+    email_addr = body.get("email", "")
+    if not email_addr:
+        return {"success": False, "error": "Email address required"}
+
+    from app.core.config import settings as app_settings
+    if not app_settings.EMAIL_SMTP_HOST or not app_settings.EMAIL_SMTP_USER:
+        return {
+            "success": False,
+            "error": "SMTP not configured. Set EMAIL_SMTP_HOST, EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD in .env",
+        }
+
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+
+        msg = MIMEText("This is a test notification from ROYALEY.\n\nEmail notifications are working!")
+        msg["Subject"] = "[ROYALEY] Test Notification"
+        msg["From"] = app_settings.EMAIL_FROM_ADDRESS or app_settings.EMAIL_SMTP_USER
+        msg["To"] = email_addr
+
+        with smtplib.SMTP(app_settings.EMAIL_SMTP_HOST, app_settings.EMAIL_SMTP_PORT) as server:
+            server.starttls()
+            server.login(app_settings.EMAIL_SMTP_USER, app_settings.EMAIL_SMTP_PASSWORD)
+            server.send_message(msg)
+
+        return {"success": True, "message": f"Test sent to {email_addr}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

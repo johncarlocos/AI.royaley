@@ -198,7 +198,7 @@ class SchedulerService:
                 job_id="grade_predictions",
                 name="Grade Predictions",
                 category=JobCategory.GRADING,
-                func=self._dummy_job,
+                func=self._grade_predictions_job,
                 trigger="interval",
                 trigger_args={"seconds": settings.GRADING_INTERVAL}
             ),
@@ -206,7 +206,7 @@ class SchedulerService:
                 job_id="calculate_clv",
                 name="Calculate CLV",
                 category=JobCategory.GRADING,
-                func=self._dummy_job,
+                func=self._grade_predictions_job,
                 trigger="interval",
                 trigger_args={"seconds": 1800}
             ),
@@ -378,6 +378,35 @@ class SchedulerService:
     async def _run_initial_player_props_collection(self):
         """Run player props collection on startup after a delay."""
         await asyncio.sleep(15)  # Wait for DB and other services
+
+    async def _grade_predictions_job(self):
+        """Grade finished games and update prediction results."""
+        try:
+            from app.pipeline.scheduler import grade_predictions
+            from app.core.config import settings as app_settings
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+            logger.info("[Scheduler] Starting prediction grading job...")
+
+            engine = create_async_engine(app_settings.DATABASE_URL, echo=False)
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            async with async_session() as db:
+                stats = await grade_predictions(db, app_settings.ODDS_API_KEY)
+
+            await engine.dispose()
+
+            if stats["games_graded"] > 0:
+                logger.info(
+                    f"[Scheduler] ✅ Graded {stats['games_graded']} games, "
+                    f"{stats['predictions_graded']} predictions "
+                    f"(Phase1: {stats.get('already_scored', 0)}, API: {stats['api_requests']})"
+                )
+            else:
+                logger.debug("[Scheduler] No games to grade this cycle")
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Error in grading job: {e}", exc_info=True)
         try:
             logger.info("[Scheduler] Running initial player props collection on startup...")
             await self._collect_player_props_job()

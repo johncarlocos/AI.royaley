@@ -45,6 +45,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("royaley.pipeline")
 
+# =============================================================================
+# PREDICTION FILTERS
+# =============================================================================
+# Skip extreme favorites: odds below this floor produce tiny payouts that
+# destroy bankroll on a single loss. -300 means max risk $300 to win $100.
+MIN_ODDS_THRESHOLD = -300  # Skip predictions with odds below this (e.g., -556, -4800)
+
 
 # =============================================================================
 # ODDS API CLIENT
@@ -655,6 +662,12 @@ async def generate_predictions_for_game(
             open_away_ml = int(row.pin_away_ml or row.avg_away_ml) if (row.pin_away_ml or row.avg_away_ml) else None
 
         for predicted_side, probability, line_val, odds_val, edge in predictions_to_make:
+            # ── MINIMUM ODDS FILTER ──
+            # Skip extreme favorites (e.g., -556 pays only $18 on a $100 risk)
+            if odds_val is not None and odds_val < MIN_ODDS_THRESHOLD:
+                logger.info(f"    Skipping {bet_type} {predicted_side}: odds {odds_val} below floor {MIN_ODDS_THRESHOLD}")
+                continue
+
             # Signal tier based on calibrated probability
             # These thresholds match sports betting reality:
             #   58%+ sustained = world-class edge (Pinnacle-sharp level)

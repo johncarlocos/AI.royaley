@@ -1044,18 +1044,35 @@ def _calculate_clv(
 
 
 def _calculate_pnl(result: str, odds: Optional[int]) -> Optional[float]:
-    """Calculate profit/loss on a flat $100 bet."""
+    """
+    Calculate profit/loss using "to-win $100" staking.
+    
+    Stake is sized so a WIN always pays +$100.
+    Loss amount varies by odds (heavier favorite = larger loss).
+    
+    Examples:
+      Win  at -110 → +$100  (staked $110)
+      Loss at -110 → -$110
+      Win  at +150 → +$100  (staked $66.67)
+      Loss at +150 → -$66.67
+      Win  at -200 → +$100  (staked $200)
+      Loss at -200 → -$200
+    """
     if odds is None or result == "void":
         return None
     if result == "push":
         return 0.0
+
+    # Calculate stake needed to win $100
+    if odds > 0:
+        stake = round(100 * 100 / odds, 2)   # +150 → stake $66.67
+    else:
+        stake = round(abs(odds), 2)            # -110 → stake $110
+
     if result == "win":
-        if odds > 0:
-            return round(odds, 2)  # e.g., +150 → win $150
-        else:
-            return round(100 / abs(odds) * 100, 2)  # e.g., -150 → win $66.67
+        return 100.0  # always win $100
     if result == "loss":
-        return -100.0
+        return -stake  # lose the stake
     return None
 
 

@@ -177,7 +177,13 @@ const buildPerf = (rows: FlatRow[], keyFn: (r: FlatRow) => string, labelFn?: (ke
         const graded = items.filter(r => r.result !== 'pending' && r.profit_loss != null);
         if (graded.length === 0) return 0;
         const totalPnl = graded.reduce((s, r) => s + (r.profit_loss || 0), 0);
-        return totalPnl / (graded.length * 100) * 100; // flat $100 bet assumption
+        // Calculate total staked (to-win $100: stake varies by odds)
+        const totalStaked = graded.reduce((s, r) => {
+          const o = r.odds_display;
+          if (o == null) return s + 110; // default -110
+          return s + (o > 0 ? 100 * 100 / o : Math.abs(o));
+        }, 0);
+        return totalStaked > 0 ? totalPnl / totalStaked * 100 : 0;
       })(),
       _key: key,
     };
@@ -238,7 +244,13 @@ const Predictions: React.FC = () => {
       const withPnl = graded.filter(r => r.profit_loss != null);
       if (withPnl.length === 0) return 0;
       const totalPnl = withPnl.reduce((s, r) => s + (r.profit_loss || 0), 0);
-      return Math.round(totalPnl / (withPnl.length * 100) * 1000) / 10; // e.g. 5.2%
+      // Calculate total staked (to-win $100: stake varies by odds)
+      const totalStaked = withPnl.reduce((s, r) => {
+        const o = r.odds_display;
+        if (o == null) return s + 110; // default -110
+        return s + (o > 0 ? 100 * 100 / o : Math.abs(o));
+      }, 0);
+      return totalStaked > 0 ? Math.round(totalPnl / totalStaked * 1000) / 10 : 0;
     })(),
     bankrollGrowth: (() => {
       const withPnl = graded.filter(r => r.profit_loss != null);
@@ -817,16 +829,18 @@ const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '
       profit_loss: (() => {
         // Use server-computed profit_loss if available
         if (pred.profit_loss != null) return Number(pred.profit_loss);
-        // Client-side fallback: compute from result + odds (flat $100 bet)
+        // Client-side fallback: to-win $100 staking
         if (result === 'pending') return null;
         if (result === 'push') return 0;
         const o = odds != null ? Number(odds) : null;
         if (o == null) {
-          // No odds → assume standard -110
-          return result === 'won' ? 90.91 : result === 'lost' ? -100 : null;
+          // No odds → assume standard -110 (stake $110 to win $100)
+          return result === 'won' ? 100 : result === 'lost' ? -110 : null;
         }
-        if (result === 'won') return o > 0 ? o : Math.round(100 / Math.abs(o) * 10000) / 100;
-        if (result === 'lost') return -100;
+        // Stake = amount risked to win $100
+        const stake = o > 0 ? Math.round(100 * 100 / o * 100) / 100 : Math.abs(o);
+        if (result === 'won') return 100;    // always win $100
+        if (result === 'lost') return -stake; // lose the stake
         return null;
       })(),
       odds_display: odds != null ? Number(odds) : null,

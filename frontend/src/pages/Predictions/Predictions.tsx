@@ -197,35 +197,47 @@ const Predictions: React.FC = () => {
   const [reasonDialog, setReasonDialog] = useState<{ open: boolean; row: FlatRow | null }>({ open: false, row: null });
   const [positiveEdgeOnly, setPositiveEdgeOnly] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [dateRange, setDateRange] = useState<'1' | '3' | '7' | '30' | 'all'>('7');
   const { selectedSport, setSelectedSport, selectedTier, setSelectedTier } = useFilterStore();
   const { timezone, timeFormat, oddsFormat } = useSettingsStore();
 
-  // Summary stats computed from real data
-  const graded = rows.filter(r => r.result !== 'pending');
-  const wins = rows.filter(r => r.result === 'won').length;
-  const losses = rows.filter(r => r.result === 'lost').length;
-  const pushes = rows.filter(r => r.result === 'push').length;
-  const pending = rows.filter(r => r.result === 'pending').length;
+  // Filtered rows for performance stats (respects date range on graded tab)
+  const filteredRows = useMemo(() => {
+    if (tab !== 2 || dateRange === 'all') return rows;
+    const days = parseInt(dateRange);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setHours(0, 0, 0, 0);
+    return rows.filter(r => r.result !== 'pending' && r.datetime >= cutoff);
+  }, [rows, tab, dateRange]);
+
+  // Summary stats computed from filtered data
+  const statsRows = useMemo(() => tab === 2 ? filteredRows : rows, [tab, filteredRows, rows]);
+  const graded = statsRows.filter(r => r.result !== 'pending');
+  const wins = statsRows.filter(r => r.result === 'won').length;
+  const losses = statsRows.filter(r => r.result === 'lost').length;
+  const pushes = statsRows.filter(r => r.result === 'push').length;
+  const pending = statsRows.filter(r => r.result === 'pending').length;
   const summaryStats = {
-    totalPredictions: rows.length,
+    totalPredictions: statsRows.length,
     totalWins: wins, totalLosses: losses, totalPushes: pushes,
     winRate: graded.length > 0 ? Math.round(wins / graded.length * 1000) / 10 : 0,
-    avgEdge: rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.edge, 0) / rows.length * 1000) / 10 : 0,
+    avgEdge: statsRows.length > 0 ? Math.round(statsRows.reduce((s, r) => s + r.edge, 0) / statsRows.length * 1000) / 10 : 0,
     avgCLV: 0, roi: 0, bankrollGrowth: 0,
   };
 
   // Performance data computed from actual rows
-  const tierPerf = useMemo(() => buildPerf(rows, r => r.signal_tier,
+  const tierPerf = useMemo(() => buildPerf(statsRows, r => r.signal_tier,
     k => ({ A: 'Tier A (58%+)', B: 'Tier B (55-58%)', C: 'Tier C (52-55%)', D: 'Tier D (<52%)' }[k] || `Tier ${k}`),
-    ['A', 'B', 'C', 'D']), [rows]);
-  const sportPerf = useMemo(() => buildPerf(rows, r => r.sport), [rows]);
-  const periodPerf = useMemo(() => buildPerf(rows, () => 'Full Game'), [rows]);
-  const betTypePerf = useMemo(() => buildPerf(rows, r => r.bet_type,
-    k => ({ spread: 'Spreads', total: 'Totals', moneyline: 'Moneyline' }[k] || k)), [rows]);
-  const combinedPerf = useMemo(() => buildPerf(rows, r => {
+    ['A', 'B', 'C', 'D']), [statsRows]);
+  const sportPerf = useMemo(() => buildPerf(statsRows, r => r.sport), [statsRows]);
+  const periodPerf = useMemo(() => buildPerf(statsRows, () => 'Full Game'), [statsRows]);
+  const betTypePerf = useMemo(() => buildPerf(statsRows, r => r.bet_type,
+    k => ({ spread: 'Spreads', total: 'Totals', moneyline: 'Moneyline' }[k] || k)), [statsRows]);
+  const combinedPerf = useMemo(() => buildPerf(statsRows, r => {
     const bt = r.bet_type === 'spread' ? 'Spread' : r.bet_type === 'total' ? 'Total' : 'ML';
     return `FG ${bt}`;
-  }), [rows]);
+  }), [statsRows]);
 
   const getPerfData = () => [tierPerf, sportPerf, periodPerf, betTypePerf, combinedPerf][perfTab] || tierPerf;
 
@@ -259,7 +271,17 @@ const Predictions: React.FC = () => {
   const groupedGames = useMemo((): GameGroup[] => {
     let f = [...rows];
     if (tab === 1) f = f.filter(r => r.result === 'pending');
-    else if (tab === 2) f = f.filter(r => r.result !== 'pending');
+    else if (tab === 2) {
+      f = f.filter(r => r.result !== 'pending');
+      // Apply date range filter for graded tab
+      if (dateRange !== 'all') {
+        const days = parseInt(dateRange);
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - days);
+        cutoff.setHours(0, 0, 0, 0);
+        f = f.filter(r => r.datetime >= cutoff);
+      }
+    }
     if (selectedTier !== 'all') f = f.filter(r => r.signal_tier === selectedTier);
     if (positiveEdgeOnly) f = f.filter(r => r.edge > 0);
 
@@ -305,7 +327,7 @@ const Predictions: React.FC = () => {
       });
     }
     return games;
-  }, [rows, tab, selectedTier, sortField, sortOrder, positiveEdgeOnly]);
+  }, [rows, tab, dateRange, selectedTier, sortField, sortOrder, positiveEdgeOnly]);
 
   const totalGames = groupedGames.length;
   const totalRows = groupedGames.reduce((s, g) => s + g.bets.length, 0);
@@ -392,6 +414,28 @@ const Predictions: React.FC = () => {
           <Tab label="Graded" sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
         </Tabs>
         <Box display="flex" alignItems="center" gap={1.5}>
+          {/* Date Range Filter - only shown on Graded tab */}
+          {tab === 2 && (
+            <Box display="flex" alignItems="center" gap={0.5} sx={{ mr: 0.5 }}>
+              {([
+                { value: '1', label: 'Today' },
+                { value: '3', label: '3D' },
+                { value: '7', label: '7D' },
+                { value: '30', label: '30D' },
+                { value: 'all', label: 'All' },
+              ] as { value: typeof dateRange; label: string }[]).map(opt => (
+                <Chip
+                  key={opt.value}
+                  label={opt.label}
+                  size="small"
+                  variant={dateRange === opt.value ? 'filled' : 'outlined'}
+                  color={dateRange === opt.value ? 'primary' : 'default'}
+                  onClick={() => { setDateRange(opt.value); setPage(0); }}
+                  sx={{ fontSize: 11, height: 26, cursor: 'pointer', minWidth: 36 }}
+                />
+              ))}
+            </Box>
+          )}
           <FormControl size="small" sx={{ minWidth: 100 }}>
             <InputLabel sx={{ fontSize: 12 }}>Sport</InputLabel>
             <Select value={selectedSport} label="Sport" onChange={(e) => setSelectedSport(e.target.value)} sx={{ fontSize: 12, height: 34 }}>

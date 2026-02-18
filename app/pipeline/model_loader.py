@@ -563,41 +563,34 @@ def predict_probability(
     else:
         prob_positive = weighted_sum / total_weight
 
-    # ── Step 3: Apply mathematical dampening (replaces broken calibrator.pkl) ──
-    # The calibrator.pkl files were trained on data-leaked models and produce
-    # garbage mappings. Instead, we apply a principled shrinkage toward 50%
-    # that matches observed real-world results:
-    #   Raw 52.5% → calibrated ~51.7% (Tier D actual: 53.3%)
-    #   Raw 57.5% → calibrated ~55.0% (Tier C actual: 55.1%)
-    #   Raw 62.5% → calibrated ~58.3% (compressed)
-    #   Raw 70%+  → calibrated  62.0% (hard cap)
-    #
-    # SHRINKAGE_FACTOR = 2/3 was derived from actual prediction results:
-    #   Tier C predictions (raw 55-60%) achieved 55.1% win rate,
-    #   meaning raw probabilities need ~33% shrinkage toward 50%.
-    SHRINKAGE_FACTOR = 0.667
-    MAX_PROBABILITY = 0.62   # Hard cap - no sports bet should claim > 62%
-    MIN_PROBABILITY = 0.38   # Mirror cap
-
-    deviation = prob_positive - 0.50
-    calibrated = 0.50 + deviation * SHRINKAGE_FACTOR
-    prob_positive = float(np.clip(calibrated, MIN_PROBABILITY, MAX_PROBABILITY))
-
-    # NOTE: We intentionally skip calibrator.pkl - it was trained on leaked data.
-    # When models are retrained with proper walk-forward validation and the
-    # calibrators are rebuilt on clean data, re-enable this block:
-    #
-    # if calibrator is not None and hasattr(calibrator, "calibrate"):
-    #     try:
-    #         prob_positive = float(calibrator.calibrate(prob_positive))
-    #         prob_positive = float(np.clip(prob_positive, MIN_PROBABILITY, MAX_PROBABILITY))
-    #     except Exception as e:
-    #         logger.warning(f"Calibration failed: {e}")
+    # ── Step 3: Apply probability calibration ──────────────────────────────────
+    # Try data-driven Platt calibrator first (trained on actual results).
+    # Falls back to static shrinkage if no calibrator exists yet.
+    global _global_calibrator_cache
+    try:
+        _global_calibrator_cache
+    except NameError:
+        from app.pipeline.calibrator import load_calibrator as _load_global_cal
+        _global_calibrator_cache = _load_global_cal()  # None if not trained yet
+    
+    if _global_calibrator_cache is not None:
+        # Data-driven calibration (trained on actual prediction results)
+        prob_positive = _global_calibrator_cache.calibrate(prob_positive)
+        cal_source = f"platt(a={_global_calibrator_cache.a:.3f})"
+    else:
+        # Fallback: static shrinkage toward 50% (used before enough data to train)
+        SHRINKAGE_FACTOR = 0.667
+        MAX_PROBABILITY = 0.62
+        MIN_PROBABILITY = 0.38
+        deviation = prob_positive - 0.50
+        calibrated = 0.50 + deviation * SHRINKAGE_FACTOR
+        prob_positive = float(np.clip(calibrated, MIN_PROBABILITY, MAX_PROBABILITY))
+        cal_source = f"shrink({SHRINKAGE_FACTOR})"
 
     prob_negative = 1.0 - prob_positive
 
     raw_str = ", ".join(f"{fw}={framework_probs[fw]:.3f}→{clamped_probs[fw]:.3f}(w={weights.get(fw, 0):.2f})" for fw in framework_probs)
-    logger.info(f"  🎯 {sport_code}/{bet_type}: P={prob_positive:.3f} [shrink={SHRINKAGE_FACTOR}] [{raw_str}]")
+    logger.info(f"  🎯 {sport_code}/{bet_type}: P={prob_positive:.3f} [{cal_source}] [{raw_str}]")
 
     return (prob_positive, prob_negative)
 

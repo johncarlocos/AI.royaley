@@ -947,6 +947,18 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
         logger.info(f"  📊 Grading complete: {stats['games_graded']} games, "
                      f"{stats['predictions_graded']} predictions "
                      f"(ESPN: {stats['espn_graded']}, failures: {stats['match_failures']})")
+        
+        # Retrain calibrator with new grading data
+        try:
+            from app.pipeline.calibrator import train_calibrator as _retrain_cal
+            import app.pipeline.model_loader as _ml
+            cal = await _retrain_cal()
+            # Invalidate model_loader's cached calibrator so next prediction uses new one
+            if hasattr(_ml, '_global_calibrator_cache'):
+                _ml._global_calibrator_cache = cal
+            logger.info("  🎯 Calibrator retrained with latest grading data")
+        except Exception as e:
+            logger.warning(f"  Calibrator retrain failed (non-fatal): {e}")
 
     return stats
 

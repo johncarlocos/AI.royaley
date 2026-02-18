@@ -237,8 +237,31 @@ def _predict_h2o(sport: str, bet_type: str, model_path: str, feature_dict: Dict[
 
         # Get features expected by model
         cols = model._model_json["output"]["names"][:-1]  # exclude response column
-        values = [float(feature_dict.get(f, 0.0)) for f in cols]
+        
+        # Detect which columns the model expects as categorical
+        # domains is a list parallel to names: None = numeric, list of strings = categorical
+        domains = model._model_json["output"]["domains"]
+        categorical_cols = set()
+        for i, col_name in enumerate(model._model_json["output"]["names"]):
+            if i < len(domains) and domains[i] is not None and col_name in cols:
+                categorical_cols.add(col_name)
+
+        # Build values - keep categoricals as strings, numerics as float
+        values = []
+        for f in cols:
+            raw = feature_dict.get(f, 0.0)
+            if f in categorical_cols:
+                # Convert numeric 0/1 to string for H2O categorical
+                values.append(str(int(float(raw))))
+            else:
+                values.append(float(raw))
+
         hf = h2o.H2OFrame([values], column_names=cols)
+
+        # Explicitly set categorical columns as factors
+        for col in categorical_cols:
+            if col in cols:
+                hf[col] = hf[col].asfactor()
 
         preds = model.predict(hf)
         # H2O binary classification: [predict, p0, p1]

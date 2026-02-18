@@ -394,6 +394,8 @@ ESPN_SPORT_MAP = {
     "NCAAF": "football/college-football",
     "NHL": "hockey/nhl",
     "MLB": "baseball/mlb",
+    "ATP": "tennis/atp",
+    "WTA": "tennis/wta",
 }
 
 
@@ -507,55 +509,132 @@ async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list
     """
     Fetch completed game scores from ESPN API (free, no key needed).
     Returns list of dicts: {home_team, away_team, home_score, away_score, commence_time, completed}
+    
+    For tennis: ESPN uses athlete.displayName instead of team.displayName,
+    and scores are set-based. We convert to total games won.
     """
     espn_path = ESPN_SPORT_MAP.get(sport_code)
     if not espn_path:
         return []
 
+    is_tennis = sport_code in ("ATP", "WTA")
     results = []
+    seen_matchups = set()  # dedupe across date fetches
+    
+    # For tennis, fetch today + yesterday (catches delayed completions)
+    date_list = [None]  # None = default (today) for team sports
+    if is_tennis:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        now = _dt.now(_tz.utc)
+        date_list = [
+            now.strftime("%Y%m%d"),
+            (now - _td(days=1)).strftime("%Y%m%d"),
+        ]
+
     try:
-        resp = await client.get(
-            f"https://site.api.espn.com/apis/site/v2/sports/{espn_path}/scoreboard",
-            timeout=15.0,
-        )
-        if resp.status_code != 200:
-            return []
+        for date_param in date_list:
+            params = {}
+            if date_param:
+                params["dates"] = date_param
 
-        data = resp.json()
-        for event in data.get("events", []):
-            status = event.get("status", {}).get("type", {}).get("name", "")
-            if status != "STATUS_FINAL":
+            resp = await client.get(
+                f"https://site.api.espn.com/apis/site/v2/sports/{espn_path}/scoreboard",
+                params=params,
+                timeout=15.0,
+            )
+            if resp.status_code != 200:
+                logger.debug(f"    ESPN {sport_code}: HTTP {resp.status_code} for date={date_param}")
                 continue
 
-            competitions = event.get("competitions", [{}])
-            if not competitions:
-                continue
+            data = resp.json()
+            
+            for event in data.get("events", []):
+                status = event.get("status", {}).get("type", {}).get("name", "")
+                if status != "STATUS_FINAL":
+                    continue
 
-            comp = competitions[0]
-            competitors = comp.get("competitors", [])
-            if len(competitors) < 2:
-                continue
+                competitions = event.get("competitions", [{}])
+                if not competitions:
+                    continue
 
-            home = away = None
-            for c in competitors:
-                info = {
-                    "name": c.get("team", {}).get("displayName", ""),
-                    "score": int(c.get("score", 0)),
-                }
-                if c.get("homeAway") == "home":
-                    home = info
+                comp = competitions[0]
+                competitors = comp.get("competitors", [])
+                if len(competitors) < 2:
+                    continue
+
+                if is_tennis:
+                    # Tennis: parse player names + set scores → total games
+                    home = away = None
+                    for c in competitors:
+                        # Tennis uses athlete.displayName for player name
+                        player_name = (
+                            c.get("athlete", {}).get("displayName", "")
+                            or c.get("team", {}).get("displayName", "")
+                            or c.get("name", "")
+                        )
+                        
+                        # Calculate total games from linescores (set-by-set games)
+                        total_games = 0
+                        linescores = c.get("linescores", [])
+                        for ls in linescores:
+                            val = ls.get("value", 0)
+                            if val is not None:
+                                try:
+                                    total_games += int(float(val))
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        # If no linescores, try the "score" field (sets won)
+                        if total_games == 0 and not linescores:
+                            try:
+                                total_games = int(c.get("score", "0"))
+                            except (ValueError, TypeError):
+                                total_games = 0
+
+                        info = {"name": player_name, "score": total_games}
+                        
+                        if c.get("homeAway") == "home":
+                            home = info
+                        else:
+                            away = info
+
+                    if home and away and home["name"] and away["name"]:
+                        # Only include if we got meaningful scores (at least one side > 0)
+                        if home["score"] > 0 or away["score"] > 0:
+                            # Dedupe across date fetches
+                            key = f"{_normalize_name(home['name'])}:{_normalize_name(away['name'])}"
+                            if key not in seen_matchups:
+                                seen_matchups.add(key)
+                                results.append({
+                                    "home_team": home["name"],
+                                    "away_team": away["name"],
+                                    "home_score": home["score"],
+                                    "away_score": away["score"],
+                                    "commence_time": comp.get("startDate", ""),
+                                    "completed": True,
+                                })
                 else:
-                    away = info
+                    # Team sports: standard parsing
+                    home = away = None
+                    for c in competitors:
+                        info = {
+                            "name": c.get("team", {}).get("displayName", ""),
+                            "score": int(c.get("score", 0)),
+                        }
+                        if c.get("homeAway") == "home":
+                            home = info
+                        else:
+                            away = info
 
-            if home and away:
-                results.append({
-                    "home_team": home["name"],
-                    "away_team": away["name"],
-                    "home_score": home["score"],
-                    "away_score": away["score"],
-                    "commence_time": comp.get("startDate", ""),
-                    "completed": True,
-                })
+                    if home and away:
+                        results.append({
+                            "home_team": home["name"],
+                            "away_team": away["name"],
+                            "home_score": home["score"],
+                            "away_score": away["score"],
+                            "commence_time": comp.get("startDate", ""),
+                            "completed": True,
+                        })
     except Exception as e:
         logger.debug(f"    ESPN fallback error for {sport_code}: {e}")
 
@@ -777,13 +856,19 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 logger.info(f"    {sport_code} ESPN fallback: {len(espn_scores)} completed games")
                 for es in espn_scores:
                     es["source"] = "espn"
-                    # Only add if not already from Odds API (dedupe by team names)
+                    # Dedupe: skip if Odds API already has this match (by normalized name or last word)
+                    es_home_norm = _normalize_name(es["home_team"])
+                    es_home_last = es["home_team"].split()[-1].lower() if es["home_team"].split() else ""
                     already = any(
-                        _normalize_name(c["home_team"]) == _normalize_name(es["home_team"])
+                        _normalize_name(c["home_team"]) == es_home_norm
+                        or (es_home_last and len(es_home_last) >= 3
+                            and es_home_last in _normalize_name(c["home_team"]))
                         for c in all_completed
                     )
                     if not already:
                         all_completed.append(es)
+                        logger.info(f"      ESPN added: {es['home_team']} vs {es['away_team']} "
+                                    f"({es['home_score']}-{es['away_score']})")
 
             if not all_completed:
                 logger.info(f"    {sport_code}: No completed scores from any source")
@@ -800,9 +885,11 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 commence_time = game_data.get("commence_time", "")
                 source = game_data.get("source", "unknown")
 
-                # Multi-strategy matching
+                # Multi-strategy matching (wider window for tennis: 6h vs 2h)
+                match_window = 21600 if sport_code in ("ATP", "WTA") else 7200
                 game_uuid = await _match_upcoming_game(
-                    db, sport_id, home_name, away_name, commence_time
+                    db, sport_id, home_name, away_name, commence_time,
+                    time_window=match_window,
                 )
 
                 if not game_uuid:

@@ -407,6 +407,13 @@ class SchedulerService:
                     f"{stats['predictions_graded']} predictions "
                     f"(Phase1: {stats.get('already_scored', 0)}, API: {stats['api_requests']})"
                 )
+
+                # Send Telegram/email notification
+                try:
+                    from app.pipeline.notifications import notify_grading
+                    await notify_grading(stats)
+                except Exception as ne:
+                    logger.debug(f"[Scheduler] Notification error (non-critical): {ne}")
             else:
                 logger.debug("[Scheduler] No games to grade this cycle")
 
@@ -422,8 +429,69 @@ class SchedulerService:
             await run_pipeline(sports=None, generate_predictions=True)
             logger.info("[Scheduler] ✅ Game fetch + prediction pipeline completed")
 
+            # Send notifications for new high-tier predictions
+            try:
+                await self._notify_new_predictions()
+            except Exception as ne:
+                logger.debug(f"[Scheduler] Prediction notification error (non-critical): {ne}")
+
         except Exception as e:
             logger.error(f"[Scheduler] Error in game fetch job: {e}", exc_info=True)
+
+    async def _notify_new_predictions(self):
+        """Send Telegram notifications for new predictions grouped by tier."""
+        from app.pipeline.notifications import notify_predictions
+        from app.core.config import settings as app_settings
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+        from sqlalchemy import text
+
+        engine = create_async_engine(app_settings.DATABASE_URL, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        try:
+            async with async_session() as db:
+                # Get predictions created in the last 30 minutes
+                rows = await db.execute(text("""
+                    SELECT s.code as sport, p.bet_type, p.predicted_side,
+                           p.confidence, p.odds_at_prediction,
+                           ug.home_team_name, ug.away_team_name
+                    FROM predictions p
+                    JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+                    JOIN sports s ON ug.sport_id = s.id
+                    WHERE p.created_at >= NOW() - INTERVAL '30 minutes'
+                    ORDER BY p.confidence DESC
+                """))
+                recent = rows.fetchall()
+
+                if not recent:
+                    return
+
+                preds = []
+                for r in recent:
+                    side = r.predicted_side or ""
+                    if "home" in side.lower():
+                        team = r.home_team_name
+                    elif "away" in side.lower():
+                        team = r.away_team_name
+                    elif "over" in side.lower() or "under" in side.lower():
+                        team = f"{r.home_team_name} vs {r.away_team_name}"
+                    else:
+                        team = f"{r.home_team_name} vs {r.away_team_name}"
+
+                    preds.append({
+                        "sport": r.sport,
+                        "bet_type": r.bet_type,
+                        "team": team,
+                        "confidence": float(r.confidence) if r.confidence else 0.5,
+                        "odds": r.odds_at_prediction or "N/A",
+                    })
+
+                sent = await notify_predictions(preds, db=db)
+                if sent > 0:
+                    logger.info(f"[Scheduler] Sent {sent} prediction notification(s)")
+
+        finally:
+            await engine.dispose()
 
     async def _run_initial_game_fetch(self):
         """Fetch games immediately on startup after a delay."""

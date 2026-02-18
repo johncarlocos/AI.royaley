@@ -131,8 +131,12 @@ class SchedulerService:
     
     async def start(self):
         """Start the scheduler"""
-        if not self.enabled or not self._scheduler:
+        if not self.enabled:
             return
+        
+        # Auto-initialize if not already done
+        if not self._scheduler:
+            await self.initialize()
         
         if self._running:
             return

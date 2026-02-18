@@ -48,6 +48,8 @@ interface FlatRow {
   clv: number | null;
   signal_tier: 'A' | 'B' | 'C' | 'D';
   result: 'pending' | 'won' | 'lost' | 'push';
+  profit_loss: number | null;
+  odds_display: number | null;
   reason: string;
 }
 
@@ -171,7 +173,12 @@ const buildPerf = (rows: FlatRow[], keyFn: (r: FlatRow) => string, labelFn?: (ke
       winPct: g > 0 ? (w / g) * 100 : 0,
       edge: items.reduce((s, r) => s + r.edge, 0) / items.length,
       clv: withClv.length > 0 ? withClv.reduce((s, r) => s + (r.clv || 0), 0) / withClv.length : 0,
-      roi: 0,
+      roi: (() => {
+        const graded = items.filter(r => r.result !== 'pending' && r.profit_loss != null);
+        if (graded.length === 0) return 0;
+        const totalPnl = graded.reduce((s, r) => s + (r.profit_loss || 0), 0);
+        return totalPnl / (graded.length * 100) * 100; // flat $100 bet assumption
+      })(),
       _key: key,
     };
   });
@@ -223,7 +230,22 @@ const Predictions: React.FC = () => {
     totalWins: wins, totalLosses: losses, totalPushes: pushes,
     winRate: graded.length > 0 ? Math.round(wins / graded.length * 1000) / 10 : 0,
     avgEdge: statsRows.length > 0 ? Math.round(statsRows.reduce((s, r) => s + r.edge, 0) / statsRows.length * 1000) / 10 : 0,
-    avgCLV: 0, roi: 0, bankrollGrowth: 0,
+    avgCLV: (() => {
+      const withClv = graded.filter(r => r.clv != null);
+      return withClv.length > 0 ? Math.round(withClv.reduce((s, r) => s + (r.clv || 0), 0) / withClv.length * 10) / 10 : 0;
+    })(),
+    roi: (() => {
+      const withPnl = graded.filter(r => r.profit_loss != null);
+      if (withPnl.length === 0) return 0;
+      const totalPnl = withPnl.reduce((s, r) => s + (r.profit_loss || 0), 0);
+      return Math.round(totalPnl / (withPnl.length * 100) * 1000) / 10; // e.g. 5.2%
+    })(),
+    bankrollGrowth: (() => {
+      const withPnl = graded.filter(r => r.profit_loss != null);
+      if (withPnl.length === 0) return 0;
+      const totalPnl = withPnl.reduce((s, r) => s + (r.profit_loss || 0), 0);
+      return Math.round(totalPnl * 10) / 10; // raw $ P/L
+    })(),
   };
 
   // Performance data computed from actual rows
@@ -382,10 +404,10 @@ const Predictions: React.FC = () => {
               <StatCard title="Win Rate" value={graded.length > 0 ? `${summaryStats.winRate}%` : '0%'} subtitle="Across all tiers" icon={<EmojiEvents sx={{ fontSize: 18 }} />} color="success" />
             </Grid>
             <Grid item xs={6} sm={3}>
-              <StatCard title="Average Edge" value={`${summaryStats.avgEdge >= 0 ? '+' : ''}${summaryStats.avgEdge}%`} subtitle={`CLV: +${summaryStats.avgCLV}%`} icon={<TrendingUp sx={{ fontSize: 18 }} />} color="info" />
+              <StatCard title="Average Edge" value={`${summaryStats.avgEdge >= 0 ? '+' : ''}${summaryStats.avgEdge}%`} subtitle={`CLV: ${summaryStats.avgCLV >= 0 ? '+' : ''}${summaryStats.avgCLV}%`} icon={<TrendingUp sx={{ fontSize: 18 }} />} color="info" />
             </Grid>
             <Grid item xs={6} sm={3}>
-              <StatCard title="ROI" value={`+${summaryStats.roi}%`} subtitle={`Bankroll: +${summaryStats.bankrollGrowth}%`} icon={<Casino sx={{ fontSize: 18 }} />} color="warning" />
+              <StatCard title="ROI" value={`${summaryStats.roi >= 0 ? '+' : ''}${summaryStats.roi}%`} subtitle={`Bankroll: ${summaryStats.bankrollGrowth >= 0 ? '+' : ''}$${Math.abs(summaryStats.bankrollGrowth).toLocaleString()}`} icon={<Casino sx={{ fontSize: 18 }} />} color="warning" />
             </Grid>
           </Grid>
       </Box>
@@ -792,6 +814,22 @@ const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '
       clv: pred.clv != null ? pred.clv : null,
       signal_tier: (pred.signal_tier || 'D') as 'A' | 'B' | 'C' | 'D',
       result,
+      profit_loss: (() => {
+        // Use server-computed profit_loss if available
+        if (pred.profit_loss != null) return Number(pred.profit_loss);
+        // Client-side fallback: compute from result + odds (flat $100 bet)
+        if (result === 'pending') return null;
+        if (result === 'push') return 0;
+        const o = odds != null ? Number(odds) : null;
+        if (o == null) {
+          // No odds → assume standard -110
+          return result === 'won' ? 90.91 : result === 'lost' ? -100 : null;
+        }
+        if (result === 'won') return o > 0 ? o : Math.round(100 / Math.abs(o) * 10000) / 100;
+        if (result === 'lost') return -100;
+        return null;
+      })(),
+      odds_display: odds != null ? Number(odds) : null,
       reason: (() => {
         const edgePct = (edge * 100).toFixed(1);
         const probPct = Math.round(prob * 100);
@@ -812,4 +850,4 @@ const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '
   });
 };
 
-export default Predictions; 
+export default Predictions;

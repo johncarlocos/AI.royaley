@@ -144,6 +144,7 @@ class SchedulerService:
         asyncio.create_task(self._run_initial_odds_collection())
         asyncio.create_task(self._run_initial_player_props_collection())
         asyncio.create_task(self._run_initial_scores_collection())
+        asyncio.create_task(self._run_initial_game_fetch())
         
         logger.info("Scheduler started")
     
@@ -164,33 +165,33 @@ class SchedulerService:
                 category=JobCategory.DATA_COLLECTION,
                 func=self._collect_odds_job,  # Actual implementation
                 trigger="interval",
-                trigger_args={"seconds": settings.ODDS_REFRESH_INTERVAL}
+                trigger_args={"seconds": 86400}  # Once daily (fetch_games already collects odds)
             ),
             ScheduledJob(
                 job_id="collect_games",
                 name="Collect Game Schedules",
                 category=JobCategory.DATA_COLLECTION,
-                func=self._dummy_job,
+                func=self._fetch_games_job,
                 trigger="interval",
-                trigger_args={"seconds": settings.GAMES_REFRESH_INTERVAL}
+                trigger_args={"seconds": 86400}  # Once daily (~15 API calls with in-season filter)
             ),
             ScheduledJob(
                 job_id="collect_results",
                 name="Collect Game Results",
                 category=JobCategory.DATA_COLLECTION,
-                func=self._dummy_job,
+                func=self._grade_predictions_job,
                 trigger="interval",
                 trigger_args={"seconds": 900}
             ),
             
-            # Prediction Jobs
+            # Prediction Jobs (predictions are generated during game fetch above)
             ScheduledJob(
                 job_id="generate_predictions",
                 name="Generate Predictions",
                 category=JobCategory.PREDICTIONS,
-                func=self._dummy_job,
+                func=self._dummy_job,  # Handled by collect_games with generate_predictions=True
                 trigger="interval",
-                trigger_args={"seconds": settings.PREDICTION_GENERATION_INTERVAL}
+                trigger_args={"seconds": 86400}
             ),
             
             # Grading Jobs
@@ -280,7 +281,7 @@ class SchedulerService:
                 category=JobCategory.DATA_COLLECTION,
                 func=self._collect_player_props_job,
                 trigger="interval",
-                trigger_args={"seconds": 14400}  # Every 4 hours
+                trigger_args={"seconds": 86400}  # Once daily (preserves Odds API quota)
             ),
             
             # Live Scores Pipeline
@@ -407,6 +408,27 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"[Scheduler] Error in grading job: {e}", exc_info=True)
+
+    async def _fetch_games_job(self):
+        """Fetch upcoming games from Odds API and generate predictions."""
+        try:
+            from app.pipeline.fetch_games import run_pipeline
+
+            logger.info("[Scheduler] Starting game fetch + prediction pipeline...")
+            await run_pipeline(sports=None, generate_predictions=True)
+            logger.info("[Scheduler] ✅ Game fetch + prediction pipeline completed")
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Error in game fetch job: {e}", exc_info=True)
+
+    async def _run_initial_game_fetch(self):
+        """Fetch games immediately on startup after a delay."""
+        await asyncio.sleep(20)  # Wait for DB and other services to be ready
+        try:
+            logger.info("[Scheduler] Running initial game fetch + predictions on startup...")
+            await self._fetch_games_job()
+        except Exception as e:
+            logger.error(f"[Scheduler] Initial game fetch failed: {e}", exc_info=True)
         try:
             logger.info("[Scheduler] Running initial player props collection on startup...")
             await self._collect_player_props_job()

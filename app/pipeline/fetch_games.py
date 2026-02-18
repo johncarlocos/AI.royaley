@@ -802,14 +802,28 @@ async def run_pipeline(
     else:
         # Discover active tennis tournaments (API key rotates by tournament)
         active_api_sports = await api_client.discover_active_sports()
+        
+        # Filter to only in-season sports (saves API quota)
+        active_api_keys = {s.get("key", "") for s in active_api_sports}
+        in_season = {}
+        for code, api_key in sport_keys.items():
+            if api_key in active_api_keys:
+                in_season[code] = api_key
+        
+        # Tennis discovery
         for s in active_api_sports:
             key = s.get("key", "")
             if key.startswith("tennis_atp_"):
-                sport_keys["ATP"] = key
+                in_season["ATP"] = key
                 logger.info(f"  🎾 Active ATP: {s.get('title')}")
             elif key.startswith("tennis_wta_"):
-                sport_keys["WTA"] = key
+                in_season["WTA"] = key
                 logger.info(f"  🎾 Active WTA: {s.get('title')}")
+        
+        skipped = set(sport_keys.keys()) - set(in_season.keys())
+        if skipped:
+            logger.info(f"  ⏭️  Skipping off-season: {sorted(skipped)}")
+        sport_keys = in_season
     
     if not sport_keys:
         logger.error("No valid sports specified")

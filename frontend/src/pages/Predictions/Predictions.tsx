@@ -203,7 +203,7 @@ const Predictions: React.FC = () => {
 
   // Filtered rows for performance stats (respects date range on graded tab)
   const filteredRows = useMemo(() => {
-    if (tab !== 2 || dateRange === 'all') return rows;
+    if (tab !== 1 || dateRange === 'all') return rows;
     const days = parseInt(dateRange);
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
@@ -212,7 +212,7 @@ const Predictions: React.FC = () => {
   }, [rows, tab, dateRange]);
 
   // Summary stats computed from filtered data
-  const statsRows = useMemo(() => tab === 2 ? filteredRows : rows, [tab, filteredRows, rows]);
+  const statsRows = useMemo(() => tab === 1 ? filteredRows : rows, [tab, filteredRows, rows]);
   const graded = statsRows.filter(r => r.result !== 'pending');
   const wins = statsRows.filter(r => r.result === 'won').length;
   const losses = statsRows.filter(r => r.result === 'lost').length;
@@ -270,8 +270,8 @@ const Predictions: React.FC = () => {
 
   const groupedGames = useMemo((): GameGroup[] => {
     let f = [...rows];
-    if (tab === 1) f = f.filter(r => r.result === 'pending');
-    else if (tab === 2) {
+    if (tab === 0) f = f.filter(r => r.result === 'pending');
+    else if (tab === 1) {
       f = f.filter(r => r.result !== 'pending');
       // Apply date range filter for graded tab
       if (dateRange !== 'all') {
@@ -409,13 +409,13 @@ const Predictions: React.FC = () => {
       {/* Tabs + Filters Row */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider', mb: 1.5 }}>
         <Tabs value={tab} onChange={(_, v) => { setTab(v); setPage(0); }} sx={{ minHeight: 40 }}>
-          <Tab label={`All (${totalGames})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label="Pending" sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label="Graded" sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`Pending (${new Set(rows.filter(r => r.result === 'pending').map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`Graded (${new Set(rows.filter(r => r.result !== 'pending').map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`All (${new Set(rows.map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
         </Tabs>
         <Box display="flex" alignItems="center" gap={1.5}>
           {/* Date Range Filter - only shown on Graded tab */}
-          {tab === 2 && (
+          {tab === 1 && (
             <Box display="flex" alignItems="center" gap={0.5} sx={{ mr: 0.5 }}>
               {([
                 { value: '1', label: 'Today' },

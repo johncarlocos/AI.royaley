@@ -209,48 +209,59 @@ async def update_scores_in_db(
         if not row and home_team and away_team:
             commence_time = event.get("commence_time", "")
             if commence_time:
-                result = await db.execute(
-                    text("""
-                        UPDATE upcoming_games
-                        SET home_score = :home_score,
-                            away_score = :away_score,
-                            status = :status,
-                            completed = :completed,
-                            last_score_update = NOW(),
-                            updated_at = NOW()
-                        WHERE id = (
-                            SELECT ug.id FROM upcoming_games ug
-                            JOIN sports s ON ug.sport_id = s.id
-                            WHERE s.code = :sport_code
-                              AND ug.status IN ('scheduled', 'in_progress')
-                              AND (
-                                (ug.home_team_name = :home AND ug.away_team_name = :away)
-                                OR (LOWER(ug.home_team_name) = LOWER(:home) AND LOWER(ug.away_team_name) = LOWER(:away))
-                                OR (ug.home_team_name = :away AND ug.away_team_name = :home)
-                                OR (ug.home_team_name ILIKE '%' || :home_last || '%'
-                                    AND ug.away_team_name ILIKE '%' || :away_last || '%')
-                              )
-                              AND ABS(EXTRACT(EPOCH FROM (ug.scheduled_at - CAST(:ct AS timestamptz)))) < 7200
-                            LIMIT 1
+                # asyncpg needs a real datetime, not a string
+                from datetime import datetime as _dt
+                try:
+                    ct_dt = _dt.fromisoformat(commence_time.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    ct_dt = None
+
+                if ct_dt:
+                    try:
+                        result = await db.execute(
+                            text("""
+                                UPDATE upcoming_games
+                                SET home_score = :home_score,
+                                    away_score = :away_score,
+                                    status = :status,
+                                    completed = :completed,
+                                    last_score_update = NOW(),
+                                    updated_at = NOW()
+                                WHERE id = (
+                                    SELECT ug.id FROM upcoming_games ug
+                                    JOIN sports s ON ug.sport_id = s.id
+                                    WHERE s.code = :sport_code
+                                      AND ug.status IN ('scheduled', 'in_progress')
+                                      AND (
+                                        (ug.home_team_name = :home AND ug.away_team_name = :away)
+                                        OR (LOWER(ug.home_team_name) = LOWER(:home) AND LOWER(ug.away_team_name) = LOWER(:away))
+                                        OR (ug.home_team_name = :away AND ug.away_team_name = :home)
+                                        OR (ug.home_team_name ILIKE '%' || :home_last || '%'
+                                            AND ug.away_team_name ILIKE '%' || :away_last || '%')
+                                      )
+                                      AND ABS(EXTRACT(EPOCH FROM (ug.scheduled_at - :ct))) < 7200
+                                    LIMIT 1
+                                )
+                                RETURNING id
+                            """),
+                            {
+                                "home_score": home_score,
+                                "away_score": away_score,
+                                "status": new_status,
+                                "completed": completed,
+                                "sport_code": sport_code,
+                                "home": home_team,
+                                "away": away_team,
+                                "home_last": home_team.split()[-1] if home_team.split() else home_team,
+                                "away_last": away_team.split()[-1] if away_team.split() else away_team,
+                                "ct": ct_dt,
+                            },
                         )
-                        RETURNING id
-                    """),
-                    {
-                        "home_score": home_score,
-                        "away_score": away_score,
-                        "status": new_status,
-                        "completed": completed,
-                        "sport_code": sport_code,
-                        "home": home_team,
-                        "away": away_team,
-                        "home_last": home_team.split()[-1] if home_team.split() else home_team,
-                        "away_last": away_team.split()[-1] if away_team.split() else away_team,
-                        "ct": commence_time,
-                    },
-                )
-                row = result.fetchone()
-                if row:
-                    logger.info(f"    Matched by team name fallback: {home_team} vs {away_team}")
+                        row = result.fetchone()
+                        if row:
+                            logger.info(f"    Matched by team name fallback: {home_team} vs {away_team}")
+                    except Exception as e:
+                        logger.debug(f"    Team name fallback error: {e}")
 
         if row:
             if completed:
@@ -311,14 +322,15 @@ async def run_scores_pipeline(
         sport_list["ATP"] = None
         sport_list["WTA"] = None
 
-    # Resolve tennis tournament keys dynamically
-    tennis_keys = await resolve_tennis_keys(settings.ODDS_API_KEY)
-    for code in ["ATP", "WTA"]:
-        if code in sport_list:
-            if code in tennis_keys:
-                sport_list[code] = tennis_keys[code]
-            else:
-                del sport_list[code]  # No active tournament, skip
+    # Resolve tennis tournament keys dynamically (skip if override provided)
+    if not tournament_override:
+        tennis_keys = await resolve_tennis_keys(settings.ODDS_API_KEY)
+        for code in ["ATP", "WTA"]:
+            if code in sport_list:
+                if code in tennis_keys:
+                    sport_list[code] = tennis_keys[code]
+                else:
+                    del sport_list[code]  # No active tournament, skip
 
     logger.info(f"Sports: {list(sport_list.keys())}")
     logger.info(f"Days from: {days_from}")

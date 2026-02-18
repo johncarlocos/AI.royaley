@@ -1166,10 +1166,17 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run all jobs once and exit")
     parser.add_argument("--status", action="store_true", help="Show current status")
     parser.add_argument("--grade", action="store_true", help="Run only the grading job")
+    parser.add_argument("--list-ungraded", action="store_true", help="List games with predictions but no scores")
+    parser.add_argument("--manual-score", type=str, metavar="GAME_ID:HOME_SCORE:AWAY_SCORE",
+                        help="Manually set score and grade (e.g. abc123:6:3)")
     args = parser.parse_args()
 
     if args.status:
         asyncio.run(show_status())
+    elif args.list_ungraded:
+        asyncio.run(list_ungraded_games())
+    elif args.manual_score:
+        asyncio.run(manual_score_and_grade(args.manual_score))
     elif args.grade:
         asyncio.run(run_grade_only())
     elif args.once:
@@ -1200,6 +1207,101 @@ async def run_grade_only():
 
     await engine.dispose()
     logger.info("\n✅ Done!")
+
+
+async def list_ungraded_games():
+    """List all games that have predictions but no scores/grades."""
+    engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as db:
+        rows = await db.execute(text("""
+            SELECT ug.id, s.code as sport, ug.home_team_name, ug.away_team_name,
+                   ug.scheduled_at, ug.status, ug.home_score, ug.away_score,
+                   COUNT(p.id) as pred_count
+            FROM upcoming_games ug
+            JOIN sports s ON ug.sport_id = s.id
+            JOIN predictions p ON p.upcoming_game_id = ug.id
+            LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                      AND pr.actual_result IS NOT NULL
+            WHERE pr.id IS NULL
+            GROUP BY ug.id, s.code, ug.home_team_name, ug.away_team_name,
+                     ug.scheduled_at, ug.status, ug.home_score, ug.away_score
+            ORDER BY ug.scheduled_at
+        """))
+        games = rows.fetchall()
+
+    await engine.dispose()
+
+    print("\n" + "=" * 90)
+    print("UNGRADED GAMES WITH PREDICTIONS")
+    print("=" * 90)
+    if not games:
+        print("  No ungraded games found!")
+        return
+
+    print(f"  {'ID (first 8)':<10} {'Sport':<6} {'Home':<25} {'Away':<25} {'Time (UTC)':<20} {'Status':<10} {'Preds'}")
+    print("  " + "-" * 85)
+    for g in games:
+        score_str = f" [{g.home_score}-{g.away_score}]" if g.home_score is not None else ""
+        print(f"  {str(g.id)[:8]:<10} {g.sport:<6} {g.home_team_name[:24]:<25} {g.away_team_name[:24]:<25} {str(g.scheduled_at)[:19]:<20} {g.status:<10} {g.pred_count}{score_str}")
+
+    print(f"\n  Total: {len(games)} ungraded games")
+    print(f"\n  To manually score: docker exec royaley_api python -m app.pipeline.scheduler --manual-score GAME_ID:HOME_SCORE:AWAY_SCORE")
+    print(f"  Example:           docker exec royaley_api python -m app.pipeline.scheduler --manual-score {str(games[0].id)}:6:3")
+    print("=" * 90)
+
+
+async def manual_score_and_grade(score_str: str):
+    """Manually set game score and grade predictions. Format: GAME_ID:HOME_SCORE:AWAY_SCORE"""
+    parts = score_str.split(":")
+    if len(parts) != 3:
+        print("ERROR: Format must be GAME_ID:HOME_SCORE:AWAY_SCORE (e.g. abc123:6:3)")
+        return
+
+    game_id, home_str, away_str = parts
+    try:
+        home_score = int(home_str)
+        away_score = int(away_str)
+    except ValueError:
+        print("ERROR: Scores must be integers")
+        return
+
+    engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as db:
+        # Find the game (support partial UUID match)
+        game = await db.execute(text("""
+            SELECT ug.id, ug.home_team_name, ug.away_team_name, s.code as sport
+            FROM upcoming_games ug
+            JOIN sports s ON ug.sport_id = s.id
+            WHERE CAST(ug.id AS TEXT) LIKE :gid || '%'
+            LIMIT 1
+        """), {"gid": game_id})
+        row = game.fetchone()
+
+        if not row:
+            print(f"ERROR: No game found matching ID '{game_id}'")
+            await engine.dispose()
+            return
+
+        print(f"\n  Scoring: {row.sport} {row.home_team_name} {home_score} - {away_score} {row.away_team_name}")
+
+        # Update scores
+        await db.execute(text("""
+            UPDATE upcoming_games
+            SET home_score = :hs, away_score = :as, status = 'final', updated_at = NOW()
+            WHERE id = :gid
+        """), {"hs": home_score, "as": away_score, "gid": row.id})
+
+        # Grade predictions
+        cnt = await _grade_game_predictions(db, row.id, home_score, away_score)
+        await db.commit()
+
+        print(f"  ✅ Graded {cnt} predictions")
+
+    await engine.dispose()
 
 
 if __name__ == "__main__":

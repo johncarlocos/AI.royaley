@@ -68,7 +68,7 @@ const PlayerProps: React.FC = () => {
     return props.filter(p => {
       const sportMatch = sportFilter === 'all' || p.sport === sportFilter;
       const tierMatch = tierFilter === 'all' || p.tier === tierFilter;
-      const tabMatch = tab === 0 || (tab === 1 && p.status === 'pending') || (tab === 2 && p.status !== 'pending');
+      const tabMatch = tab === 2 || (tab === 0 && p.status === 'pending') || (tab === 1 && p.status !== 'pending');
       return sportMatch && tierMatch && tabMatch;
     });
   }, [props, sportFilter, tierFilter, tab]);
@@ -122,9 +122,9 @@ const PlayerProps: React.FC = () => {
       {/* Tabs + Filters Row */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider', mb: 1.5 }}>
         <Tabs value={tab} onChange={(_, v) => { setTab(v); setPage(0); }} sx={{ minHeight: 40 }}>
+          <Tab label={`Pending (${props.filter(p => p.status === 'pending').length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`Graded (${props.filter(p => p.status !== 'pending').length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
           <Tab label={`All (${props.length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label="Pending" sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label="Graded" sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
         </Tabs>
         <Box display="flex" alignItems="center" gap={1.5}>
           <FormControl size="small" sx={{ minWidth: 100 }}>

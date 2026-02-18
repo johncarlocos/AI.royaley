@@ -812,4 +812,4 @@ const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '
   });
 };
 
-export default Predictions;
+export default Predictions; 

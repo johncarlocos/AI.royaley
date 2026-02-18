@@ -123,9 +123,9 @@ const Betting: React.FC = () => {
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { const iv = setInterval(() => loadData(false), 60000); return () => clearInterval(iv); }, [loadData]);
 
-  const filteredBets = betTab === 0 ? bets
-    : betTab === 1 ? bets.filter(b => b.result === 'pending')
-    : bets.filter(b => b.result !== 'pending');
+  const filteredBets = betTab === 0 ? bets.filter(b => b.result === 'pending')
+    : betTab === 1 ? bets.filter(b => b.result !== 'pending')
+    : bets;
 
   const sortedBets = [...filteredBets].sort((a, b) => {
     const aPending = a.result === 'pending';
@@ -326,9 +326,9 @@ const Betting: React.FC = () => {
           <Card>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, pt: 1.5, pb: 0 }}>
               <Tabs value={betTab} onChange={(_, v) => { setBetTab(v); setPage(0); }} sx={{ minHeight: 36 }}>
-                <Tab label={`All (${bets.length})`} sx={{ fontSize: 12, minHeight: 36, py: 0.5 }} />
                 <Tab label={`Pending (${stats.pending_bets})`} sx={{ fontSize: 12, minHeight: 36, py: 0.5 }} />
                 <Tab label={`Graded (${stats.graded_bets})`} sx={{ fontSize: 12, minHeight: 36, py: 0.5 }} />
+                <Tab label={`All (${bets.length})`} sx={{ fontSize: 12, minHeight: 36, py: 0.5 }} />
               </Tabs>
               <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11 }}>
                 Avg Edge: <span style={{ color: stats.avg_edge >= 0 ? '#4caf50' : '#ef5350', fontWeight: 600 }}>{stats.avg_edge >= 0 ? '+' : ''}{stats.avg_edge}%</span>

@@ -230,7 +230,7 @@ async def update_scores_in_db(
                                 OR (ug.home_team_name ILIKE '%' || :home_last || '%'
                                     AND ug.away_team_name ILIKE '%' || :away_last || '%')
                               )
-                              AND ABS(EXTRACT(EPOCH FROM (ug.scheduled_at - :ct::timestamptz))) < 7200
+                              AND ABS(EXTRACT(EPOCH FROM (ug.scheduled_at - CAST(:ct AS timestamptz)))) < 7200
                             LIMIT 1
                         )
                         RETURNING id
@@ -271,6 +271,7 @@ async def update_scores_in_db(
 async def run_scores_pipeline(
     sports: Optional[List[str]] = None,
     days_from: int = 1,
+    tournament_override: Optional[str] = None,
 ):
     """
     Main pipeline: fetch scores → update DB.
@@ -278,6 +279,7 @@ async def run_scores_pipeline(
     Args:
         sports: Sport codes to fetch. None = all active.
         days_from: Include completed games from past N days (0-3).
+        tournament_override: Force a specific tournament key (e.g. tennis_wta_qatar_open).
     """
     logger.info("=" * 50)
     logger.info("ROYALEY Live Scores Pipeline")
@@ -292,7 +294,11 @@ async def run_scores_pipeline(
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     # Determine sports
-    if sports:
+    if tournament_override and sports:
+        # Direct override: use the given tournament key for the specified sport
+        sport_list = {s.upper(): tournament_override for s in sports}
+        logger.info(f"Tournament override: {tournament_override}")
+    elif sports:
         sport_list = {s.upper(): ODDS_API_SPORT_KEYS[s.upper()]
                       for s in sports if s.upper() in ODDS_API_SPORT_KEYS}
         # Also handle tennis if explicitly requested
@@ -357,12 +363,13 @@ async def run_scores_pipeline(
 
 def main():
     parser = argparse.ArgumentParser(description="ROYALEY Live Scores Pipeline")
-    parser.add_argument("--sport", type=str, help="Specific sport (e.g. NBA)")
+    parser.add_argument("--sport", type=str, help="Specific sport (e.g. NBA, WTA)")
     parser.add_argument("--days-from", type=int, default=1, help="Include completed games from past N days (0-3)")
+    parser.add_argument("--tournament", type=str, help="Override tournament key (e.g. tennis_wta_qatar_open)")
     args = parser.parse_args()
 
     sports = [args.sport] if args.sport else None
-    asyncio.run(run_scores_pipeline(sports=sports, days_from=args.days_from))
+    asyncio.run(run_scores_pipeline(sports=sports, days_from=args.days_from, tournament_override=args.tournament))
 
 
 if __name__ == "__main__":

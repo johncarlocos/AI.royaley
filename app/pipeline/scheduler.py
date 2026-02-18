@@ -430,7 +430,7 @@ async def _match_upcoming_game(
     r = await db.execute(text("""
         SELECT id FROM upcoming_games
         WHERE sport_id = :sid AND home_team_name = :home AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < :tw
         LIMIT 1
     """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
     row = r.fetchone()
@@ -442,7 +442,7 @@ async def _match_upcoming_game(
     r = await db.execute(text("""
         SELECT id FROM upcoming_games
         WHERE sport_id = :sid AND LOWER(home_team_name) = LOWER(:home) AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < :tw
         LIMIT 1
     """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
     row = r.fetchone()
@@ -456,7 +456,7 @@ async def _match_upcoming_game(
         WHERE sport_id = :sid
           AND (home_team_name = :away OR LOWER(home_team_name) = LOWER(:away))
           AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < :tw
         LIMIT 1
     """), {"sid": sport_id, "away": away_name, "ct": ct, "tw": time_window})
     row = r.fetchone()
@@ -476,7 +476,7 @@ async def _match_upcoming_game(
                 OR
                 (home_team_name ILIKE '%' || :al || '%' AND away_team_name ILIKE '%' || :hl || '%')
               )
-              AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
+              AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < :tw
             LIMIT 1
         """), {"sid": sport_id, "hl": home_last, "al": away_last, "ct": ct, "tw": time_window})
         row = r.fetchone()
@@ -488,8 +488,8 @@ async def _match_upcoming_game(
     r = await db.execute(text("""
         SELECT id, home_team_name, away_team_name FROM upcoming_games
         WHERE sport_id = :sid AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < 14400
-        ORDER BY ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz)))
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < 14400
+        ORDER BY ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz))))
         LIMIT 3
     """), {"sid": sport_id, "ct": ct})
     nearby = r.fetchall()
@@ -708,13 +708,25 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
             # ── Collect completed scores from ALL sources ──
             all_completed = []
 
-            # Source 1: Odds API
-            if sport_code in tennis_keys:
-                api_sport_key = tennis_keys[sport_code]
+            # Source 1: Odds API — for tennis, try MULTIPLE tournament keys
+            # (active tournament may differ from the one games were fetched under)
+            tennis_keys_to_try = []
+            if sport_code in ("ATP", "WTA"):
+                # 1) Currently active tournament
+                if sport_code in tennis_keys:
+                    tennis_keys_to_try.append(tennis_keys[sport_code])
+                # 2) DB-stored key (tournament that was active when games were fetched)
+                if db_api_key and db_api_key not in tennis_keys_to_try:
+                    tennis_keys_to_try.append(db_api_key)
+                if not tennis_keys_to_try:
+                    logger.warning(f"    {sport_code}: No tennis tournament keys found")
+                    continue
+                api_sport_keys = tennis_keys_to_try
             else:
-                api_sport_key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
+                key = db_api_key or ODDS_API_SPORT_KEYS.get(sport_code)
+                api_sport_keys = [key] if key else []
 
-            if api_sport_key:
+            for api_sport_key in api_sport_keys:
                 try:
                     resp = await client.get(
                         f"https://api.the-odds-api.com/v4/sports/{api_sport_key}/scores",
@@ -738,20 +750,26 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                                 else:
                                     away_score = int(s["score"]) if s.get("score") else None
                             if home_score is not None and away_score is not None:
-                                all_completed.append({
-                                    "home_team": home_name,
-                                    "away_team": game.get("away_team", ""),
-                                    "home_score": home_score,
-                                    "away_score": away_score,
-                                    "commence_time": game.get("commence_time", ""),
-                                    "source": "odds_api",
-                                })
-                                completed_count += 1
-                        logger.info(f"    {sport_code} Odds API: {len(api_scores)} total, {completed_count} completed")
+                                # Dedupe: skip if same matchup already collected
+                                hn = _normalize_name(home_name)
+                                already = any(_normalize_name(c["home_team"]) == hn for c in all_completed)
+                                if not already:
+                                    all_completed.append({
+                                        "home_team": home_name,
+                                        "away_team": game.get("away_team", ""),
+                                        "home_score": home_score,
+                                        "away_score": away_score,
+                                        "commence_time": game.get("commence_time", ""),
+                                        "source": "odds_api",
+                                    })
+                                    completed_count += 1
+                        logger.info(f"    {sport_code} Odds API [{api_sport_key}]: {len(api_scores)} total, {completed_count} completed")
+                    elif resp.status_code == 404:
+                        logger.info(f"    {sport_code} Odds API [{api_sport_key}]: tournament ended (404)")
                     else:
-                        logger.error(f"    {sport_code} Odds API error: {resp.status_code}")
+                        logger.error(f"    {sport_code} Odds API [{api_sport_key}] error: {resp.status_code}")
                 except Exception as e:
-                    logger.error(f"    {sport_code} Odds API error: {e}")
+                    logger.error(f"    {sport_code} Odds API [{api_sport_key}] error: {e}")
 
             # Source 2: ESPN fallback (free, no API key)
             espn_scores = await _fetch_espn_scores(client, sport_code)

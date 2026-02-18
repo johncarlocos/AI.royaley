@@ -426,17 +426,6 @@ async def _match_upcoming_game(
     """
     ct = commence_time if commence_time else "2000-01-01T00:00:00Z"
 
-    # Strategy 1: Exact home name match
-    r = await db.execute(text("""
-        UPDATE upcoming_games
-        SET home_score = NULL, status = status  -- no-op update, just to test match
-        WHERE sport_id = :sid AND home_team_name = :home AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - :ct::timestamptz))) < :tw
-        RETURNING id
-    """), {"sid": sport_id, "home": home_name, "ct": ct, "tw": time_window})
-    # Actually, don't use UPDATE for testing. Use SELECT.
-    await db.rollback()
-
     # Strategy 1: Exact home name
     r = await db.execute(text("""
         SELECT id FROM upcoming_games
@@ -807,7 +796,7 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                     SELECT status FROM upcoming_games WHERE id = :gid
                 """), {"gid": game_uuid})
                 row = check.fetchone()
-                if row and row.status == 'completed':
+                if row and row.status in ('completed', 'final', 'closed'):
                     continue  # Already graded
 
                 # Update the upcoming_game with scores

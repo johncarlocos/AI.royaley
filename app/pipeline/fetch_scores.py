@@ -34,6 +34,33 @@ logger = logging.getLogger("royaley.scores")
 
 
 # =============================================================================
+# RESOLVE TENNIS TOURNAMENT KEYS (same logic as scheduler.py)
+# =============================================================================
+
+async def resolve_tennis_keys(api_key: str) -> dict:
+    """Discover active ATP/WTA tournament keys from Odds API."""
+    tennis_keys = {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://api.the-odds-api.com/v4/sports",
+                params={"apiKey": api_key},
+            )
+            if resp.status_code == 200:
+                for s in resp.json():
+                    key = s.get("key", "")
+                    if key.startswith("tennis_atp_") and s.get("active"):
+                        tennis_keys["ATP"] = key
+                    elif key.startswith("tennis_wta_") and s.get("active"):
+                        tennis_keys["WTA"] = key
+                if tennis_keys:
+                    logger.info(f"  Active tennis tournaments: {tennis_keys}")
+    except Exception as e:
+        logger.warning(f"  Failed to discover tennis keys: {e}")
+    return tennis_keys
+
+
+# =============================================================================
 # SCORES API CLIENT
 # =============================================================================
 
@@ -178,6 +205,53 @@ async def update_scores_in_db(
         )
         row = result.fetchone()
 
+        # Fallback: match by team names + sport + time (for tennis & name mismatches)
+        if not row and home_team and away_team:
+            commence_time = event.get("commence_time", "")
+            if commence_time:
+                result = await db.execute(
+                    text("""
+                        UPDATE upcoming_games
+                        SET home_score = :home_score,
+                            away_score = :away_score,
+                            status = :status,
+                            completed = :completed,
+                            last_score_update = NOW(),
+                            updated_at = NOW()
+                        WHERE id = (
+                            SELECT ug.id FROM upcoming_games ug
+                            JOIN sports s ON ug.sport_id = s.id
+                            WHERE s.code = :sport_code
+                              AND ug.status IN ('scheduled', 'in_progress')
+                              AND (
+                                (ug.home_team_name = :home AND ug.away_team_name = :away)
+                                OR (LOWER(ug.home_team_name) = LOWER(:home) AND LOWER(ug.away_team_name) = LOWER(:away))
+                                OR (ug.home_team_name = :away AND ug.away_team_name = :home)
+                                OR (ug.home_team_name ILIKE '%' || :home_last || '%'
+                                    AND ug.away_team_name ILIKE '%' || :away_last || '%')
+                              )
+                              AND ABS(EXTRACT(EPOCH FROM (ug.scheduled_at - :ct::timestamptz))) < 7200
+                            LIMIT 1
+                        )
+                        RETURNING id
+                    """),
+                    {
+                        "home_score": home_score,
+                        "away_score": away_score,
+                        "status": new_status,
+                        "completed": completed,
+                        "sport_code": sport_code,
+                        "home": home_team,
+                        "away": away_team,
+                        "home_last": home_team.split()[-1] if home_team.split() else home_team,
+                        "away_last": away_team.split()[-1] if away_team.split() else away_team,
+                        "ct": commence_time,
+                    },
+                )
+                row = result.fetchone()
+                if row:
+                    logger.info(f"    Matched by team name fallback: {home_team} vs {away_team}")
+
         if row:
             if completed:
                 stats["completed"] += 1
@@ -221,8 +295,24 @@ async def run_scores_pipeline(
     if sports:
         sport_list = {s.upper(): ODDS_API_SPORT_KEYS[s.upper()]
                       for s in sports if s.upper() in ODDS_API_SPORT_KEYS}
+        # Also handle tennis if explicitly requested
+        for s in sports:
+            if s.upper() in ('ATP', 'WTA') and s.upper() not in sport_list:
+                sport_list[s.upper()] = None  # Will be resolved below
     else:
         sport_list = dict(ODDS_API_SPORT_KEYS)
+        # Add tennis placeholders (keys resolved dynamically below)
+        sport_list["ATP"] = None
+        sport_list["WTA"] = None
+
+    # Resolve tennis tournament keys dynamically
+    tennis_keys = await resolve_tennis_keys(settings.ODDS_API_KEY)
+    for code in ["ATP", "WTA"]:
+        if code in sport_list:
+            if code in tennis_keys:
+                sport_list[code] = tennis_keys[code]
+            else:
+                del sport_list[code]  # No active tournament, skip
 
     logger.info(f"Sports: {list(sport_list.keys())}")
     logger.info(f"Days from: {days_from}")

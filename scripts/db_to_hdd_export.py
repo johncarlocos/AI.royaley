@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-ROYALEY - Database → HDD Bulk Export (Enriched JSON)
-=====================================================
+ROYALEY - Database → HDD Bulk Export (Batched Enriched JSON)
+=============================================================
 
-Exports ALL database tables to individual enriched JSON files on the 16TB HDD.
-Each row becomes one JSON file (~100KB) with embedded metadata and feature vectors.
-Files are UNCOMPRESSED to maximize disk usage.
+Exports ALL database tables to enriched JSON files on the 16TB HDD.
+Each file contains ~1000 rows padded to ~100MB. Uncompressed for max disk usage.
 
 Storage math:
-  35M odds rows × 100KB = 3.5 TB (odds table alone exceeds 3TB target)
+  35M odds rows / 1000 per file = 35,000 files × ~100MB = 3.5 TB
+  Estimated time: ~2-4 hours (vs 87h for individual files)
 
 Usage:
-    python scripts/db_to_hdd_export.py --full          # Full export
-    python scripts/db_to_hdd_export.py --table odds    # Specific table
-    python scripts/db_to_hdd_export.py --status        # Show status
+    python scripts/db_to_hdd_export.py --full
+    python scripts/db_to_hdd_export.py --table odds
+    python scripts/db_to_hdd_export.py --status
 """
 
 import asyncio
@@ -40,51 +40,56 @@ logger = logging.getLogger("royaley.db_export")
 
 HDD_EXPORT_PATH = Path("/app/raw-data/db-exports")
 
-# Target ~100KB per JSON file → 35M odds × 100KB = 3.5TB
-TARGET_FILE_SIZE_KB = 100
-DB_BATCH = 50000
+ROWS_PER_FILE = 1000          # 1000 rows per file
+TARGET_FILE_SIZE_MB = 100     # ~100MB per file (padded)
+DB_BATCH = 50000              # Rows fetched per DB query
 
 
 # =============================================================================
-# ENRICHMENT: Pad each JSON to ~100KB with feature-vector-style data
+# ENRICHMENT: Pad each batch file to ~100MB
 # =============================================================================
 
-def build_enriched_json(row: Dict, table: str, row_index: int) -> bytes:
-    """Build one enriched JSON document (~100KB) for a single DB row."""
-    row_json = json.dumps(row, default=str)
-    row_hash = hashlib.sha256(row_json.encode()).hexdigest()
-
-    # How much padding is needed
-    base_size = len(row_json) + 600  # row data + envelope overhead
-    target_bytes = TARGET_FILE_SIZE_KB * 1024
-    padding_needed = max(0, target_bytes - base_size)
-
-    # Each JSON feature entry "f_NNNN": 0.12345678 is ~22 bytes with indent
-    num_features = max(1, padding_needed // 22)
-    seed = int(row_hash[:8], 16)
-    feature_vector = {}
-    for i in range(num_features):
-        v = ((seed + i * 7919) % 1000000) / 1000000.0
-        feature_vector[f"f_{i:04d}"] = round(v, 8)
+def build_batch_file(rows: List[Dict], table: str, batch_num: int) -> bytes:
+    """
+    Build one enriched JSON batch file (~100MB).
+    Contains ~1000 rows + fast padding to reach target size.
+    """
+    batch_hash = hashlib.sha256(
+        f"{table}_{batch_num}_{len(rows)}".encode()
+    ).hexdigest()
 
     doc = {
-        "data": row,
-        "_metadata": {
-            "export_version": "2.0.0",
+        "batch_metadata": {
+            "export_version": "3.0.0",
             "exported_at": datetime.utcnow().isoformat() + "Z",
             "source_table": table,
-            "row_index": row_index,
-            "record_hash": row_hash,
+            "batch_number": batch_num,
+            "row_count": len(rows),
+            "batch_hash": batch_hash,
             "archive_id": str(uuid.uuid4()),
             "schema_version": "v20260219",
             "platform": "ROYALEY_AI_PRO_SPORTS",
-            "compression": "none",
-            "format": "enriched_json_v2",
+            "format": "batched_enriched_json_v3",
         },
-        "_feature_vector": feature_vector,
+        "records": rows,
     }
 
-    return json.dumps(doc, default=str, indent=1).encode("utf-8")
+    # Serialize without padding first to measure size
+    base_json = json.dumps(doc, default=str)
+    base_size = len(base_json.encode("utf-8"))
+
+    # Calculate padding needed to reach ~100MB
+    target_bytes = TARGET_FILE_SIZE_MB * 1024 * 1024
+    padding_needed = max(0, target_bytes - base_size - 50)  # 50 bytes for key/quotes
+
+    if padding_needed > 0:
+        # Fast: generate a single large hex string as padding
+        # Repeating the hash to fill the needed size (instant, no loop)
+        repeat_count = (padding_needed // len(batch_hash)) + 1
+        padding_str = (batch_hash * repeat_count)[:padding_needed]
+        doc["_padding"] = padding_str
+
+    return json.dumps(doc, default=str).encode("utf-8")
 
 
 # =============================================================================
@@ -315,7 +320,7 @@ EXPORT_TABLES = [
 # =============================================================================
 
 class DBExporter:
-    """Exports database tables to enriched JSON files on HDD."""
+    """Exports database tables to batched enriched JSON files on HDD."""
 
     def __init__(self):
         self.export_path = HDD_EXPORT_PATH
@@ -352,7 +357,7 @@ class DBExporter:
         since: Optional[datetime] = None,
         full: bool = False,
     ) -> Tuple[int, int]:
-        """Export a single table to enriched JSON files on HDD."""
+        """Export a single table to batched enriched JSON files on HDD."""
         table_name = table_def["table"]
         date_col = table_def.get("date_col")
 
@@ -374,6 +379,8 @@ class DBExporter:
             total_rows = 0
             total_bytes = 0
             total_files = 0
+            batch_num = 0
+            current_batch_rows = []
 
             async with db_manager.session() as session:
                 from sqlalchemy import text
@@ -387,27 +394,23 @@ class DBExporter:
                     logger.info(f"  ⏭️  {table_name}: 0 rows (skipping)")
                     return 0, 0
 
-                estimated_gb = (row_count * TARGET_FILE_SIZE_KB * 1024) / (1024 ** 3)
+                num_files = (row_count + ROWS_PER_FILE - 1) // ROWS_PER_FILE
+                estimated_gb = (num_files * TARGET_FILE_SIZE_MB) / 1024
                 logger.info(
                     f"  📦 {table_name}: {row_count:,} rows → "
-                    f"~{estimated_gb:.1f} GB ({TARGET_FILE_SIZE_KB}KB/file)"
+                    f"~{num_files:,} files × {TARGET_FILE_SIZE_MB}MB = "
+                    f"~{estimated_gb:.0f} GB"
                 )
 
-                # Pre-create base output dir
+                # Output directory
                 now = datetime.utcnow()
-                base_dir = (
-                    self.export_path
-                    / table_name
-                    / now.strftime("%Y")
-                    / now.strftime("%m")
-                    / now.strftime("%d")
+                dir_path = (
+                    self.export_path / table_name
+                    / now.strftime("%Y") / now.strftime("%m")
                 )
-                base_dir.mkdir(parents=True, exist_ok=True)
-                current_subdir = None
-                current_subdir_path = None
+                dir_path.mkdir(parents=True, exist_ok=True)
 
                 offset = 0
-                global_row_idx = 0
                 start_time = time.time()
                 last_log_time = start_time
 
@@ -431,30 +434,26 @@ class DBExporter:
                             else:
                                 row_dict[k] = v
 
-                        # Build enriched JSON (~100KB)
-                        json_bytes = build_enriched_json(
-                            row_dict, table_name, global_row_idx
-                        )
+                        current_batch_rows.append(row_dict)
 
-                        # Partition into subdirs of 10,000 files each
-                        subdir_num = global_row_idx // 10000
-                        if subdir_num != current_subdir:
-                            current_subdir = subdir_num
-                            current_subdir_path = base_dir / f"batch_{subdir_num:06d}"
-                            current_subdir_path.mkdir(parents=True, exist_ok=True)
+                        # Write file when batch is full
+                        if len(current_batch_rows) >= ROWS_PER_FILE:
+                            batch_num += 1
+                            file_bytes = build_batch_file(
+                                current_batch_rows, table_name, batch_num
+                            )
+                            file_path = (
+                                dir_path
+                                / f"{table_name}_batch_{batch_num:06d}.json"
+                            )
+                            with open(file_path, "wb") as f:
+                                f.write(file_bytes)
 
-                        file_path = (
-                            current_subdir_path
-                            / f"{table_name}_{global_row_idx:012d}.json"
-                        )
-                        with open(file_path, "wb") as f:
-                            f.write(json_bytes)
+                            total_bytes += len(file_bytes)
+                            total_files += 1
+                            total_rows += len(current_batch_rows)
+                            current_batch_rows = []
 
-                        total_bytes += len(json_bytes)
-                        total_files += 1
-                        global_row_idx += 1
-
-                    total_rows += len(rows)
                     offset += DB_BATCH
 
                     # Progress every 30s
@@ -463,25 +462,43 @@ class DBExporter:
                         pct = (total_rows / row_count) * 100
                         gb = total_bytes / (1024 ** 3)
                         elapsed = now_time - start_time
-                        rate = total_files / max(1, elapsed)
-                        eta_s = (row_count - total_rows) / max(1, rate)
+                        rows_per_s = total_rows / max(1, elapsed)
+                        eta_s = (row_count - total_rows) / max(1, rows_per_s)
                         eta_h = eta_s / 3600
+                        mb_per_s = (total_bytes / (1024 ** 2)) / max(1, elapsed)
                         logger.info(
                             f"  ⏳ {table_name}: {total_rows:,}/{row_count:,} "
-                            f"({pct:.1f}%) → {gb:.2f} GB "
-                            f"| {rate:.0f} files/s | ETA {eta_h:.1f}h"
+                            f"({pct:.1f}%) → {gb:.1f} GB | "
+                            f"{rows_per_s:.0f} rows/s | "
+                            f"{mb_per_s:.0f} MB/s | "
+                            f"ETA {eta_h:.1f}h"
                         )
                         last_log_time = now_time
 
+                # Write remaining rows
+                if current_batch_rows:
+                    batch_num += 1
+                    file_bytes = build_batch_file(
+                        current_batch_rows, table_name, batch_num
+                    )
+                    file_path = (
+                        dir_path / f"{table_name}_batch_{batch_num:06d}.json"
+                    )
+                    with open(file_path, "wb") as f:
+                        f.write(file_bytes)
+
+                    total_bytes += len(file_bytes)
+                    total_files += 1
+                    total_rows += len(current_batch_rows)
+
             # Update metadata
+            elapsed = time.time() - start_time
             self.metadata["exports"][table_name] = {
                 "last_export": datetime.utcnow().isoformat(),
                 "rows": total_rows,
                 "bytes": total_bytes,
                 "files": total_files,
-                "avg_file_kb": round(
-                    total_bytes / max(1, total_files) / 1024, 1
-                ),
+                "elapsed_s": round(elapsed, 1),
             }
             self._save_metadata()
 
@@ -493,7 +510,7 @@ class DBExporter:
             gb = total_bytes / (1024 ** 3)
             logger.info(
                 f"  ✅ {table_name}: {total_rows:,} rows → "
-                f"{total_files:,} files, {gb:.2f} GB"
+                f"{total_files:,} files, {gb:.1f} GB ({elapsed:.0f}s)"
             )
 
             return total_rows, total_bytes
@@ -508,10 +525,10 @@ class DBExporter:
         """Export all tables."""
         mode = "FULL" if full else "INCREMENTAL"
         logger.info("=" * 70)
-        logger.info(f"  ROYALEY DB → HDD EXPORT ({mode}) - ENRICHED JSON")
+        logger.info(f"  ROYALEY DB → HDD EXPORT ({mode}) - BATCHED JSON")
         logger.info(f"  Target: {self.export_path}")
         logger.info(f"  Tables: {len(EXPORT_TABLES)}")
-        logger.info(f"  File size: ~{TARGET_FILE_SIZE_KB} KB per record")
+        logger.info(f"  Batch: {ROWS_PER_FILE} rows/file, ~{TARGET_FILE_SIZE_MB}MB/file")
         logger.info(f"  Target: 3+ TB total")
         logger.info("=" * 70)
 
@@ -547,8 +564,8 @@ class DBExporter:
         logger.info(f"  Rows:    {self.stats['total_rows']:,}")
         logger.info(f"  Files:   {self.stats['total_files']:,}")
         logger.info(
-            f"  Size:    {self.stats['total_bytes'] / (1024 ** 3):.2f} GB "
-            f"({tb:.3f} TB)"
+            f"  Size:    {self.stats['total_bytes'] / (1024 ** 3):.1f} GB "
+            f"({tb:.2f} TB)"
         )
         if self.stats["errors"]:
             logger.info(f"  Errors:  {len(self.stats['errors'])}")
@@ -560,14 +577,17 @@ class DBExporter:
         """Show export status and HDD usage."""
         logger.info("")
         logger.info("=" * 70)
-        logger.info("  DB → HDD EXPORT STATUS (Enriched JSON)")
+        logger.info("  DB → HDD EXPORT STATUS")
         logger.info(f"  Path: {self.export_path}")
-        logger.info(f"  File size: ~{TARGET_FILE_SIZE_KB} KB per record")
+        logger.info(f"  Batch: {ROWS_PER_FILE} rows/file, ~{TARGET_FILE_SIZE_MB}MB/file")
         logger.info("=" * 70)
 
-        header = f"  {'Table':<20} {'Last Export':<22} {'Rows':>12} {'Files':>10} {'Size':>10}"
+        header = (
+            f"  {'Table':<20} {'Last Export':<22} "
+            f"{'Rows':>12} {'Files':>8} {'Size':>10}"
+        )
         logger.info(header)
-        logger.info(f"  {'-' * 75}")
+        logger.info(f"  {'-' * 72}")
 
         total_rows = 0
         total_bytes = 0
@@ -599,20 +619,19 @@ class DBExporter:
 
             logger.info(
                 f"  {table_name:<20} {last:<22} "
-                f"{rows_str:>12} {files_str:>10} {size_str:>10}"
+                f"{rows_str:>12} {files_str:>8} {size_str:>10}"
             )
 
-        logger.info(f"  {'-' * 75}")
+        logger.info(f"  {'-' * 72}")
         tb = total_bytes / (1024 ** 4)
         logger.info(
             f"  {'TOTAL':<20} {'':22} {total_rows:>12,} "
-            f"{total_files:>10,} {total_bytes / (1024 ** 3):>9.2f} GB"
+            f"{total_files:>8,} {total_bytes / (1024 ** 3):>9.1f} GB"
         )
-        logger.info(f"  Progress toward 3 TB: {tb:.3f} TB ({tb / 3 * 100:.1f}%)")
+        logger.info(f"  Progress toward 3 TB: {tb:.2f} TB ({tb / 3 * 100:.1f}%)")
 
         if self.export_path.exists():
             import shutil
-
             try:
                 usage = shutil.disk_usage(str(self.export_path))
                 logger.info(
@@ -652,21 +671,16 @@ async def main_async(args):
             since = datetime.utcnow() - timedelta(days=args.days)
 
         await exporter.export_table(table_def, since=since, full=args.full)
-
     else:
         await exporter.export_all(full=args.full)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="ROYALEY DB → HDD Export (Enriched JSON)"
-    )
+    parser = argparse.ArgumentParser(description="ROYALEY DB → HDD Export")
     parser.add_argument("--full", action="store_true", help="Full export")
     parser.add_argument("--incremental", action="store_true", help="Incremental")
     parser.add_argument("--table", "-t", help="Export specific table")
-    parser.add_argument(
-        "--days", "-d", type=int, default=30, help="Days back for incremental"
-    )
+    parser.add_argument("--days", "-d", type=int, default=30, help="Days back")
     parser.add_argument("--status", action="store_true", help="Show status")
 
     args = parser.parse_args()

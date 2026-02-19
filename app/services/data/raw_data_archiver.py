@@ -124,6 +124,14 @@ class ArchiveCategory(str, Enum):
     ODDS_HISTORY = "odds-history"
     METADATA = "_metadata"
 
+    def __str__(self) -> str:
+        """Return value (not 'ArchiveCategory.NAME') for Path compatibility."""
+        return self.value
+
+    def __fspath__(self) -> str:
+        """Allow direct use in Path operations: Path(...) / ArchiveCategory.X"""
+        return self.value
+
 
 class RawDataArchiver:
     """

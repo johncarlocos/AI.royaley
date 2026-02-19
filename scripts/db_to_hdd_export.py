@@ -63,47 +63,50 @@ EXPORT_TABLES = [
     {
         "table": "odds",
         "query": """
-            SELECT o.*, g.sport_code, g.game_date, g.external_id as game_external_id,
+            SELECT o.*, s.code as sport_code, g.scheduled_at, g.external_id as game_external_id,
                    ht.name as home_team, at.name as away_team,
                    sb.name as sportsbook_name
             FROM odds o
             JOIN games g ON o.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
             LEFT JOIN teams ht ON g.home_team_id = ht.id
             LEFT JOIN teams at ON g.away_team_id = at.id
             LEFT JOIN sportsbooks sb ON o.sportsbook_id = sb.id
             {where}
-            ORDER BY g.game_date, o.created_at
+            ORDER BY g.scheduled_at, o.recorded_at
         """,
         "partition_by": "sport_code",
-        "date_col": "g.created_at",
+        "date_col": "o.recorded_at",
         "description": "Odds from 40+ sportsbooks",
         "estimated_size": "500GB-1TB",
     },
     {
         "table": "odds_movements",
         "query": """
-            SELECT om.*, g.sport_code, g.game_date, g.external_id as game_external_id
+            SELECT om.*, s.code as sport_code, g.scheduled_at, g.external_id as game_external_id
             FROM odds_movements om
             JOIN games g ON om.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
             {where}
-            ORDER BY om.recorded_at
+            ORDER BY om.detected_at
         """,
         "partition_by": "sport_code",
-        "date_col": "om.recorded_at",
+        "date_col": "om.detected_at",
         "description": "Line movement history",
         "estimated_size": "200-500GB",
     },
     {
         "table": "closing_lines",
         "query": """
-            SELECT cl.*, g.sport_code, g.game_date, g.external_id as game_external_id
+            SELECT cl.*, s.code as sport_code, g.scheduled_at, g.external_id as game_external_id
             FROM closing_lines cl
             JOIN games g ON cl.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
             {where}
-            ORDER BY cl.captured_at
+            ORDER BY cl.recorded_at
         """,
         "partition_by": "sport_code",
-        "date_col": "cl.captured_at",
+        "date_col": "cl.recorded_at",
         "description": "Pinnacle closing lines",
         "estimated_size": "50-100GB",
     },
@@ -111,7 +114,11 @@ EXPORT_TABLES = [
     {
         "table": "games",
         "query": """
-            SELECT g.*, s.code as sport_code, s.name as sport_name,
+            SELECT g.id, g.sport_id, g.season_id, g.external_id, g.home_team_id, g.away_team_id,
+                   g.venue_id, g.scheduled_at, g.status, g.home_score, g.away_score,
+                   g.home_rotation, g.away_rotation, g.period, g.clock,
+                   g.master_game_id, g.created_at, g.updated_at,
+                   s.code as sport_code, s.name as sport_name,
                    ht.name as home_team_name, ht.abbreviation as home_abbr,
                    at.name as away_team_name, at.abbreviation as away_abbr,
                    v.name as venue_name, v.city as venue_city
@@ -121,7 +128,7 @@ EXPORT_TABLES = [
             LEFT JOIN teams at ON g.away_team_id = at.id
             LEFT JOIN venues v ON g.venue_id = v.id
             {where}
-            ORDER BY g.game_date
+            ORDER BY g.scheduled_at
         """,
         "partition_by": "sport_code",
         "date_col": "g.created_at",
@@ -131,15 +138,14 @@ EXPORT_TABLES = [
     {
         "table": "player_stats",
         "query": """
-            SELECT ps.*, g.sport_code, g.game_date, g.external_id as game_external_id,
-                   p.name as player_name, p.position as player_position,
-                   t.name as team_name
+            SELECT ps.*, s.code as sport_code, g.scheduled_at, g.external_id as game_external_id,
+                   p.name as player_name, p.position as player_position
             FROM player_stats ps
-            JOIN games g ON ps.game_id = g.id
+            LEFT JOIN games g ON ps.game_id = g.id
+            LEFT JOIN sports s ON g.sport_id = s.id
             LEFT JOIN players p ON ps.player_id = p.id
-            LEFT JOIN teams t ON ps.team_id = t.id
             {where}
-            ORDER BY g.game_date, ps.created_at
+            ORDER BY ps.created_at
         """,
         "partition_by": "sport_code",
         "date_col": "ps.created_at",
@@ -149,29 +155,30 @@ EXPORT_TABLES = [
     {
         "table": "team_stats",
         "query": """
-            SELECT ts.*, g.sport_code, g.game_date, g.external_id as game_external_id,
-                   t.name as team_name, t.abbreviation as team_abbr
+            SELECT ts.*, t.name as team_name, t.abbreviation as team_abbr,
+                   s.code as sport_code
             FROM team_stats ts
-            JOIN games g ON ts.game_id = g.id
-            LEFT JOIN teams t ON ts.team_id = t.id
+            JOIN teams t ON ts.team_id = t.id
+            JOIN sports s ON t.sport_id = s.id
             {where}
-            ORDER BY g.game_date, ts.id
+            ORDER BY ts.computed_at
         """,
         "partition_by": "sport_code",
-        "date_col": "g.game_date",
+        "date_col": "ts.computed_at",
         "description": "Team-level stats",
         "estimated_size": "10-50GB",
     },
     {
         "table": "player_props",
         "query": """
-            SELECT pp.*, g.sport_code, g.game_date,
+            SELECT pp.*, s.code as sport_code, g.scheduled_at,
                    p.name as player_name
             FROM player_props pp
             JOIN games g ON pp.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
             LEFT JOIN players p ON pp.player_id = p.id
             {where}
-            ORDER BY g.game_date, pp.created_at
+            ORDER BY pp.created_at
         """,
         "partition_by": "sport_code",
         "date_col": "pp.created_at",
@@ -182,27 +189,31 @@ EXPORT_TABLES = [
     {
         "table": "weather_data",
         "query": """
-            SELECT wd.*, g.sport_code, g.game_date, g.external_id as game_external_id,
+            SELECT wd.*, g.scheduled_at, g.external_id as game_external_id,
+                   s.code as sport_code,
                    v.name as venue_name, v.city as venue_city, v.latitude, v.longitude
             FROM weather_data wd
             LEFT JOIN games g ON wd.game_id = g.id
+            LEFT JOIN sports s ON g.sport_id = s.id
             LEFT JOIN venues v ON wd.venue_id = v.id
             {where}
-            ORDER BY wd.created_at
+            ORDER BY wd.recorded_at
         """,
         "partition_by": None,
-        "date_col": "wd.created_at",
+        "date_col": "wd.recorded_at",
         "description": "Weather data",
         "estimated_size": "1-5GB",
     },
     {
         "table": "predictions",
         "query": """
-            SELECT p.*, g.sport_code, g.game_date, g.external_id as game_external_id,
-                   pr.is_correct, pr.pnl, pr.grade,
+            SELECT p.*, s.code as sport_code, g.scheduled_at, g.external_id as game_external_id,
+                   pr.actual_result, pr.profit_loss, pr.clv as closing_line_value,
+                   pr.graded_at,
                    ht.name as home_team, at.name as away_team
             FROM predictions p
             JOIN games g ON p.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
             LEFT JOIN prediction_results pr ON p.id = pr.prediction_id
             LEFT JOIN teams ht ON g.home_team_id = ht.id
             LEFT JOIN teams at ON g.away_team_id = at.id
@@ -217,9 +228,8 @@ EXPORT_TABLES = [
     {
         "table": "clv_records",
         "query": """
-            SELECT clv.*, g.sport_code, g.game_date
+            SELECT clv.*
             FROM clv_records clv
-            JOIN games g ON clv.game_id = g.id
             {where}
             ORDER BY clv.recorded_at
         """,
@@ -271,17 +281,32 @@ EXPORT_TABLES = [
     {
         "table": "elo_history",
         "query": """
-            SELECT eh.*, t.name as team_name, s.code as sport_code
+            SELECT eh.*, t.name as team_name
             FROM elo_history eh
             JOIN teams t ON eh.team_id = t.id
-            JOIN sports s ON t.sport_id = s.id
             {where}
-            ORDER BY eh.date
+            ORDER BY eh.recorded_at
         """,
         "partition_by": "sport_code",
-        "date_col": "eh.date",
+        "date_col": "eh.recorded_at",
         "description": "Elo rating history",
         "estimated_size": "1-5GB",
+    },
+    {
+        "table": "game_features",
+        "query": """
+            SELECT gf.id, gf.game_id, gf.feature_version, gf.computed_at,
+                   s.code as sport_code, g.scheduled_at
+            FROM game_features gf
+            JOIN games g ON gf.game_id = g.id
+            JOIN sports s ON g.sport_id = s.id
+            {where}
+            ORDER BY gf.computed_at
+        """,
+        "partition_by": "sport_code",
+        "date_col": "gf.computed_at",
+        "description": "Pre-computed ML features",
+        "estimated_size": "5-20GB",
     },
 ]
 

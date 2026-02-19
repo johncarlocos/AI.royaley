@@ -1,0 +1,70 @@
+# docker-compose.data-collector.yml
+# =============================================================================
+# ROYALEY - Data Collection Service
+# Runs all 27 data collectors on smart schedules, archiving to HDD (16TB)
+#
+# Usage:
+#   # Add to existing stack:
+#   docker compose -f docker-compose.yml -f docker-compose.data-collector.yml up -d
+#
+#   # Or merge the service block below into your main docker-compose.yml
+#
+#   # Initial import (first time only - takes 2-6 hours):
+#   docker exec royaley_data_collector python scripts/data_collector.py --initial
+#
+#   # Check HDD storage:
+#   docker exec royaley_data_collector python scripts/data_collector.py --status
+# =============================================================================
+
+services:
+  data_collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_AUTOGLUON: "false"
+        INSTALL_QUANTUM: "false"
+        INSTALL_GPU: "false"
+    container_name: royaley_data_collector
+    restart: unless-stopped
+    command: python scripts/data_collector.py
+    environment:
+      - ENVIRONMENT=production
+      - APP_NAME=Royaley
+      - DATABASE_URL=postgresql+asyncpg://royaley:${POSTGRES_PASSWORD}@postgres:5432/royaley
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      # API Keys for all collectors
+      - ODDS_API_KEY=${ODDS_API_KEY}
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - WEATHERSTACK_API_KEY=${WEATHERSTACK_API_KEY}
+      - BALLDONTLIE_API_KEY=${BALLDONTLIE_API_KEY}
+      - KAGGLE_API_TOKEN=${KAGGLE_API_TOKEN}
+      # Telegram notifications
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      # Logs
+      - /nvme0n1-disk/royaley/logs:/app/logs
+      # HDD - Raw data archive (16TB)
+      - /sda-disk/raw-data:/app/raw-data
+      - /sda-disk/backups:/app/backups
+      # NVMe for DB data access
+      - /nvme0n1-disk/royaley/data:/app/data
+      - /nvme0n1-disk/royaley/models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - royaley_network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G

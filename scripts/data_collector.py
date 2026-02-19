@@ -285,6 +285,7 @@ async def run_scheduler():
     
     cycle = 0
     last_weekly = 0
+    last_db_export = 0
     
     while not shutdown_flag:
         cycle += 1
@@ -298,8 +299,20 @@ async def run_scheduler():
             total_recs = sum(r["records"] for r in results.values())
             logger.info(f"  📊 Cycle #{cycle}: {successful}/{len(results)} succeeded, {total_recs:,} records")
         
-        # Weekly historical backfill (Sunday 3 AM UTC)
         now = datetime.utcnow()
+        
+        # Daily DB → HDD export (2 AM UTC)
+        if now.hour == 2 and (time.time() - last_db_export) > 43200:
+            logger.info("💾 Daily DB → HDD export starting...")
+            try:
+                from scripts.db_to_hdd_export import DBExporter
+                exporter = DBExporter()
+                await exporter.export_all(full=False)
+            except Exception as e:
+                logger.error(f"DB export failed: {e}")
+            last_db_export = time.time()
+        
+        # Weekly historical backfill (Sunday 3 AM UTC)
         if now.weekday() == 6 and now.hour == 3 and (time.time() - last_weekly) > 86400:
             logger.info("📅 Weekly historical backfill starting...")
             await scheduler.run_historical_backfill(seasons=2)  # Last 2 seasons only for weekly
@@ -392,8 +405,17 @@ async def run_initial_import():
         await asyncio.sleep(3)
     
     logger.info("\n" + "=" * 60)
-    logger.info("📊 INITIAL IMPORT COMPLETE")
+    logger.info("📊 INITIAL IMPORT COMPLETE - Starting DB → HDD export...")
     logger.info("=" * 60)
+    
+    # Phase 4: Export all DB data to HDD as compressed CSV
+    try:
+        from scripts.db_to_hdd_export import DBExporter
+        exporter = DBExporter()
+        await exporter.export_all(full=True)
+    except Exception as e:
+        logger.error(f"DB export failed (non-fatal): {e}")
+    
     await print_hdd_status()
 
 
@@ -462,6 +484,8 @@ def main():
     mode.add_argument("--status", action="store_true", help="Show HDD storage stats")
     mode.add_argument("--test", action="store_true", help="Test one round of all collectors")
     mode.add_argument("--historical", action="store_true", help="Run historical backfill only")
+    mode.add_argument("--db-export", action="store_true", help="Export all DB tables to HDD")
+    mode.add_argument("--db-export-full", action="store_true", help="Full DB export (all data, not incremental)")
     
     args = parser.parse_args()
     
@@ -484,6 +508,12 @@ def main():
     elif args.historical:
         scheduler = DataCollectionScheduler()
         asyncio.run(scheduler.run_historical_backfill(seasons=10))
+    elif args.db_export or args.db_export_full:
+        async def do_export():
+            from scripts.db_to_hdd_export import DBExporter
+            exporter = DBExporter()
+            await exporter.export_all(full=args.db_export_full)
+        asyncio.run(do_export())
     elif args.initial:
         async def initial_then_schedule():
             await run_initial_import()

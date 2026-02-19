@@ -91,8 +91,40 @@ const Settings: React.FC = () => {
       setTimeout(() => setSaveStatus(null), 3000);
     }
   };
+
+  // Auto-save notification settings whenever they change (debounced)
+  const autoSaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!notifLoaded) return; // Don't save until initial load completes
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      try {
+        await api.saveNotificationSettings({
+          telegram_token: telegramToken,
+          telegram_accounts: telegramAccounts.map(a => ({
+            id: a.id, name: a.name, chat_id: a.chatId, enabled: a.enabled,
+          })),
+          email_accounts: emailAccounts,
+          preferences: notifPrefs,
+        });
+      } catch { /* silent auto-save */ }
+    }, 1500); // 1.5s debounce
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, [telegramToken, telegramAccounts, emailAccounts, notifPrefs, notifLoaded]);
+
   const testTelegram = async (chatId: string) => {
     setTestStatus(null);
+    // Save settings before testing
+    try {
+      await api.saveNotificationSettings({
+        telegram_token: telegramToken,
+        telegram_accounts: telegramAccounts.map(a => ({
+          id: a.id, name: a.name, chat_id: a.chatId, enabled: a.enabled,
+        })),
+        email_accounts: emailAccounts,
+        preferences: notifPrefs,
+      });
+    } catch { /* continue with test even if save fails */ }
     try {
       const resp = await api.testTelegram(telegramToken, chatId);
       setTestStatus(resp.success ? `✅ Test sent to ${chatId}` : `❌ ${resp.error}`);
@@ -101,6 +133,17 @@ const Settings: React.FC = () => {
   };
   const testEmail = async (email: string) => {
     setTestStatus(null);
+    // Save settings before testing
+    try {
+      await api.saveNotificationSettings({
+        telegram_token: telegramToken,
+        telegram_accounts: telegramAccounts.map(a => ({
+          id: a.id, name: a.name, chat_id: a.chatId, enabled: a.enabled,
+        })),
+        email_accounts: emailAccounts,
+        preferences: notifPrefs,
+      });
+    } catch { /* continue with test even if save fails */ }
     try {
       const resp = await api.testEmail(email);
       setTestStatus(resp.success ? `✅ Test sent to ${email}` : `❌ ${resp.error}`);

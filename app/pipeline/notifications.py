@@ -204,8 +204,15 @@ def _format_prediction_telegram(predictions: list, tier: str) -> str:
         else:
             pick_display = f"{team} {bet_type}"
 
+        # Matchup display
+        home = p.get("home", "")
+        away = p.get("away", "")
+        matchup = f"{home} vs {away}" if home and away else ""
+
         lines.append(f"")
         lines.append(f"{sport_emoji} <b>{sport}</b> {'• ' + game_time if game_time else ''}")
+        if matchup:
+            lines.append(f"   {matchup}")
         lines.append(f"   📌 <b>{pick_display}</b> ({odds})")
         lines.append(f"   📊 {conf:.1f}% conf • {edge:+.1f}% edge")
 
@@ -222,14 +229,13 @@ def _format_prediction_telegram(predictions: list, tier: str) -> str:
 
 
 def _format_grading_telegram(stats: dict) -> str:
-    """Format grading results for Telegram."""
+    """Format grading results for Telegram with game details."""
     games = stats.get("games_graded", 0)
     preds = stats.get("predictions_graded", 0)
     wins = stats.get("wins", 0)
     losses = stats.get("losses", 0)
     pushes = stats.get("pushes", 0)
     pnl = stats.get("total_pnl", 0)
-    roi = stats.get("roi", 0)
     now = datetime.now(timezone.utc).strftime("%b %d, %I:%M %p UTC")
 
     # Win rate
@@ -240,46 +246,52 @@ def _format_grading_telegram(stats: dict) -> str:
     pnl_emoji = "🟢" if pnl >= 0 else "🔴"
     pnl_display = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
 
+    sport_emoji = {
+        "NBA": "🏀", "NCAAB": "🏀", "NFL": "🏈", "NCAAF": "🏈",
+        "NHL": "🏒", "MLB": "⚾", "ATP": "🎾", "WTA": "🎾",
+        "WNBA": "🏀", "CFL": "🏈",
+    }
+
     lines = [
         f"✅ <b>ROYALEY — GRADING COMPLETE</b>",
         f"<i>{now}</i>",
         "━━━━━━━━━━━━━━━━━━━━━━",
-        f"",
-        f"🏟️ <b>Games:</b> {games}",
-        f"📋 <b>Predictions:</b> {preds}",
-        f"",
-        f"📊 <b>Results</b>",
-        f"   ✅ Wins: <b>{wins}</b>",
-        f"   ❌ Losses: <b>{losses}</b>",
     ]
 
-    if pushes > 0:
-        lines.append(f"   ➖ Pushes: <b>{pushes}</b>")
-
-    lines.extend([
-        f"   🎯 Win Rate: <b>{win_rate:.1f}%</b>",
-        f"",
-        f"{pnl_emoji} <b>P&L: {pnl_display}</b>",
-    ])
-
-    if roi != 0:
-        roi_display = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
-        lines.append(f"📈 <b>ROI: {roi_display}</b>")
-
-    # Per-game breakdown if available
+    # Per-game breakdown FIRST (most important info)
     game_results = stats.get("game_results", [])
     if game_results:
-        lines.extend(["", "━━━━━━━━━━━━━━━━━━━━━━", ""])
-        for gr in game_results[:6]:
+        for gr in game_results[:8]:
             sport = gr.get("sport", "?")
             home = gr.get("home", "?")
             away = gr.get("away", "?")
             h_score = gr.get("home_score", "?")
             a_score = gr.get("away_score", "?")
-            lines.append(f"  {sport}: {home} {h_score} - {a_score} {away}")
+            gw = gr.get("wins", 0)
+            gl = gr.get("losses", 0)
+            gpnl = gr.get("pnl", 0)
+            emoji = sport_emoji.get(sport, "🏅")
+
+            gpnl_str = f"+${gpnl:.0f}" if gpnl >= 0 else f"-${abs(gpnl):.0f}"
+            gpnl_icon = "🟢" if gpnl >= 0 else "🔴"
+
+            lines.append(f"")
+            lines.append(f"{emoji} <b>{sport}</b>")
+            lines.append(f"   {home} <b>{h_score}</b> - <b>{a_score}</b> {away}")
+            lines.append(f"   {gw}W-{gl}L • {gpnl_icon} {gpnl_str}")
+
+        if len(game_results) > 8:
+            lines.append(f"\n<i>+{len(game_results) - 8} more games</i>")
 
     lines.extend([
         "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"",
+        f"📊 <b>SUMMARY</b>",
+        f"   🏟️ Games: <b>{games}</b> • Picks: <b>{preds}</b>",
+        f"   ✅ <b>{wins}W</b> - ❌ <b>{losses}L</b>{f' - ➖ {pushes}P' if pushes else ''} ({win_rate:.1f}%)",
+        f"   {pnl_emoji} P&L: <b>{pnl_display}</b>",
+        f"",
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"📊 royaley.com/predictions",
     ])

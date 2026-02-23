@@ -355,55 +355,6 @@ const Models: React.FC = () => {
         </Card>
       )}
 
-      {/* ─── Recent Training Runs ────────────────────────────────── */}
-      {recentRuns.length > 0 && (
-        <Card sx={{ mb: 2 }}>
-          <CardContent sx={{ py: 1.5, px: 2 }}>
-            <Typography variant="subtitle1" fontWeight={600} sx={{ fontSize: 13, mb: 0.5 }}>Recent Training Runs</Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    {['Sport', 'Bet Type', 'Framework', 'Status', 'Started', 'Duration', ''].map(h => (
-                      <TableCell key={h} sx={{ fontWeight: 600, fontSize: 11, py: 0.5 }}>{h}</TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {recentRuns.map(run => (
-                    <React.Fragment key={run.id}>
-                      <TableRow hover>
-                        <TableCell sx={{ py: 0.5, fontSize: 11, fontWeight: 600 }}>{run.sport_code}</TableCell>
-                        <TableCell sx={{ py: 0.5, fontSize: 11, textTransform: 'capitalize' }}>{run.bet_type}</TableCell>
-                        <TableCell sx={{ py: 0.5, fontSize: 11 }}>{frameworkLabel(run.framework)}</TableCell>
-                        <TableCell sx={{ py: 0.5 }}><Chip size="small" label={run.status} color={statusColor(run.status)} sx={{ fontSize: 10 }} /></TableCell>
-                        <TableCell sx={{ py: 0.5, fontSize: 11 }}>{fmtDate(run.started_at)}</TableCell>
-                        <TableCell sx={{ py: 0.5, fontSize: 11 }}>{formatDuration(run.duration_seconds)}</TableCell>
-                        <TableCell sx={{ py: 0.5 }}>
-                          {(run.metrics || run.error_message) && (
-                            <IconButton size="small" onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}>
-                              {expandedRun === run.id ? <ExpandLess sx={{ fontSize: 16 }} /> : <ExpandMore sx={{ fontSize: 16 }} />}
-                            </IconButton>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                      {expandedRun === run.id && (
-                        <TableRow>
-                          <TableCell colSpan={7} sx={{ py: 1, bgcolor: isDark ? 'grey.900' : 'grey.50' }}>
-                            {run.error_message && <Alert severity="error" sx={{ mb: 1, fontSize: 10 }}>{run.error_message}</Alert>}
-                            {run.metrics && <Typography fontSize={10} fontFamily="monospace" component="pre" sx={{ m: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(run.metrics, null, 2)}</Typography>}
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </CardContent>
-        </Card>
-      )}
-
       {/* ─── Filters ────────────────────────────────────────────── */}
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ py: 1.5, px: 2 }}>

@@ -64,21 +64,39 @@ async def _load_settings(db: AsyncSession) -> dict:
     from app.core.config import settings as app_settings
     token = getattr(app_settings, "TELEGRAM_BOT_TOKEN", "")
     chat_id = getattr(app_settings, "TELEGRAM_CHAT_ID", "")
+    smtp_host = getattr(app_settings, "EMAIL_SMTP_HOST", "")
+    smtp_user = getattr(app_settings, "EMAIL_SMTP_USER", "")
+    smtp_pass = getattr(app_settings, "EMAIL_SMTP_PASSWORD", "")
+    email_recipients = getattr(app_settings, "ALERT_EMAIL_RECIPIENTS", [])
 
-    if token and chat_id:
+    has_telegram = bool(token and chat_id)
+    has_email = bool(smtp_host and smtp_user and smtp_pass)
+
+    if has_telegram or has_email:
+        # Build email accounts from recipients list, or use smtp_user as default
+        email_accounts = []
+        if has_email:
+            recipients = email_recipients if email_recipients else [smtp_user]
+            email_accounts = [{"email": e, "enabled": True} for e in recipients]
+
+        # Build telegram accounts
+        tg_accounts = []
+        if has_telegram:
+            tg_accounts = [{"chat_id": chat_id, "name": "Primary", "enabled": True}]
+
         _settings_cache = {
             "telegram_token": token,
-            "telegram_accounts": [{"chat_id": chat_id, "name": "Primary", "enabled": True}],
-            "email_accounts": [],
+            "telegram_accounts": tg_accounts,
+            "email_accounts": email_accounts,
             "preferences": [
-                {"event": "tier_a", "telegram": True, "email": False},
-                {"event": "tier_b", "telegram": True, "email": False},
+                {"event": "tier_a", "telegram": has_telegram, "email": has_email},
+                {"event": "tier_b", "telegram": has_telegram, "email": has_email},
                 {"event": "tier_c", "telegram": False, "email": False},
                 {"event": "tier_d", "telegram": False, "email": False},
-                {"event": "grading_complete", "telegram": True, "email": False},
-                {"event": "daily_summary", "telegram": True, "email": False},
-                {"event": "clv_alert", "telegram": True, "email": False},
-                {"event": "system_errors", "telegram": True, "email": False},
+                {"event": "grading_complete", "telegram": has_telegram, "email": has_email},
+                {"event": "daily_summary", "telegram": has_telegram, "email": has_email},
+                {"event": "clv_alert", "telegram": has_telegram, "email": False},
+                {"event": "system_errors", "telegram": has_telegram, "email": has_email},
                 {"event": "model_training", "telegram": False, "email": False},
             ],
         }

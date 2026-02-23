@@ -265,7 +265,7 @@ class SchedulerService:
                 job_id="daily_report",
                 name="Daily Performance Report",
                 category=JobCategory.REPORTING,
-                func=self._dummy_job,
+                func=self._daily_report_job,
                 trigger="cron",
                 trigger_args={"hour": 7, "minute": 0}
             ),
@@ -273,7 +273,7 @@ class SchedulerService:
                 job_id="weekly_report",
                 name="Weekly Performance Report",
                 category=JobCategory.REPORTING,
-                func=self._dummy_job,
+                func=self._weekly_report_job,
                 trigger="cron",
                 trigger_args={"day_of_week": "mon", "hour": 8, "minute": 0}
             ),
@@ -319,6 +319,178 @@ class SchedulerService:
     async def _dummy_job(self):
         """Placeholder job function"""
         pass
+
+    async def _daily_report_job(self):
+        """Send daily performance report via Telegram/Email."""
+        try:
+            from app.pipeline.notifications import notify
+            from app.core.config import settings as app_settings
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+            from sqlalchemy import text
+
+            engine = create_async_engine(app_settings.DATABASE_URL, echo=False)
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            try:
+                async with async_session() as db:
+                    # Get today's graded predictions
+                    result = await db.execute(text("""
+                        SELECT 
+                            COUNT(*) as total,
+                            COUNT(*) FILTER (WHERE pr.actual_result IS NOT NULL AND pr.actual_result NOT IN ('pending', 'void')) as graded,
+                            COUNT(*) FILTER (WHERE pr.actual_result IS NULL OR pr.actual_result = 'pending') as pending,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'loss') as losses,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'push') as pushes,
+                            COALESCE(SUM(pr.profit_loss) FILTER (WHERE pr.actual_result IN ('win', 'loss', 'push')), 0) as pnl,
+                            COALESCE(AVG(p.clv) FILTER (WHERE p.clv IS NOT NULL), 0) as avg_clv
+                        FROM predictions p
+                        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                        WHERE p.created_at >= CURRENT_DATE
+                    """))
+                    row = result.fetchone()
+
+                    if not row or row.total == 0:
+                        logger.debug("[Scheduler] No predictions today, skipping daily report")
+                        return
+
+                    # Tier breakdown
+                    tier_result = await db.execute(text("""
+                        SELECT p.signal_tier,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'loss') as losses,
+                            COALESCE(SUM(pr.profit_loss) FILTER (WHERE pr.actual_result IN ('win', 'loss', 'push')), 0) as pnl
+                        FROM predictions p
+                        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                        WHERE p.created_at >= CURRENT_DATE
+                            AND pr.actual_result IS NOT NULL AND pr.actual_result NOT IN ('pending', 'void')
+                        GROUP BY p.signal_tier
+                    """))
+                    tier_rows = tier_result.fetchall()
+                    by_tier = {}
+                    for tr in tier_rows:
+                        by_tier[tr.signal_tier or "D"] = {
+                            "wins": tr.wins, "losses": tr.losses, "pnl": float(tr.pnl)
+                        }
+
+                    # Bankroll
+                    bank_result = await db.execute(text(
+                        "SELECT COALESCE(SUM(profit_loss), 0) as total_pnl FROM prediction_results WHERE actual_result IN ('win', 'loss', 'push')"
+                    ))
+                    bank_row = bank_result.fetchone()
+                    bankroll = 10000 + float(bank_row.total_pnl) if bank_row else 10000
+
+                    total_staked = (row.wins + row.losses) * 110  # Approx $110/bet
+                    roi = (float(row.pnl) / total_staked * 100) if total_staked > 0 else 0
+
+                    from datetime import datetime, timezone
+                    stats = {
+                        "date": datetime.now(timezone.utc).strftime("%b %d, %Y"),
+                        "total_predictions": row.total,
+                        "graded": row.graded,
+                        "pending": row.pending,
+                        "wins": row.wins,
+                        "losses": row.losses,
+                        "pushes": row.pushes,
+                        "pnl": float(row.pnl),
+                        "roi": roi,
+                        "avg_clv": float(row.avg_clv) * 100,
+                        "by_tier": by_tier,
+                        "bankroll": bankroll,
+                    }
+
+                    sent = await notify("daily_summary", "Daily performance report", stats, db=db)
+                    if sent > 0:
+                        logger.info(f"[Scheduler] ✅ Daily report sent ({sent} notification(s))")
+                    else:
+                        logger.debug("[Scheduler] Daily report: no notifications configured or sent")
+
+            finally:
+                await engine.dispose()
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Daily report error: {e}")
+
+    async def _weekly_report_job(self):
+        """Send weekly performance report via Telegram/Email."""
+        try:
+            from app.pipeline.notifications import notify
+            from app.core.config import settings as app_settings
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+            from sqlalchemy import text
+
+            engine = create_async_engine(app_settings.DATABASE_URL, echo=False)
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            try:
+                async with async_session() as db:
+                    result = await db.execute(text("""
+                        SELECT 
+                            COUNT(*) as total,
+                            COUNT(*) FILTER (WHERE pr.actual_result IN ('win', 'loss', 'push')) as graded,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'loss') as losses,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'push') as pushes,
+                            COALESCE(SUM(pr.profit_loss) FILTER (WHERE pr.actual_result IN ('win', 'loss', 'push')), 0) as pnl,
+                            COALESCE(AVG(p.clv) FILTER (WHERE p.clv IS NOT NULL), 0) as avg_clv
+                        FROM predictions p
+                        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                        WHERE p.created_at >= CURRENT_DATE - INTERVAL '7 days'
+                    """))
+                    row = result.fetchone()
+
+                    if not row or row.graded == 0:
+                        return
+
+                    total_staked = (row.wins + row.losses) * 110
+                    roi = (float(row.pnl) / total_staked * 100) if total_staked > 0 else 0
+
+                    # Best sport this week
+                    sport_result = await db.execute(text("""
+                        SELECT s.code,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'win') as wins,
+                            COUNT(*) FILTER (WHERE pr.actual_result = 'loss') as losses,
+                            COALESCE(SUM(pr.profit_loss) FILTER (WHERE pr.actual_result IN ('win', 'loss', 'push')), 0) as pnl
+                        FROM predictions p
+                        JOIN upcoming_games ug ON p.upcoming_game_id = ug.id
+                        JOIN sports s ON ug.sport_id = s.id
+                        LEFT JOIN prediction_results pr ON pr.prediction_id = p.id
+                        WHERE p.created_at >= CURRENT_DATE - INTERVAL '7 days'
+                            AND pr.actual_result IN ('win', 'loss', 'push')
+                        GROUP BY s.code
+                        ORDER BY SUM(pr.profit_loss) DESC
+                        LIMIT 1
+                    """))
+                    best_sport_row = sport_result.fetchone()
+                    best_sport = ""
+                    if best_sport_row:
+                        bw, bl = best_sport_row.wins, best_sport_row.losses
+                        best_sport = f"{best_sport_row.code} {bw}W-{bl}L"
+
+                    from datetime import datetime, timezone
+                    stats = {
+                        "date": datetime.now(timezone.utc).strftime("Week of %b %d, %Y"),
+                        "total_predictions": row.total,
+                        "graded": row.graded,
+                        "pending": row.total - row.graded,
+                        "wins": row.wins,
+                        "losses": row.losses,
+                        "pushes": row.pushes,
+                        "pnl": float(row.pnl),
+                        "roi": roi,
+                        "avg_clv": float(row.avg_clv) * 100,
+                        "best_sport": best_sport,
+                    }
+
+                    sent = await notify("daily_summary", "Weekly performance report", stats, db=db)
+                    if sent > 0:
+                        logger.info(f"[Scheduler] ✅ Weekly report sent ({sent} notification(s))")
+
+            finally:
+                await engine.dispose()
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Weekly report error: {e}")
     
     async def _collect_odds_job(self):
         """Collect odds from TheOddsAPI and save to database."""

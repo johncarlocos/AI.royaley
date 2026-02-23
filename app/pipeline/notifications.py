@@ -39,20 +39,49 @@ _cache_ts: float = 0
 # =============================================================================
 
 async def _load_settings(db: AsyncSession) -> dict:
-    """Load notification settings from user_preferences."""
+    """Load notification settings from user_preferences, fallback to env vars."""
     global _settings_cache, _cache_ts
     import time
 
     if _settings_cache and (time.time() - _cache_ts) < 300:
         return _settings_cache
 
-    result = await db.execute(text(
-        "SELECT notification_settings FROM user_preferences LIMIT 1"
-    ))
-    row = result.fetchone()
+    # Try DB first
+    try:
+        result = await db.execute(text(
+            "SELECT notification_settings FROM user_preferences LIMIT 1"
+        ))
+        row = result.fetchone()
 
-    if row and row.notification_settings:
-        _settings_cache = row.notification_settings
+        if row and row.notification_settings:
+            _settings_cache = row.notification_settings
+            _cache_ts = time.time()
+            return _settings_cache
+    except Exception:
+        pass  # Table may not exist
+
+    # Fallback to env vars
+    from app.core.config import settings as app_settings
+    token = getattr(app_settings, "TELEGRAM_BOT_TOKEN", "")
+    chat_id = getattr(app_settings, "TELEGRAM_CHAT_ID", "")
+
+    if token and chat_id:
+        _settings_cache = {
+            "telegram_token": token,
+            "telegram_accounts": [{"chat_id": chat_id, "name": "Primary", "enabled": True}],
+            "email_accounts": [],
+            "preferences": [
+                {"event": "tier_a", "telegram": True, "email": False},
+                {"event": "tier_b", "telegram": True, "email": False},
+                {"event": "tier_c", "telegram": False, "email": False},
+                {"event": "tier_d", "telegram": False, "email": False},
+                {"event": "grading_complete", "telegram": True, "email": False},
+                {"event": "daily_summary", "telegram": True, "email": False},
+                {"event": "clv_alert", "telegram": True, "email": False},
+                {"event": "system_errors", "telegram": True, "email": False},
+                {"event": "model_training", "telegram": False, "email": False},
+            ],
+        }
     else:
         _settings_cache = {}
 

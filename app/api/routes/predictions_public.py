@@ -1107,7 +1107,6 @@ async def public_training_runs(
 async def public_promote_model(model_id: str, db: AsyncSession = Depends(get_db)):
     """
     Promote a model to production.
-    Demotes any existing production model for the same sport/bet_type.
     """
     # Get model
     result = await db.execute(text("""
@@ -1118,13 +1117,7 @@ async def public_promote_model(model_id: str, db: AsyncSession = Depends(get_db)
     if not model:
         return {"error": "Model not found"}
 
-    # Demote current production model for same sport/bet_type
-    await db.execute(text("""
-        UPDATE ml_models SET is_production = false
-        WHERE sport_id = :sid AND bet_type = :bt AND is_production = true AND id != :mid
-    """), {"sid": model.sport_id, "bt": model.bet_type, "mid": model_id})
-
-    # Promote
+    # Promote (does NOT demote other models for same sport/bet_type)
     await db.execute(text("""
         UPDATE ml_models SET is_production = true WHERE id = :mid
     """), {"mid": model_id})

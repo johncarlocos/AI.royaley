@@ -54,9 +54,9 @@ class SignalTier(Enum):
     def target_accuracy(self) -> float:
         """Target accuracy for this tier"""
         targets = {
-            "A": 0.58,
-            "B": 0.55,
-            "C": 0.52,
+            "A": 0.65,
+            "B": 0.60,
+            "C": 0.55,
             "D": 0.50,
         }
         return targets.get(self.value, 0.50)
@@ -65,9 +65,9 @@ class SignalTier(Enum):
 @dataclass
 class TierThresholds:
     """Configurable tier thresholds"""
-    tier_a_min: float = 0.58
-    tier_b_min: float = 0.55
-    tier_c_min: float = 0.52
+    tier_a_min: float = 0.65
+    tier_b_min: float = 0.60
+    tier_c_min: float = 0.55
     tier_d_min: float = 0.00  # Everything below C
     
     def to_dict(self) -> Dict:
@@ -495,14 +495,14 @@ class SignalTierClassifier:
         tier_c_threshold = 0.55
         
         # Ensure proper ordering
-        tier_a_threshold = max(tier_a_threshold, 0.55)
-        tier_b_threshold = max(tier_b_threshold, 0.52)
+        tier_a_threshold = max(tier_a_threshold, 0.60)
+        tier_b_threshold = max(tier_b_threshold, 0.55)
         tier_b_threshold = min(tier_b_threshold, tier_a_threshold - 0.01)
         
         new_thresholds = TierThresholds(
             tier_a_min=tier_a_threshold,
             tier_b_min=tier_b_threshold,
-            tier_c_min=0.52,
+            tier_c_min=0.55,
         )
         
         logger.info(
@@ -558,11 +558,11 @@ def assign_signal_tier(probability: float) -> str:
     Returns:
         Tier letter (A, B, C, or D)
     """
-    if probability >= 0.58:
+    if probability >= 0.65:
         return 'A'
-    elif probability >= 0.55:
+    elif probability >= 0.60:
         return 'B'
-    elif probability >= 0.52:
+    elif probability >= 0.55:
         return 'C'
     else:
         return 'D'

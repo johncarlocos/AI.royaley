@@ -674,11 +674,11 @@ async def generate_predictions_for_game(
             #   55-58% = strong positive EV at standard -110 juice
             #   52.4% = breakeven at -110, so 52-55% = modest edge
             #   <52% = losing territory, track only
-            if probability >= 0.58:
+            if probability >= 0.65:
                 tier = "A"
-            elif probability >= 0.55:
+            elif probability >= 0.60:
                 tier = "B"
-            elif probability >= 0.52:
+            elif probability >= 0.55:
                 tier = "C"
             else:
                 tier = "D"

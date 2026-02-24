@@ -255,9 +255,9 @@ const Betting: React.FC = () => {
               </Grid>
               <Typography variant="caption" sx={{ fontSize: 11, mb: 1, display: 'block' }}>Active Tiers:</Typography>
               <Box display="flex" gap={1} mb={1.5} flexWrap="wrap">
-                {betting.tierA && <Chip label="Tier A (58%+)" size="small" color="success" sx={{ fontSize: 11, height: 22 }} />}
-                {betting.tierB && <Chip label="Tier B (55-58%)" size="small" color="primary" sx={{ fontSize: 11, height: 22 }} />}
-                {betting.tierC && <Chip label="Tier C (52-55%)" size="small" color="warning" sx={{ fontSize: 11, height: 22 }} />}
+                {betting.tierA && <Chip label="Tier A (65%+)" size="small" color="success" sx={{ fontSize: 11, height: 22 }} />}
+                {betting.tierB && <Chip label="Tier B (60-65%)" size="small" color="primary" sx={{ fontSize: 11, height: 22 }} />}
+                {betting.tierC && <Chip label="Tier C (55-60%)" size="small" color="warning" sx={{ fontSize: 11, height: 22 }} />}
                 {!betting.tierA && !betting.tierB && !betting.tierC && <Typography sx={{ fontSize: 11, color: 'error.main' }}>No tiers selected</Typography>}
               </Box>
               <Typography variant="caption" sx={{ fontSize: 11, mb: 0.5, display: 'block' }}>Filter by Sport:</Typography>

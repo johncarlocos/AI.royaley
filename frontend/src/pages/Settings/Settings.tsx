@@ -299,14 +299,14 @@ const Settings: React.FC = () => {
                 <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: betting.tierA ? 'success.main' : 'divider', bgcolor: betting.tierA ? 'rgba(76, 175, 80, 0.08)' : 'transparent' }}>
                   <FormControlLabel control={<Switch size="small" checked={betting.tierA} onChange={(e) => betting.setBetting({ tierA: e.target.checked })} color="success" />}
                     label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier A</Typography>} sx={{ m: 0 }} />
-                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>58%+ confidence</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>65%+ confidence</Typography>
                 </Paper>
               </Grid>
               <Grid item xs={6} sm={3}>
                 <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderColor: betting.tierB ? 'info.main' : 'divider', bgcolor: betting.tierB ? 'rgba(33, 150, 243, 0.08)' : 'transparent' }}>
                   <FormControlLabel control={<Switch size="small" checked={betting.tierB} onChange={(e) => betting.setBetting({ tierB: e.target.checked })} color="info" />}
                     label={<Typography sx={{ fontSize: 13, fontWeight: 600 }}>Tier B</Typography>} sx={{ m: 0 }} />
-                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>55–58% confidence</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>60–65% confidence</Typography>
                 </Paper>
               </Grid>
               <Grid item xs={6} sm={3}>
@@ -715,7 +715,7 @@ const Settings: React.FC = () => {
                 <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'success.main', bgcolor: 'rgba(76, 175, 80, 0.06)' }}>
                   <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'success.main', mb: 1 }}>Tier A — High Confidence</Typography>
                   <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierAThreshold}
-                    onChange={(e) => ml.setMLConfig({ tierAThreshold: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.58)) })}
+                    onChange={(e) => ml.setMLConfig({ tierAThreshold: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.65)) })}
                     inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
                     InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
                     helperText={`≥ ${(ml.tierAThreshold * 100).toFixed(0)}% confidence`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
@@ -725,7 +725,7 @@ const Settings: React.FC = () => {
                 <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'info.main', bgcolor: 'rgba(33, 150, 243, 0.06)' }}>
                   <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'info.main', mb: 1 }}>Tier B — Medium Confidence</Typography>
                   <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierBThreshold}
-                    onChange={(e) => ml.setMLConfig({ tierBThreshold: Math.min(ml.tierAThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.55)) })}
+                    onChange={(e) => ml.setMLConfig({ tierBThreshold: Math.min(ml.tierAThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.60)) })}
                     inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
                     InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
                     helperText={`${(ml.tierBThreshold * 100).toFixed(0)}%–${(ml.tierAThreshold * 100).toFixed(0)}%`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />
@@ -735,7 +735,7 @@ const Settings: React.FC = () => {
                 <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'warning.main', bgcolor: 'rgba(255, 152, 0, 0.06)' }}>
                   <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'warning.main', mb: 1 }}>Tier C — Low Confidence</Typography>
                   <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierCThreshold}
-                    onChange={(e) => ml.setMLConfig({ tierCThreshold: Math.min(ml.tierBThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.52)) })}
+                    onChange={(e) => ml.setMLConfig({ tierCThreshold: Math.min(ml.tierBThreshold, Math.max(0.50, parseFloat(e.target.value) || 0.55)) })}
                     inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
                     InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
                     helperText={`${(ml.tierCThreshold * 100).toFixed(0)}%–${(ml.tierBThreshold * 100).toFixed(0)}%`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />

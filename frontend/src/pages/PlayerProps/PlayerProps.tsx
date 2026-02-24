@@ -109,7 +109,7 @@ const PlayerProps: React.FC = () => {
 
       <Alert severity="info" icon={<Psychology sx={{ fontSize: 18 }} />} sx={{ mb: 1.5, py: 0.5, '& .MuiAlert-message': { fontSize: 11 } }}>
         <strong>Player Props Predictions:</strong> ML models predict Over/Under on player stats using season averages, recent form, matchup, and rest days.
-        {' '}Tier A (58%+) = Strong Edge · Tier B (55-58%) = Clear +EV · Tier C (52-55%) = Modest Edge · Tier D (&lt;52%) = Track Only
+        {' '}Tier A (65%+) = Strong Edge · Tier B (60-65%) = Clear +EV · Tier C (55-60%) = Modest Edge · Tier D (&lt;52%) = Track Only
       </Alert>
 
       <Grid container spacing={1.5} mb={1.5}>
@@ -143,9 +143,9 @@ const PlayerProps: React.FC = () => {
             <InputLabel sx={{ fontSize: 12 }}>Tier</InputLabel>
             <Select value={tierFilter} label="Tier" onChange={(e) => { setTierFilter(e.target.value); setPage(0); }} sx={{ fontSize: 12, height: 34 }}>
               <MenuItem value="all" sx={{ fontSize: 12 }}>All Tiers</MenuItem>
-              <MenuItem value="A" sx={{ fontSize: 12 }}>Tier A (58%+)</MenuItem>
-              <MenuItem value="B" sx={{ fontSize: 12 }}>Tier B (55-58%)</MenuItem>
-              <MenuItem value="C" sx={{ fontSize: 12 }}>Tier C (52-55%)</MenuItem>
+              <MenuItem value="A" sx={{ fontSize: 12 }}>Tier A (65%+)</MenuItem>
+              <MenuItem value="B" sx={{ fontSize: 12 }}>Tier B (60-65%)</MenuItem>
+              <MenuItem value="C" sx={{ fontSize: 12 }}>Tier C (55-60%)</MenuItem>
               <MenuItem value="D" sx={{ fontSize: 12 }}>Tier D (&lt;52%)</MenuItem>
             </Select>
           </FormControl>

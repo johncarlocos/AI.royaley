@@ -262,7 +262,7 @@ const Predictions: React.FC = () => {
 
   // Performance data computed from actual rows
   const tierPerf = useMemo(() => buildPerf(statsRows, r => r.signal_tier,
-    k => ({ A: 'Tier A (58%+)', B: 'Tier B (55-58%)', C: 'Tier C (52-55%)', D: 'Tier D (<52%)' }[k] || `Tier ${k}`),
+    k => ({ A: 'Tier A (65%+)', B: 'Tier B (60-65%)', C: 'Tier C (55-60%)', D: 'Tier D (<55%)' }[k] || `Tier ${k}`),
     ['A', 'B', 'C', 'D']), [statsRows]);
   const sportPerf = useMemo(() => buildPerf(statsRows, r => r.sport), [statsRows]);
   const periodPerf = useMemo(() => buildPerf(statsRows, () => 'Full Game'), [statsRows]);

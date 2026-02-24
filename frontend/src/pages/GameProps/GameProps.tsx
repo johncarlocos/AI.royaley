@@ -222,7 +222,7 @@ const GameProps: React.FC = () => {
       <Alert severity="info" sx={{ mb: 3 }} icon={<FlashOn />}>
         <Typography variant="body2">
           <strong>Game Props Predictions:</strong> Player stat props (passing yards, rushing, receiving, rebounds, assists), scoring props (anytime TD, first TD scorer), and game event props (overtime, safety, first to score).
-          {' '}Tier A (58%+) = Strong Edge · Tier B (55-58%) = Clear +EV · Tier C (52-55%) = Modest Edge · Tier D (&lt;52%) = Track Only
+          {' '}Tier A (65%+) = Strong Edge · Tier B (60-65%) = Clear +EV · Tier C (55-60%) = Modest Edge · Tier D (&lt;52%) = Track Only
         </Typography>
       </Alert>
 
@@ -302,9 +302,9 @@ const GameProps: React.FC = () => {
               <InputLabel sx={{ fontSize: 12 }}>Tier</InputLabel>
               <Select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)} label="Tier" sx={{ fontSize: 12 }}>
                 <MenuItem value="all">All</MenuItem>
-                <MenuItem value="A">A (58%+)</MenuItem>
-                <MenuItem value="B">B (55-58%)</MenuItem>
-                <MenuItem value="C">C (52-55%)</MenuItem>
+                <MenuItem value="A">A (65%+)</MenuItem>
+                <MenuItem value="B">B (60-65%)</MenuItem>
+                <MenuItem value="C">C (55-60%)</MenuItem>
                 <MenuItem value="D">D (&lt;52%)</MenuItem>
               </Select>
             </FormControl>

@@ -340,7 +340,7 @@ class ESPNCollector(BaseCollector):
         status_map = {
             "STATUS_SCHEDULED": "scheduled",
             "STATUS_IN_PROGRESS": "in_progress",
-            "STATUS_HALFTIME": "in_progress",
+            "STATUS_HALFTIME": "halftime",
             "STATUS_FINAL": "final",
             "STATUS_POSTPONED": "postponed",
             "STATUS_CANCELED": "cancelled",

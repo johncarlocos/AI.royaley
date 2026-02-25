@@ -1560,12 +1560,21 @@ async def get_live_games(
         ORDER BY
             CASE ug.status
                 WHEN 'in_progress' THEN 1
-                WHEN 'scheduled' THEN 2
-                WHEN 'final' THEN 3
-                ELSE 4
+                WHEN 'halftime' THEN 2
+                WHEN 'scheduled' THEN 3
+                WHEN 'final' THEN 4
+                ELSE 5
             END,
             ug.scheduled_at ASC
     """), params)
+
+    # Typical game durations by sport (in minutes) for time-based status inference
+    SPORT_DURATIONS = {
+        "NBA": 150, "NHL": 160, "NFL": 210, "MLB": 200,
+        "NCAAB": 140, "NCAAF": 210, "WNBA": 130, "CFL": 200,
+        "ATP": 180, "WTA": 150,  # Tennis varies widely
+    }
+    now_utc = datetime.utcnow()
 
     games = []
     for i, row in enumerate(result.fetchall()):
@@ -1582,12 +1591,24 @@ async def get_live_games(
 
         total_str = f"O/U {total_val}" if total_val else ""
 
-        # Determine status
+        # Determine status — with time-based inference as fallback
         status_val = row.status or "scheduled"
         if row.completed:
             status_val = "final"
         elif status_val == "in_progress":
             status_val = "live"
+        elif status_val == "halftime":
+            status_val = "halftime"
+        elif status_val == "scheduled" and row.scheduled_at:
+            # Time-based inference: if game should have started, update status
+            minutes_since_start = (now_utc - row.scheduled_at).total_seconds() / 60
+            sport_duration = SPORT_DURATIONS.get(row.sport, 150)
+            if minutes_since_start > sport_duration:
+                # Game likely finished — mark as final (no score data available)
+                status_val = "final"
+            elif minutes_since_start > 10:
+                # Game started >10 min ago — likely in progress
+                status_val = "live"
 
         # Build prediction pick label
         prediction = None
@@ -1603,11 +1624,14 @@ async def get_live_games(
                 "h2h": "Moneyline", "moneyline": "Moneyline",
             }.get(row.pred_bet_type, row.pred_bet_type or "")
 
+            # Edge is stored as fraction (0.06 = 6%), convert to percentage for display
+            edge_pct = round(float(row.pred_edge) * 100, 1) if row.pred_edge else 0
+
             prediction = {
                 "pick": pick_label,
                 "type": bet_type_display,
                 "probability": round(float(row.pred_prob), 4),
-                "edge": round(float(row.pred_edge), 1) if row.pred_edge else 0,
+                "edge": edge_pct,
                 "tier": row.pred_tier,
             }
 
@@ -1637,6 +1661,8 @@ async def get_live_games(
             period = game_time
         elif status_val == "final":
             period = "Final"
+        elif status_val == "halftime":
+            period = "Half"
         else:
             period = "LIVE"
 
@@ -1661,6 +1687,10 @@ async def get_live_games(
             "total": total_str,
             "prediction": prediction,
         })
+
+    # Sort games by inferred status: live first, then upcoming, then final
+    status_order = {"live": 0, "halftime": 1, "scheduled": 2, "final": 3}
+    games.sort(key=lambda g: (status_order.get(g["status"], 4), g["date"], g["time"]))
 
     return {
         "games": games,

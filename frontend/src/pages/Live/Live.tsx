@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Select, MenuItem, FormControl, InputLabel, Button,
   LinearProgress, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, Paper, Chip, useTheme, alpha
+  TableRow, Paper, Chip, useTheme, alpha, Tooltip
 } from '@mui/material';
 import { PlayCircle, Refresh, FiberManualRecord, SportsScore } from '@mui/icons-material';
 import { api } from '../../api/client';
@@ -48,12 +48,23 @@ interface LiveResponse {
   updated_at: string;
 }
 
-// Tier badge component
+// Tier badge component with distinct colors
 const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
-  const colors: Record<string, string> = { A: '#4caf50', B: '#2196f3', C: '#ff9800', D: '#9e9e9e' };
+  const colors: Record<string, string> = {
+    A: '#16a34a',  // Green
+    B: '#2563eb',  // Blue
+    C: '#d97706',  // Amber
+    D: '#6b7280',  // Gray
+  };
+  const labels: Record<string, string> = {
+    A: '\u{1F525} Tier A',
+    B: '\u2705 Tier B',
+    C: 'Tier C',
+    D: 'Tier D',
+  };
   return (
     <Chip
-      label={`Tier ${tier}`}
+      label={labels[tier] || `Tier ${tier}`}
       size="small"
       sx={{
         bgcolor: colors[tier] || colors.D,
@@ -66,7 +77,7 @@ const TierBadge: React.FC<{ tier: string }> = ({ tier }) => {
   );
 };
 
-// Status indicator
+// Status indicator with better visuals
 const StatusBadge: React.FC<{ status: string; period?: string }> = ({ status, period }) => {
   if (status === 'live') {
     return (
@@ -84,8 +95,25 @@ const StatusBadge: React.FC<{ status: string; period?: string }> = ({ status, pe
   if (status === 'final') {
     return <Chip label="FINAL" size="small" sx={{ bgcolor: 'grey.600', color: 'white', height: 20, fontSize: '0.65rem' }} />;
   }
-  // upcoming / scheduled
+  // upcoming / scheduled — show time
   return <Typography variant="caption" color="text.secondary">{period}</Typography>;
+};
+
+// Edge display with color coding — edge is now in percentage (e.g. 6.0 = 6%)
+const EdgeDisplay: React.FC<{ edge: number }> = ({ edge }) => {
+  if (edge < 1.0) return <Typography sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>-</Typography>;
+
+  let color = 'text.secondary';
+  if (edge >= 8) color = '#16a34a';       // Strong green
+  else if (edge >= 5) color = '#22c55e';  // Green
+  else if (edge >= 3) color = '#84cc16';  // Light green
+  else if (edge >= 1) color = '#eab308';  // Yellow
+
+  return (
+    <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color }}>
+      +{edge.toFixed(1)}%
+    </Typography>
+  );
 };
 
 // Empty state component
@@ -138,10 +166,11 @@ const Live: React.FC = () => {
 
   useEffect(() => {
     loadGames();
-    // Refresh every 60 seconds for live scores
-    const interval = setInterval(loadGames, 60000);
+    // Refresh every 30 seconds when there are live games, otherwise 90 seconds
+    const hasLive = counts.live > 0 || counts.halftime > 0;
+    const interval = setInterval(loadGames, hasLive ? 30000 : 90000);
     return () => clearInterval(interval);
-  }, [loadGames]);
+  }, [loadGames, counts.live, counts.halftime]);
 
   const filtered = games;
   const liveCount = counts.live + counts.halftime;
@@ -212,93 +241,119 @@ const Live: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filtered.map((game, gameIdx) => (
-                  <React.Fragment key={game.id}>
-                    {/* Away Team Row */}
-                    <TableRow
-                      sx={{
-                        bgcolor: game.status === 'live' ? alpha('#ef4444', 0.08) : 'transparent',
-                        '&:hover': { bgcolor: rowHoverBg },
-                        borderTop: gameIdx > 0 ? `2px solid ${isDark ? '#4a5568' : '#cbd5e1'}` : undefined,
-                      }}
-                    >
-                      <TableCell rowSpan={2} sx={{ ...grayCellSx, verticalAlign: 'middle', fontWeight: 600 }}>
-                        {game.sport}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...grayCellSx, verticalAlign: 'middle' }}>
-                        {game.time}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', bgcolor: isDark ? '#2a3441' : '#f0f4f8' }}>
-                        {game.gameNumber}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, fontWeight: game.prediction?.pick.includes(game.awayTeam.split(' ').pop() || '') ? 700 : 400 }}>
-                        {game.awayTeam}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', color: 'text.secondary' }}>
-                        {game.awayRecord}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem' }}>
-                        {game.awayScore !== null ? game.awayScore : '-'}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, verticalAlign: 'middle', textAlign: 'center' }}>
-                        <StatusBadge status={game.status} period={game.period} />
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center' }}>
-                        {game.spread.away}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle' }}>
-                        {game.total}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, verticalAlign: 'middle' }}>
-                        {game.prediction ? (
-                          <Box>
-                            <Typography sx={{ fontSize: 11, fontWeight: 600, color: 'success.main', lineHeight: 1.3 }}>
-                              {game.prediction.pick}
-                            </Typography>
-                            <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>
-                              {game.prediction.type}
-                            </Typography>
-                          </Box>
-                        ) : (
-                          <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>-</Typography>
-                        )}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>
-                        {game.prediction ? `${(game.prediction.probability * 100).toFixed(0)}%` : '-'}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', color: game.prediction && game.prediction.edge >= 0.1 ? 'success.main' : 'text.secondary' }}>
-                        {game.prediction ? (game.prediction.edge >= 0.1 ? `+${game.prediction.edge.toFixed(1)}%` : '-') : '-'}
-                      </TableCell>
-                      <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', borderRight: 'none' }}>
-                        {game.prediction ? <TierBadge tier={game.prediction.tier} /> : '-'}
-                      </TableCell>
-                    </TableRow>
+                {filtered.map((game, gameIdx) => {
+                  const isLive = game.status === 'live';
+                  const isFinal = game.status === 'final';
+                  const isTennis = game.sport === 'ATP' || game.sport === 'WTA';
 
-                    {/* Home Team Row */}
-                    <TableRow
-                      sx={{
-                        bgcolor: game.status === 'live' ? alpha('#ef4444', 0.08) : 'transparent',
-                        '&:hover': { bgcolor: rowHoverBg },
-                      }}
-                    >
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', bgcolor: isDark ? '#2a3441' : '#f0f4f8' }}>
-                        {game.gameNumber + 1}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, fontWeight: game.prediction?.pick.includes(game.homeTeam.split(' ').pop() || '') ? 700 : 400 }}>
-                        {game.homeTeam}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', color: 'text.secondary' }}>
-                        {game.homeRecord}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem' }}>
-                        {game.homeScore !== null ? game.homeScore : '-'}
-                      </TableCell>
-                      <TableCell sx={{ ...cellSx, textAlign: 'center' }}>
-                        {game.spread.home}
-                      </TableCell>
-                    </TableRow>
-                  </React.Fragment>
-                ))}
+                  // Row background based on status
+                  let rowBg = 'transparent';
+                  if (isLive) rowBg = alpha('#ef4444', 0.08);
+                  else if (isFinal) rowBg = isDark ? alpha('#64748b', 0.06) : alpha('#94a3b8', 0.04);
+
+                  // Determine if team name should be bold (picked team)
+                  const pickText = game.prediction?.pick || '';
+                  const awayLastWord = game.awayTeam.split(' ').pop() || '';
+                  const homeLastWord = game.homeTeam.split(' ').pop() || '';
+                  const isAwayPicked = pickText.includes(awayLastWord) || pickText.includes('Away');
+                  const isHomePicked = pickText.includes(homeLastWord) || pickText.includes('Home');
+
+                  return (
+                    <React.Fragment key={game.id}>
+                      {/* Away Team Row */}
+                      <TableRow
+                        sx={{
+                          bgcolor: rowBg,
+                          '&:hover': { bgcolor: rowHoverBg },
+                          borderTop: gameIdx > 0 ? `2px solid ${isDark ? '#4a5568' : '#cbd5e1'}` : undefined,
+                          opacity: isFinal ? 0.7 : 1,
+                        }}
+                      >
+                        <TableCell rowSpan={2} sx={{ ...grayCellSx, verticalAlign: 'middle', fontWeight: 600 }}>
+                          {game.sport}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...grayCellSx, verticalAlign: 'middle' }}>
+                          {game.time}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', bgcolor: isDark ? '#2a3441' : '#f0f4f8' }}>
+                          {game.gameNumber}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, fontWeight: isAwayPicked ? 700 : 400 }}>
+                          {game.awayTeam}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', color: 'text.secondary' }}>
+                          {game.awayRecord || (isTennis ? '' : '-')}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem' }}>
+                          {game.awayScore !== null ? game.awayScore : '-'}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, verticalAlign: 'middle', textAlign: 'center' }}>
+                          <StatusBadge status={game.status} period={game.period} />
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center' }}>
+                          {game.spread.away || (isTennis ? '' : '-')}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle' }}>
+                          {game.total || (isTennis ? '' : '-')}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, verticalAlign: 'middle' }}>
+                          {game.prediction ? (
+                            <Box>
+                              <Typography sx={{ fontSize: 11, fontWeight: 600, color: 'success.main', lineHeight: 1.3 }}>
+                                {game.prediction.pick}
+                              </Typography>
+                              <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>
+                                {game.prediction.type}
+                              </Typography>
+                            </Box>
+                          ) : (
+                            <Tooltip title={isTennis ? 'Tennis predictions coming soon' : 'No qualifying prediction'}>
+                              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>
+                                {isTennis ? 'N/A' : '-'}
+                              </Typography>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>
+                          {game.prediction ? `${(game.prediction.probability * 100).toFixed(0)}%` : '-'}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle' }}>
+                          {game.prediction ? <EdgeDisplay edge={game.prediction.edge} /> : (
+                            <Typography sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>-</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell rowSpan={2} sx={{ ...cellSx, textAlign: 'center', verticalAlign: 'middle', borderRight: 'none' }}>
+                          {game.prediction ? <TierBadge tier={game.prediction.tier} /> : '-'}
+                        </TableCell>
+                      </TableRow>
+
+                      {/* Home Team Row */}
+                      <TableRow
+                        sx={{
+                          bgcolor: rowBg,
+                          '&:hover': { bgcolor: rowHoverBg },
+                          opacity: isFinal ? 0.7 : 1,
+                        }}
+                      >
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', bgcolor: isDark ? '#2a3441' : '#f0f4f8' }}>
+                          {game.gameNumber + 1}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, fontWeight: isHomePicked ? 700 : 400 }}>
+                          {game.homeTeam}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', color: 'text.secondary' }}>
+                          {game.homeRecord || (isTennis ? '' : '-')}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem' }}>
+                          {game.homeScore !== null ? game.homeScore : '-'}
+                        </TableCell>
+                        <TableCell sx={{ ...cellSx, textAlign: 'center' }}>
+                          {game.spread.home || (isTennis ? '' : '-')}
+                        </TableCell>
+                      </TableRow>
+                    </React.Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </TableContainer>
@@ -309,7 +364,7 @@ const Live: React.FC = () => {
 
       {/* Summary Stats */}
       {filtered.length > 0 && (
-        <Box display="flex" gap={3} mt={2}>
+        <Box display="flex" gap={3} mt={2} alignItems="center">
           <Typography variant="body2" color="text.secondary">
             <strong>{counts.live}</strong> Live
           </Typography>

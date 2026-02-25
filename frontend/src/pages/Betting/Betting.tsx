@@ -313,7 +313,7 @@ const Betting: React.FC = () => {
                       formatter={(value: number) => [`$${value.toLocaleString()}`, 'Bankroll']}
                     />
                     <ReferenceLine y={stats.initial_bankroll} stroke="#666" strokeDasharray="3 3" label={{ value: 'Initial', position: 'right', fontSize: 10, fill: '#888' }} />
-                    <Line type="monotone" dataKey="value" stroke={stats.total_pnl >= 0 ? '#4caf50' : '#ef5350'} strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="value" stroke="#4caf50" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </Box>

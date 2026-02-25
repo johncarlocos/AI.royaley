@@ -542,11 +542,11 @@ def predict_probability(
         # Penalize weight of frameworks producing extreme outputs
         # A framework outputting 0.95 is almost certainly data-leaked
         # Reduce its ensemble influence so honest frameworks dominate
-        if raw > 0.70 or raw < 0.30:
-            weight_penalties[fw] = 0.10  # 90% weight reduction
-            logger.info(f"    ⚠️  {fw} weight penalized 90% (raw={raw:.3f}, likely data leakage)")
-        elif raw > 0.65 or raw < 0.35:
-            weight_penalties[fw] = 0.30  # 70% weight reduction
+        if raw > 0.65 or raw < 0.35:
+            weight_penalties[fw] = 0.05  # 95% weight reduction
+            logger.info(f"    ⚠️  {fw} weight penalized 95% (raw={raw:.3f}, likely data leakage)")
+        elif raw > 0.60 or raw < 0.40:
+            weight_penalties[fw] = 0.20  # 80% weight reduction
         else:
             weight_penalties[fw] = 1.00  # No penalty
 
@@ -579,9 +579,11 @@ def predict_probability(
         cal_source = f"platt(a={_global_calibrator_cache.a:.3f})"
     else:
         # Fallback: static shrinkage toward 50% (used before enough data to train)
-        SHRINKAGE_FACTOR = 0.667
-        MAX_PROBABILITY = 0.62
-        MIN_PROBABILITY = 0.38
+        # Sports betting reality: even the best models sustain ~55-60% accuracy.
+        # Shrinkage pulls overconfident predictions toward 50%.
+        SHRINKAGE_FACTOR = 0.80   # Moderate pull toward 50%
+        MAX_PROBABILITY = 0.72    # Allows Tier A (65%+) when all frameworks agree
+        MIN_PROBABILITY = 0.28    # Mirror floor
         deviation = prob_positive - 0.50
         calibrated = 0.50 + deviation * SHRINKAGE_FACTOR
         prob_positive = float(np.clip(calibrated, MIN_PROBABILITY, MAX_PROBABILITY))
@@ -613,16 +615,16 @@ def _clamp_framework_output(prob: float) -> float:
 
     if prob > 0.60:
         # Above 0.60: compress excess with diminishing returns
-        # 0.65 → 0.62, 0.70 → 0.63, 0.80 → 0.635, 0.95 → 0.645
+        # 0.65 → 0.625, 0.70 → 0.64, 0.80 → 0.66, 0.95 → 0.675
         excess = prob - 0.60
-        compressed = 0.60 + excess * 0.10  # 10% of excess preserved
-        return min(compressed, 0.65)
+        compressed = 0.60 + excess * 0.25  # 25% of excess preserved
+        return min(compressed, 0.72)
 
     if prob < 0.40:
         # Mirror: below 0.40 compress toward 0.40
         deficit = 0.40 - prob
-        compressed = 0.40 - deficit * 0.10
-        return max(compressed, 0.35)
+        compressed = 0.40 - deficit * 0.25
+        return max(compressed, 0.28)
 
     return prob
 

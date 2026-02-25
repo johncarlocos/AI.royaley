@@ -715,7 +715,7 @@ const Settings: React.FC = () => {
                 <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'success.main', bgcolor: 'rgba(76, 175, 80, 0.06)' }}>
                   <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'success.main', mb: 1 }}>Tier A — High Confidence</Typography>
                   <TextField fullWidth size="small" label="Min Probability" type="number" value={ml.tierAThreshold}
-                    onChange={(e) => ml.setMLConfig({ tierAThreshold: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.65)) })}
+                    onChange={(e) => ml.setMLConfig({ tierAThreshold: Math.min(0.90, Math.max(0.50, parseFloat(e.target.value) || 0.60)) })}
                     inputProps={{ min: 0.50, max: 0.90, step: 0.01 }}
                     InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 13 } }}
                     helperText={`≥ ${(ml.tierAThreshold * 100).toFixed(0)}% confidence`} FormHelperTextProps={{ sx: { fontSize: 11 } }} />

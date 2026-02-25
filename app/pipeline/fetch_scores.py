@@ -16,7 +16,7 @@ import asyncio
 import argparse
 import logging
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import httpx
@@ -276,146 +276,6 @@ async def update_scores_in_db(
 
 
 # =============================================================================
-# ESPN LIVE SCORES FOR TENNIS
-# Odds API doesn't track in-progress tennis. ESPN does via groupings structure.
-# =============================================================================
-
-async def _fetch_espn_live_tennis(db: AsyncSession, sport_code: str) -> int:
-    """
-    Fetch live + completed tennis scores from ESPN and update upcoming_games.
-    ESPN tennis uses 'groupings' structure (not direct competitions).
-    Returns count of games updated.
-    """
-    espn_sport = "atp" if sport_code == "ATP" else "wta"
-    now = datetime.now(timezone.utc)
-    dates_to_check = [
-        now.strftime("%Y%m%d"),
-        (now - timedelta(days=1)).strftime("%Y%m%d"),
-    ]
-    updated = 0
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        for date_param in dates_to_check:
-            try:
-                r = await client.get(
-                    f"https://site.api.espn.com/apis/site/v2/sports/tennis/{espn_sport}/scoreboard",
-                    params={"dates": date_param}
-                )
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-            except Exception as e:
-                logger.warning(f"ESPN live tennis fetch failed for {date_param}: {e}")
-                continue
-
-            for ev in data.get("events", []):
-                # Tennis: matches nested under groupings, not direct competitions
-                for grp in ev.get("groupings", []):
-                    for comp in grp.get("competitions", []):
-                        status_name = comp.get("status", {}).get("type", {}).get("name", "")
-                        if status_name not in ("STATUS_IN_PROGRESS", "STATUS_FINAL", "STATUS_SUSPENDED"):
-                            continue
-
-                        competitors = comp.get("competitors", [])
-                        if len(competitors) < 2:
-                            continue
-
-                        # Extract player names and total games
-                        home_info = away_info = None
-                        for c in competitors:
-                            name = (
-                                c.get("athlete", {}).get("displayName", "")
-                                or c.get("team", {}).get("displayName", "")
-                            )
-                            if not name or name == "?":
-                                continue
-
-                            total_games = 0
-                            for ls in c.get("linescores", []):
-                                val = ls.get("value")
-                                if val is not None:
-                                    try:
-                                        total_games += int(float(val))
-                                    except (ValueError, TypeError):
-                                        pass
-
-                            info = {"name": name, "score": int(total_games)}
-                            if c.get("homeAway") == "home":
-                                home_info = info
-                            else:
-                                away_info = info
-
-                        if not home_info or not away_info:
-                            continue
-                        if not home_info["name"] or not away_info["name"]:
-                            continue
-
-                        new_status = "final" if status_name == "STATUS_FINAL" else "in_progress"
-                        is_completed = status_name == "STATUS_FINAL"
-
-                        home_last = home_info["name"].split()[-1] if home_info["name"].split() else ""
-                        away_last = away_info["name"].split()[-1] if away_info["name"].split() else ""
-                        if len(home_last) < 3 or len(away_last) < 3:
-                            continue
-
-                        # Explicit integer scores (avoids asyncpg type mismatch)
-                        hs = int(home_info["score"])
-                        as_ = int(away_info["score"])
-                        row = None
-
-                        # Direction 1: ESPN home = DB home
-                        try:
-                            result = await db.execute(text("""
-                                UPDATE upcoming_games ug
-                                SET home_score = :hs, away_score = :as,
-                                    status = :status, completed = :completed,
-                                    last_score_update = NOW(), updated_at = NOW()
-                                WHERE ug.sport_id = (SELECT id FROM sports WHERE code = :sport LIMIT 1)
-                                  AND ug.status IN ('scheduled', 'in_progress')
-                                  AND home_team_name ILIKE '%' || :hl || '%'
-                                  AND away_team_name ILIKE '%' || :al || '%'
-                                RETURNING id
-                            """), {
-                                "hs": hs, "as": as_,
-                                "status": new_status, "completed": is_completed,
-                                "sport": sport_code, "hl": home_last, "al": away_last,
-                            })
-                            row = result.fetchone()
-                        except Exception:
-                            await db.rollback()
-
-                        # Direction 2: ESPN home = DB away (tennis has no real home/away)
-                        if not row:
-                            try:
-                                result = await db.execute(text("""
-                                    UPDATE upcoming_games ug
-                                    SET home_score = :as, away_score = :hs,
-                                        status = :status, completed = :completed,
-                                        last_score_update = NOW(), updated_at = NOW()
-                                    WHERE ug.sport_id = (SELECT id FROM sports WHERE code = :sport LIMIT 1)
-                                      AND ug.status IN ('scheduled', 'in_progress')
-                                      AND home_team_name ILIKE '%' || :al || '%'
-                                      AND away_team_name ILIKE '%' || :hl || '%'
-                                    RETURNING id
-                                """), {
-                                    "hs": hs, "as": as_,
-                                    "status": new_status, "completed": is_completed,
-                                    "sport": sport_code, "hl": home_last, "al": away_last,
-                                })
-                                row = result.fetchone()
-                            except Exception:
-                                await db.rollback()
-
-                        if row:
-                            updated += 1
-
-    if updated:
-        await db.commit()
-        logger.info(f"  {sport_code} ESPN live: {updated} games updated")
-    return updated
-
-
-# =============================================================================
 # MAIN PIPELINE
 # =============================================================================
 
@@ -446,16 +306,19 @@ async def run_scores_pipeline(
 
     # Determine sports
     if tournament_override and sports:
+        # Direct override: use the given tournament key for the specified sport
         sport_list = {s.upper(): tournament_override for s in sports}
         logger.info(f"Tournament override: {tournament_override}")
     elif sports:
         sport_list = {s.upper(): ODDS_API_SPORT_KEYS[s.upper()]
                       for s in sports if s.upper() in ODDS_API_SPORT_KEYS}
+        # Also handle tennis if explicitly requested
         for s in sports:
             if s.upper() in ('ATP', 'WTA') and s.upper() not in sport_list:
-                sport_list[s.upper()] = None
+                sport_list[s.upper()] = None  # Will be resolved below
     else:
         sport_list = dict(ODDS_API_SPORT_KEYS)
+        # Add tennis placeholders (keys resolved dynamically below)
         sport_list["ATP"] = None
         sport_list["WTA"] = None
 
@@ -467,7 +330,7 @@ async def run_scores_pipeline(
                 if code in tennis_keys:
                     sport_list[code] = tennis_keys[code]
                 else:
-                    del sport_list[code]
+                    del sport_list[code]  # No active tournament, skip
 
     logger.info(f"Sports: {list(sport_list.keys())}")
     logger.info(f"Days from: {days_from}")
@@ -478,9 +341,11 @@ async def run_scores_pipeline(
     async with async_session() as db:
         for sport_code, api_key in sport_list.items():
             scores = await api_client.get_scores(api_key, days_from=days_from)
+
             if not scores:
                 continue
 
+            # Count live vs completed
             live_count = sum(1 for s in scores if not s.get("completed") and s.get("scores"))
             final_count = sum(1 for s in scores if s.get("completed"))
 
@@ -497,16 +362,6 @@ async def run_scores_pipeline(
 
             total_updated += stats["updated"]
             total_completed += stats["completed"]
-
-    # ESPN live scores for tennis (Odds API misses in-progress tennis)
-    async with async_session() as db:
-        for tc in ["ATP", "WTA"]:
-            if tc in sport_list:
-                try:
-                    espn_count = await _fetch_espn_live_tennis(db, tc)
-                    total_updated += espn_count
-                except Exception as e:
-                    logger.warning(f"ESPN live tennis error for {tc}: {e}")
 
     logger.info(f"DONE: {total_updated} live updates, {total_completed} completed | "
                 f"API: {api_client.requests_remaining} remaining")

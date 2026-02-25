@@ -50,7 +50,9 @@ logger = logging.getLogger("royaley.pipeline")
 # =============================================================================
 # Skip extreme favorites: odds below this floor produce tiny payouts that
 # destroy bankroll on a single loss. -300 means max risk $300 to win $100.
-MIN_ODDS_THRESHOLD = -300  # Skip predictions with odds below this (e.g., -556, -4800)
+MIN_ODDS_THRESHOLD = -400  # Skip heavy favorites (e.g., -556 pays only $18 on $100 risk)
+MAX_ODDS_THRESHOLD = 500   # Skip extreme underdogs (too much variance)
+MIN_EDGE_THRESHOLD = 0.02  # Minimum 2% edge required to generate prediction
 
 
 # =============================================================================
@@ -662,18 +664,30 @@ async def generate_predictions_for_game(
             open_away_ml = int(row.pin_away_ml or row.avg_away_ml) if (row.pin_away_ml or row.avg_away_ml) else None
 
         for predicted_side, probability, line_val, odds_val, edge in predictions_to_make:
-            # ── MINIMUM ODDS FILTER ──
-            # Skip extreme favorites (e.g., -556 pays only $18 on a $100 risk)
-            if odds_val is not None and odds_val < MIN_ODDS_THRESHOLD:
-                logger.info(f"    Skipping {bet_type} {predicted_side}: odds {odds_val} below floor {MIN_ODDS_THRESHOLD}")
+            # ── ODDS VALIDATION ──
+            # American odds must be outside -100 to +100 range
+            if odds_val is not None:
+                odds_int = int(odds_val)
+                if -100 < odds_int < 100 and odds_int != 0:
+                    logger.info(f"    Skipping {bet_type} {predicted_side}: invalid odds {odds_int} (between -100 and +100)")
+                    continue
+                if odds_int < MIN_ODDS_THRESHOLD:
+                    logger.info(f"    Skipping {bet_type} {predicted_side}: odds {odds_int} below floor {MIN_ODDS_THRESHOLD}")
+                    continue
+                if odds_int > MAX_ODDS_THRESHOLD:
+                    logger.info(f"    Skipping {bet_type} {predicted_side}: odds {odds_int} above ceiling {MAX_ODDS_THRESHOLD}")
+                    continue
+
+            # ── MINIMUM EDGE FILTER ──
+            if edge < MIN_EDGE_THRESHOLD:
                 continue
 
             # Signal tier based on calibrated probability
-            # These thresholds match sports betting reality:
-            #   58%+ sustained = world-class edge (Pinnacle-sharp level)
-            #   55-58% = strong positive EV at standard -110 juice
-            #   52.4% = breakeven at -110, so 52-55% = modest edge
-            #   <52% = losing territory, track only
+            # With shrinkage(0.55) and MAX_PROBABILITY=0.62:
+            #   65%+ = elite edge (rare, all frameworks must agree strongly)
+            #   60-65% = strong positive EV
+            #   55-60% = moderate edge above breakeven
+            #   <55% = marginal, track only
             if probability >= 0.65:
                 tier = "A"
             elif probability >= 0.60:

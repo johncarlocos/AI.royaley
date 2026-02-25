@@ -473,7 +473,7 @@ const Backtesting: React.FC = () => {
                       <YAxis stroke="#666" fontSize={10} tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`} domain={['dataMin - 200', 'dataMax + 200']} />
                       <Tooltip contentStyle={{ backgroundColor: isDark ? '#1e1e1e' : '#fff', border: '1px solid #333', fontSize: 11 }} formatter={(value: number) => [`$${value.toLocaleString()}`, 'Bankroll']} />
                       <ReferenceLine y={initialBankroll} stroke="#666" strokeDasharray="3 3" label={{ value: 'Initial', position: 'right', fontSize: 10, fill: '#888' }} />
-                      <Line type="monotone" dataKey="value" stroke="#4caf50" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="value" stroke={result.totalPnl >= 0 ? '#4caf50' : '#ef5350'} strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </CardContent>

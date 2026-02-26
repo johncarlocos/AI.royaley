@@ -443,9 +443,9 @@ const Predictions: React.FC = () => {
       {/* Tabs + Filters Row */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider', mb: 1.5 }}>
         <Tabs value={tab} onChange={(_, v) => { setTab(v); setPage(0); }} sx={{ minHeight: 40 }}>
-          <Tab label={`Pending (${new Set(rows.filter(r => r.result === 'pending').map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label={`Graded (${new Set(rows.filter(r => r.result !== 'pending').map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
-          <Tab label={`All (${new Set(rows.map(r => r.game_id)).size})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`Pending (${rows.filter(r => r.result === 'pending').length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`Graded (${rows.filter(r => r.result !== 'pending').length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
+          <Tab label={`All (${rows.length})`} sx={{ fontSize: 12, minHeight: 40, py: 0.5 }} />
         </Tabs>
         <Box display="flex" alignItems="center" gap={1.5}>
           {/* Date Range Filter - only shown on Graded tab */}
@@ -533,63 +533,59 @@ const Predictions: React.FC = () => {
             <TableBody>
               {paginatedGames.map((game, gameIdx) => {
                 const gameNum = page * rowsPerPage + gameIdx + 1;
-                const totalBetRows = game.bets.length * 2; // each bet has away + home row
-                const bestTier = game.bets.reduce((best, b) => b.signal_tier < best ? b.signal_tier : best, 'Z' as string);
-                // Subtle tier background tint
-                const tierBg = bestTier === 'A' ? (isDark ? 'rgba(46, 125, 50, 0.06)' : 'rgba(46, 125, 50, 0.04)')
-                  : bestTier === 'B' ? (isDark ? 'rgba(2, 136, 209, 0.06)' : 'rgba(2, 136, 209, 0.04)')
-                  : undefined;
 
                 return (
                   <React.Fragment key={game.game_id}>
                     {game.bets.map((row, betIdx) => {
-                      const isFirstBet = betIdx === 0;
                       const isLastBet = betIdx === game.bets.length - 1;
                       const gameBorderSx = isLastBet ? { borderBottom: 2, borderColor: 'divider' } : {};
-                      const betDivider = !isLastBet ? { borderBottom: 1, borderColor: 'action.hover' } : gameBorderSx;
+                      const betDivider = { borderBottom: 1, borderColor: 'action.hover' };
                       const isNegEdge = row.edge < 0;
                       const pickHighlight = (team: 'away' | 'home') => row.pick_team === team ? {
                         fontWeight: 700,
                         bgcolor: isDark ? 'rgba(46, 125, 50, 0.12)' : 'rgba(46, 125, 50, 0.08)',
                       } : { fontWeight: 400 };
 
+                      const bestTier = row.signal_tier;
+                      const tierBg = bestTier === 'A' ? (isDark ? 'rgba(46, 125, 50, 0.06)' : 'rgba(46, 125, 50, 0.04)')
+                        : bestTier === 'B' ? (isDark ? 'rgba(2, 136, 209, 0.06)' : 'rgba(2, 136, 209, 0.04)')
+                        : undefined;
+
                       return (
                         <React.Fragment key={row.id}>
                           {/* Away Row */}
                           <TableRow sx={{ bgcolor: tierBg }}>
-                            {isFirstBet && <>
-                              <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, borderBottom: 2, borderColor: 'divider' }}>{row.sport}</TableCell>
-                              <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 2, borderColor: 'divider' }}>{row.date}</TableCell>
-                              <TableCell rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', borderBottom: 2, borderColor: 'divider' }}>{row.time}</TableCell>
-                              <TableCell align="center" rowSpan={totalBetRows} sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, verticalAlign: 'middle', borderBottom: 2, borderColor: 'divider' }}>{gameNum}</TableCell>
-                            </>}
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, ...gameBorderSx }}>{row.sport}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{row.date}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{row.time}</TableCell>
+                            <TableCell align="center" rowSpan={2} sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, verticalAlign: 'middle', ...gameBorderSx }}>{gameNum}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0, ...pickHighlight('away') }}>{row.away_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', borderBottom: 0 }}>{row.away_record}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open, row.bet_type)}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_circa_current, row.bet_type)}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, color: 'info.main', borderBottom: 0 }}>{formatLine(row.away_system_open, row.bet_type)}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, borderBottom: 0 }}>{formatLine(row.away_system_current, row.bet_type)}</TableCell>
-                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>
                               <Typography sx={{ fontSize: 11, fontWeight: 600, color: isNegEdge ? 'text.secondary' : 'success.main', lineHeight: 1.3 }}>{row.system_pick}</Typography>
                               <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>{row.bet_type_label}</Typography>
                             </TableCell>
-                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{formatPercent(row.probability)}</TableCell>
-                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider, color: isNegEdge ? 'error.main' : (row.edge * 100) >= 3 ? 'success.main' : (row.edge * 100) >= 1 ? 'warning.main' : 'text.secondary' }}>
+                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{formatPercent(row.probability)}</TableCell>
+                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx, color: isNegEdge ? 'error.main' : (row.edge * 100) >= 3 ? 'success.main' : (row.edge * 100) >= 1 ? 'warning.main' : 'text.secondary' }}>
                               {row.edge >= 0 ? '+' : ''}{(row.edge * 100).toFixed(1)}%
                             </TableCell>
-                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider, color: row.clv != null ? (row.clv > 0 ? 'success.main' : row.clv < 0 ? 'error.main' : 'inherit') : 'inherit' }}>{row.clv != null ? `${row.clv > 0 ? '+' : ''}${row.clv.toFixed(1)}%` : '-'}</TableCell>
-                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}><TierBadge tier={row.signal_tier} /></TableCell>
-                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}>{getStatusChip(row.result)}</TableCell>
-                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...betDivider }}><IconButton size="small" onClick={() => setReasonDialog({ open: true, row })}><ExpandMore /></IconButton></TableCell>
+                            <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx, color: row.clv != null ? (row.clv > 0 ? 'success.main' : row.clv < 0 ? 'error.main' : 'inherit') : 'inherit' }}>{row.clv != null ? `${row.clv > 0 ? '+' : ''}${row.clv.toFixed(1)}%` : '-'}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}><TierBadge tier={row.signal_tier} /></TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{getStatusChip(row.result)}</TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}><IconButton size="small" onClick={() => setReasonDialog({ open: true, row })}><ExpandMore /></IconButton></TableCell>
                           </TableRow>
                           {/* Home Row */}
                           <TableRow sx={{ bgcolor: tierBg }}>
-                            <TableCell sx={{ py: 0.75, fontSize: 11, ...betDivider, ...pickHighlight('home') }}>{row.home_team}</TableCell>
-                            <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', ...betDivider }}>{row.home_record}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, ...betDivider }}>{formatLine(row.home_circa_open, row.bet_type)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, ...betDivider }}>{formatLine(row.home_circa_current, row.bet_type)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', ...betDivider }}>{formatLine(row.home_system_open, row.bet_type)}</TableCell>
-                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, ...betDivider }}>{formatLine(row.home_system_current, row.bet_type)}</TableCell>
+                            <TableCell sx={{ py: 0.75, fontSize: 11, ...gameBorderSx, ...pickHighlight('home') }}>{row.home_team}</TableCell>
+                            <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', ...gameBorderSx }}>{row.home_record}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, ...gameBorderSx }}>{formatLine(row.home_circa_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, fontWeight: 600, ...gameBorderSx }}>{formatLine(row.home_circa_current, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', ...gameBorderSx }}>{formatLine(row.home_system_open, row.bet_type)}</TableCell>
+                            <TableCell align="center" sx={{ ...lineCell, color: 'info.main', fontWeight: 600, ...gameBorderSx }}>{formatLine(row.home_system_current, row.bet_type)}</TableCell>
                           </TableRow>
                         </React.Fragment>
                       );
@@ -605,7 +601,7 @@ const Predictions: React.FC = () => {
         </TableContainer>
         <TablePagination component="div" count={totalGames} page={page} onPageChange={(_, p) => setPage(p)} rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
-          rowsPerPageOptions={[20, 50, 100, { value: -1, label: 'All' }]} labelRowsPerPage="Games per page:" />
+          rowsPerPageOptions={[20, 50, 100, { value: -1, label: 'All' }]} labelRowsPerPage="Predictions per page:" />
       </Card>
 
       <Dialog open={reasonDialog.open} onClose={() => setReasonDialog({ open: false, row: null })} maxWidth="sm" fullWidth>

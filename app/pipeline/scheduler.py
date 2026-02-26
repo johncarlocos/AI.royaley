@@ -413,7 +413,7 @@ def _normalize_name(name: str) -> str:
 
 async def _match_upcoming_game(
     db: AsyncSession, sport_id, home_name: str, away_name: str,
-    commence_time: str, time_window: int = 7200,
+    commence_time: str, time_window: int = 21600,
 ) -> Optional[str]:
     """
     Multi-strategy matching to find an upcoming_game for a completed score.
@@ -493,11 +493,11 @@ async def _match_upcoming_game(
             logger.info(f"      Match strategy 4 (fuzzy last-word): {home_last}/{away_last}")
             return row[0]
 
-    # Strategy 5: Closest game in same sport within wider time window
+    # Strategy 5: Closest game in same sport within wider time window (diagnostic)
     r = await db.execute(text("""
         SELECT id, home_team_name, away_team_name FROM upcoming_games
         WHERE sport_id = :sid AND status = 'scheduled'
-          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < 14400
+          AND ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz)))) < 86400
         ORDER BY ABS(EXTRACT(EPOCH FROM (scheduled_at - CAST(:ct AS timestamptz))))
         LIMIT 3
     """), {"sid": sport_id, "ct": ct})
@@ -528,15 +528,14 @@ async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list
     results = []
     seen_matchups = set()  # dedupe across date fetches
     
-    # For tennis, fetch today + yesterday (catches delayed completions)
-    date_list = [None]  # None = default (today) for team sports
-    if is_tennis:
-        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-        now = _dt.now(_tz.utc)
-        date_list = [
-            now.strftime("%Y%m%d"),
-            (now - _td(days=1)).strftime("%Y%m%d"),
-        ]
+    # Fetch today + 2 days back for ALL sports (catches delayed completions)
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    now = _dt.now(_tz.utc)
+    date_list = [
+        now.strftime("%Y%m%d"),
+        (now - _td(days=1)).strftime("%Y%m%d"),
+        (now - _td(days=2)).strftime("%Y%m%d"),
+    ]
 
     try:
         for date_param in date_list:
@@ -804,6 +803,22 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 # 2) DB-stored key (tournament that was active when games were fetched)
                 if db_api_key and db_api_key not in tennis_keys_to_try:
                     tennis_keys_to_try.append(db_api_key)
+                # 3) Discover old tournament keys from ALL available Odds API sports
+                try:
+                    resp_sports = await client.get(
+                        "https://api.the-odds-api.com/v4/sports",
+                        params={"apiKey": api_key, "all": "true"},  # include inactive
+                    )
+                    if resp_sports.status_code == 200:
+                        prefix = "tennis_atp_" if sport_code == "ATP" else "tennis_wta_"
+                        for s in resp_sports.json():
+                            key = s.get("key", "")
+                            if key.startswith(prefix) and key not in tennis_keys_to_try:
+                                tennis_keys_to_try.append(key)
+                        if len(tennis_keys_to_try) > 1:
+                            logger.info(f"    {sport_code}: Trying {len(tennis_keys_to_try)} tournament keys: {tennis_keys_to_try}")
+                except Exception as e:
+                    logger.debug(f"    Failed to discover all tennis keys: {e}")
                 if not tennis_keys_to_try:
                     logger.warning(f"    {sport_code}: No tennis tournament keys found")
                     continue
@@ -893,7 +908,7 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                 source = game_data.get("source", "unknown")
 
                 # Multi-strategy matching (wider window for tennis: 6h vs 2h)
-                match_window = 21600 if sport_code in ("ATP", "WTA") else 7200
+                match_window = 43200 if sport_code in ("ATP", "WTA") else 21600
                 game_uuid = await _match_upcoming_game(
                     db, sport_id, home_name, away_name, commence_time,
                     time_window=match_window,

@@ -76,7 +76,7 @@ const Analytics: React.FC = () => {
   const [sportFilter, setSportFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [tierFilter, setTierFilter] = useState('all');
-  const [resultFilter, setResultFilter] = useState('all');
+  const [resultFilter, setResultFilter] = useState('graded');
   const [edgeFilter, setEdgeFilter] = useState('all');
 
   // Sort & pagination

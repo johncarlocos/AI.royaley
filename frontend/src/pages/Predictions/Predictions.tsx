@@ -512,7 +512,7 @@ const Predictions: React.FC = () => {
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'sport'} direction={sortField === 'sport' ? sortOrder : 'asc'} onClick={() => handleSort('sport')}>Sport</TableSortLabel></TableCell>
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'datetime'} direction={sortField === 'datetime' ? sortOrder : 'asc'} onClick={() => handleSort('datetime')}>Date</TableSortLabel></TableCell>
                 <TableCell sx={hdr}>Time (PST)</TableCell>
-                <TableCell sx={hdr} align="center">Game #</TableCell>
+                <TableCell sx={hdr} align="center">Rot #</TableCell>
                 <TableCell sx={hdr}>Team</TableCell>
                 <TableCell sx={hdr}>Record</TableCell>
                 <TableCell sx={lineHdr}>Circa O</TableCell>
@@ -565,7 +565,9 @@ const Predictions: React.FC = () => {
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', fontWeight: 600, ...gameBorderSx }}>{row.sport}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{row.date}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{row.time}</TableCell>
-                            <TableCell align="center" rowSpan={2} sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, verticalAlign: 'middle', ...gameBorderSx }}>{gameNum}</TableCell>
+                            <TableCell align="center" rowSpan={2} sx={{ py: 0.75, fontSize: 11, fontFamily: 'monospace', fontWeight: 600, verticalAlign: 'middle', ...gameBorderSx }}>
+                              {row.away_rotation && row.home_rotation ? `${row.away_rotation}/${row.home_rotation}` : gameNum}
+                            </TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, borderBottom: 0, ...pickHighlight('away') }}>{row.away_team}</TableCell>
                             <TableCell sx={{ py: 0.75, fontSize: 11, color: 'text.secondary', borderBottom: 0 }}>{row.away_record}</TableCell>
                             <TableCell align="center" sx={{ ...lineCell, borderBottom: 0 }}>{formatLine(row.away_circa_open, row.bet_type)}</TableCell>
@@ -804,10 +806,10 @@ const transformToFlatRows = (data: any[], tz: string = 'America/New_York', tf: '
       date: dateStr,
       time: timeStr,
       datetime: gameTime,
-      away_rotation: '',
+      away_rotation: pred.away_rotation ? String(pred.away_rotation) : '',
       away_team: pred.away_team || 'TBD',
       away_record: pred.away_record || '',
-      home_rotation: '',
+      home_rotation: pred.home_rotation ? String(pred.home_rotation) : '',
       home_team: pred.home_team || 'TBD',
       home_record: pred.home_record || '',
       bet_type: bt,

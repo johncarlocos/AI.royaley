@@ -58,6 +58,9 @@ class PublicPrediction(BaseModel):
     # Team records (season W-L)
     home_record: Optional[str] = None
     away_record: Optional[str] = None
+    # Rotation numbers
+    home_rotation: Optional[int] = None
+    away_rotation: Optional[int] = None
 
 class PublicPredictionsResponse(BaseModel):
     predictions: List[PublicPrediction]
@@ -291,7 +294,10 @@ async def get_public_predictions(
             pr.closing_odds as result_closing_odds,
             -- Team records
             htr.wins as home_wins, htr.losses as home_losses,
-            atr.wins as away_wins, atr.losses as away_losses
+            atr.wins as away_wins, atr.losses as away_losses,
+            -- Rotation numbers
+            COALESCE(ug.home_rotation, 0) as home_rotation,
+            COALESCE(ug.away_rotation, 0) as away_rotation
         FROM predictions p
         {GAME_JOIN}
         {TEAM_JOIN_LEGACY}
@@ -351,6 +357,8 @@ async def get_public_predictions(
             current_away_ml=_safe_int(row.curr_away_ml),
             home_record=f"{row.home_wins}-{row.home_losses}" if row.home_wins is not None else None,
             away_record=f"{row.away_wins}-{row.away_losses}" if row.away_wins is not None else None,
+            home_rotation=row.home_rotation if row.home_rotation else None,
+            away_rotation=row.away_rotation if row.away_rotation else None,
         ))
 
     return PublicPredictionsResponse(
@@ -1544,6 +1552,8 @@ async def get_live_games(
             -- Records (via team lookup)
             ug.home_team_id,
             ug.away_team_id,
+            COALESCE(ug.home_rotation, 0) as home_rotation,
+            COALESCE(ug.away_rotation, 0) as away_rotation,
             hr.wins as home_wins,
             hr.losses as home_losses,
             ar.wins as away_wins,
@@ -1672,6 +1682,8 @@ async def get_live_games(
             "date": row.scheduled_at.strftime("%m/%d/%Y") if row.scheduled_at else "",
             "time": game_time,
             "gameNumber": 601 + (i * 2),
+            "homeRotation": row.home_rotation or 0,
+            "awayRotation": row.away_rotation or 0,
             "homeTeam": row.home_team_name,
             "awayTeam": row.away_team_name,
             "homeRecord": home_record,

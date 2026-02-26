@@ -46,7 +46,7 @@ from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func as sql_func
+from sqlalchemy import select, and_, or_, func as sql_func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -557,6 +557,10 @@ class ActionNetworkCollector(BaseCollector):
         i = 0
         pct_idx = 0
         while i < len(team_names) - 1:
+            # Extract rotation numbers BEFORE cleaning
+            away_rotation = self._extract_rotation_number(team_names[i])
+            home_rotation = self._extract_rotation_number(team_names[i + 1])
+
             away_team = self._clean_team_name(team_names[i])
             home_team = self._clean_team_name(team_names[i + 1])
             
@@ -565,6 +569,8 @@ class ActionNetworkCollector(BaseCollector):
                     "sport_code": sport_code,
                     "away_team": away_team,
                     "home_team": home_team,
+                    "away_rotation": away_rotation,
+                    "home_rotation": home_rotation,
                     "game_date": date.today(),
                     "source": "action_network",
                     "scraped_at": datetime.now(),
@@ -649,8 +655,15 @@ class ActionNetworkCollector(BaseCollector):
                 return None
             
             # Extract team names (typically away team first, then home)
-            away_team = self._clean_team_name(team_elements[0].get_text(strip=True))
-            home_team = self._clean_team_name(team_elements[1].get_text(strip=True))
+            away_raw = team_elements[0].get_text(strip=True)
+            home_raw = team_elements[1].get_text(strip=True)
+
+            # Extract rotation numbers BEFORE cleaning
+            away_rotation = self._extract_rotation_number(away_raw)
+            home_rotation = self._extract_rotation_number(home_raw)
+
+            away_team = self._clean_team_name(away_raw)
+            home_team = self._clean_team_name(home_raw)
             
             if not away_team or not home_team or away_team == home_team:
                 return None
@@ -664,6 +677,8 @@ class ActionNetworkCollector(BaseCollector):
                 "sport_code": sport_code,
                 "home_team": home_team,
                 "away_team": away_team,
+                "home_rotation": home_rotation,
+                "away_rotation": away_rotation,
                 "game_date": date.today(),
                 "game_time": self._extract_game_time(container),
                 "source": "action_network",
@@ -876,6 +891,27 @@ class ActionNetworkCollector(BaseCollector):
         
         return scores
     
+    def _extract_rotation_number(self, name: str) -> Optional[int]:
+        """Extract rotation number from team name string.
+        
+        Action Network embeds rotation numbers in team names like:
+        - "NE110" → 110
+        - "SEA109" → 109  
+        - "BOS501" → 501
+        - "Patriots110" → 110
+        """
+        if not name:
+            return None
+        # Match patterns: 2-4 uppercase letters followed by 3-4 digits at end
+        match = re.search(r'[A-Z]{2,4}(\d{3,4})$', name)
+        if match:
+            return int(match.group(1))
+        # Match: word ending with 3-4 digits (e.g. "Patriots110")
+        match = re.search(r'[a-z](\d{3,4})$', name)
+        if match:
+            return int(match.group(1))
+        return None
+
     def _clean_team_name(self, name: str) -> str:
         """Clean team name."""
         if not name:
@@ -1327,6 +1363,12 @@ class ActionNetworkCollector(BaseCollector):
                 total_saved += saved
                 logger.info(f"[ActionNetwork] Saved {saved} sharp indicators")
             
+            # Update upcoming_games with rotation numbers
+            if data.get("public_betting"):
+                rot_updated = await self._save_rotation_numbers(session, data["public_betting"])
+                if rot_updated > 0:
+                    logger.info(f"[ActionNetwork] Updated {rot_updated} games with rotation numbers")
+            
             await session.commit()
             
         except ImportError as e:
@@ -1434,6 +1476,71 @@ class ActionNetworkCollector(BaseCollector):
         logger.info(f"[ActionNetwork] Public betting: {saved} new, {updated} updated")
         return saved + updated
     
+    async def _save_rotation_numbers(
+        self,
+        session: AsyncSession,
+        records: List[Dict[str, Any]]
+    ) -> int:
+        """Update upcoming_games with rotation numbers from Action Network."""
+        updated = 0
+        
+        for record in records:
+            home_rot = record.get("home_rotation")
+            away_rot = record.get("away_rotation")
+            
+            if not home_rot and not away_rot:
+                continue
+            
+            home_team = record.get("home_team", "")
+            away_team = record.get("away_team", "")
+            sport_code = record.get("sport_code", "")
+            game_date = record.get("game_date", date.today())
+            
+            if not home_team or not away_team or not sport_code:
+                continue
+            
+            try:
+                # Match upcoming_games by team name + sport + date
+                result = await session.execute(
+                    text("""
+                        UPDATE upcoming_games
+                        SET home_rotation = COALESCE(:home_rot, home_rotation),
+                            away_rotation = COALESCE(:away_rot, away_rotation),
+                            updated_at = NOW()
+                        WHERE id = (
+                            SELECT ug.id FROM upcoming_games ug
+                            JOIN sports s ON ug.sport_id = s.id
+                            WHERE s.code = :sport_code
+                              AND ug.scheduled_at::date = :game_date
+                              AND (
+                                (ug.home_team_name ILIKE '%' || :home_last || '%'
+                                 AND ug.away_team_name ILIKE '%' || :away_last || '%')
+                                OR (LOWER(ug.home_team_name) = LOWER(:home_team)
+                                    AND LOWER(ug.away_team_name) = LOWER(:away_team))
+                              )
+                            LIMIT 1
+                        )
+                        RETURNING id
+                    """),
+                    {
+                        "home_rot": home_rot,
+                        "away_rot": away_rot,
+                        "sport_code": sport_code,
+                        "game_date": game_date,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "home_last": home_team.split()[-1] if home_team.split() else home_team,
+                        "away_last": away_team.split()[-1] if away_team.split() else away_team,
+                    },
+                )
+                if result.fetchone():
+                    updated += 1
+            except Exception as e:
+                logger.debug(f"[ActionNetwork] Error saving rotation number: {e}")
+                continue
+        
+        return updated
+
     async def _save_sharp_indicators(
         self,
         session: AsyncSession,

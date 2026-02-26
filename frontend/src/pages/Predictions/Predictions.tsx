@@ -531,15 +531,22 @@ const Predictions: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {paginatedGames.map((game, gameIdx) => {
-                const gameNum = page * rowsPerPage + gameIdx + 1;
+              {(() => {
+                // Build a map of game_id → sequential game number
+                const gameNumMap = new Map<string, number>();
+                let nextNum = page * rowsPerPage + 1;
+                paginatedGames.forEach(game => {
+                  if (!gameNumMap.has(game.game_id)) {
+                    gameNumMap.set(game.game_id, nextNum++);
+                  }
+                });
 
-                return (
+                return paginatedGames.map((game) => (
                   <React.Fragment key={game.game_id}>
                     {game.bets.map((row, betIdx) => {
+                      const gameNum = gameNumMap.get(game.game_id) || 0;
                       const isLastBet = betIdx === game.bets.length - 1;
                       const gameBorderSx = isLastBet ? { borderBottom: 2, borderColor: 'divider' } : {};
-                      const betDivider = { borderBottom: 1, borderColor: 'action.hover' };
                       const isNegEdge = row.edge < 0;
                       const pickHighlight = (team: 'away' | 'home') => row.pick_team === team ? {
                         fontWeight: 700,
@@ -591,8 +598,8 @@ const Predictions: React.FC = () => {
                       );
                     })}
                   </React.Fragment>
-                );
-              })}
+                ));
+              })()}
               {paginatedGames.length === 0 && !loading && (
                 <TableRow><TableCell colSpan={17} align="center" sx={{ py: 4 }}><Typography color="text.secondary">No predictions found</Typography></TableCell></TableRow>
               )}

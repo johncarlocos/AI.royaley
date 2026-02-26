@@ -512,7 +512,7 @@ const Predictions: React.FC = () => {
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'sport'} direction={sortField === 'sport' ? sortOrder : 'asc'} onClick={() => handleSort('sport')}>Sport</TableSortLabel></TableCell>
                 <TableCell sx={hdr}><TableSortLabel active={sortField === 'datetime'} direction={sortField === 'datetime' ? sortOrder : 'asc'} onClick={() => handleSort('datetime')}>Date</TableSortLabel></TableCell>
                 <TableCell sx={hdr}>Time (PST)</TableCell>
-                <TableCell sx={hdr} align="center">Rot #</TableCell>
+                <TableCell sx={hdr} align="center">Game #</TableCell>
                 <TableCell sx={hdr}>Team</TableCell>
                 <TableCell sx={hdr}>Record</TableCell>
                 <TableCell sx={lineHdr}>Circa O</TableCell>

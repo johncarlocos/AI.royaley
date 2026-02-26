@@ -435,7 +435,56 @@ async def _match_upcoming_game(
         except (ValueError, AttributeError):
             ct = _dt(2000, 1, 1, tzinfo=__import__('datetime').timezone.utc)
 
-    # Strategy 1: Exact home name
+    # Strategy 0: Exact BOTH home+away name — NO time window
+    # If both team names match exactly, this IS the game regardless of time
+    r = await db.execute(text("""
+        SELECT id FROM upcoming_games
+        WHERE sport_id = :sid AND status = 'scheduled'
+          AND (
+            (home_team_name = :home AND away_team_name = :away)
+            OR (home_team_name = :away AND away_team_name = :home)
+          )
+        LIMIT 1
+    """), {"sid": sport_id, "home": home_name, "away": away_name})
+    row = r.fetchone()
+    if row:
+        logger.info(f"      Match strategy 0 (exact both teams): {home_name} vs {away_name}")
+        return row[0]
+
+    # Strategy 0b: Case-insensitive BOTH names — NO time window
+    r = await db.execute(text("""
+        SELECT id FROM upcoming_games
+        WHERE sport_id = :sid AND status = 'scheduled'
+          AND (
+            (LOWER(home_team_name) = LOWER(:home) AND LOWER(away_team_name) = LOWER(:away))
+            OR (LOWER(home_team_name) = LOWER(:away) AND LOWER(away_team_name) = LOWER(:home))
+          )
+        LIMIT 1
+    """), {"sid": sport_id, "home": home_name, "away": away_name})
+    row = r.fetchone()
+    if row:
+        logger.info(f"      Match strategy 0b (icase both): {home_name} vs {away_name}")
+        return row[0]
+
+    # Strategy 0c: Last-word BOTH teams — NO time window
+    _hl0 = home_name.split()[-1] if home_name.split() else home_name
+    _al0 = away_name.split()[-1] if away_name.split() else away_name
+    if len(_hl0) >= 3 and len(_al0) >= 3:
+        r = await db.execute(text("""
+            SELECT id FROM upcoming_games
+            WHERE sport_id = :sid AND status = 'scheduled'
+              AND (
+                (home_team_name ILIKE '%' || :hl || '%' AND away_team_name ILIKE '%' || :al || '%')
+                OR (home_team_name ILIKE '%' || :al || '%' AND away_team_name ILIKE '%' || :hl || '%')
+              )
+            LIMIT 1
+        """), {"sid": sport_id, "hl": _hl0, "al": _al0})
+        row = r.fetchone()
+        if row:
+            logger.info(f"      Match strategy 0c (fuzzy both, no time): {_hl0}/{_al0}")
+            return row[0]
+
+    # Strategy 1: Exact home name + time window
     r = await db.execute(text("""
         SELECT id FROM upcoming_games
         WHERE sport_id = :sid AND home_team_name = :home AND status = 'scheduled'

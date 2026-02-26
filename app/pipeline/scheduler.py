@@ -696,6 +696,114 @@ async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list
     return results
 
 
+async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: str, days_back: int = 7) -> list:
+    """
+    Fetch completed tennis match scores from Sofascore public API.
+    ESPN doesn't return individual tennis matches (only tournament-level events).
+    Sofascore provides match-level data with set scores.
+    
+    Returns list of dicts: {home_team, away_team, home_score, away_score, commence_time, completed}
+    Scores are total games won (sum of all sets).
+    """
+    if sport_code not in ("ATP", "WTA"):
+        return []
+    
+    results = []
+    seen = set()
+    now = datetime.now(timezone.utc)
+    
+    for d in range(days_back):
+        date_str = (now - timedelta(days=d)).strftime("%Y-%m-%d")
+        try:
+            resp = await client.get(
+                f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date_str}",
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                },
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                continue
+            
+            data = resp.json()
+            for event in data.get("events", []):
+                # Only completed matches
+                status = event.get("status", {})
+                if status.get("type") != "finished":
+                    continue
+                
+                # Filter by sport: ATP vs WTA via tournament category
+                tournament = event.get("tournament", {})
+                category = tournament.get("category", {}).get("name", "")
+                unique_tournament = tournament.get("uniqueTournament", {})
+                # ATP events typically have category "ATP" or similar
+                # WTA events have "WTA"
+                sport_match = False
+                if sport_code == "ATP" and ("ATP" in category.upper() or "atp" in str(unique_tournament.get("slug", "")).lower()):
+                    sport_match = True
+                elif sport_code == "WTA" and ("WTA" in category.upper() or "wta" in str(unique_tournament.get("slug", "")).lower()):
+                    sport_match = True
+                
+                if not sport_match:
+                    continue
+                
+                home_team = event.get("homeTeam", {})
+                away_team = event.get("awayTeam", {})
+                home_name = home_team.get("name", "")
+                away_name = away_team.get("name", "")
+                
+                if not home_name or not away_name:
+                    continue
+                
+                # Get total games from periods (set scores)
+                home_score = 0
+                away_score = 0
+                
+                # Try homeScore.periods / awayScore.periods first (set-by-set games)
+                home_score_obj = event.get("homeScore", {})
+                away_score_obj = event.get("awayScore", {})
+                
+                # Periods contain individual set game counts
+                for key in ["period1", "period2", "period3", "period4", "period5"]:
+                    hv = home_score_obj.get(key)
+                    av = away_score_obj.get(key)
+                    if hv is not None:
+                        try: home_score += int(hv)
+                        except: pass
+                    if av is not None:
+                        try: away_score += int(av)
+                        except: pass
+                
+                # Fallback: use "current" or "display" score
+                if home_score == 0 and away_score == 0:
+                    try: home_score = int(home_score_obj.get("current", 0))
+                    except: pass
+                    try: away_score = int(away_score_obj.get("current", 0))
+                    except: pass
+                
+                if home_score > 0 or away_score > 0:
+                    norm_key = f"{_normalize_name(home_name)}:{_normalize_name(away_name)}"
+                    if norm_key not in seen:
+                        seen.add(norm_key)
+                        results.append({
+                            "home_team": home_name,
+                            "away_team": away_name,
+                            "home_score": home_score,
+                            "away_score": away_score,
+                            "commence_time": event.get("startTimestamp", ""),
+                            "completed": True,
+                        })
+                        
+        except Exception as e:
+            logger.debug(f"    Sofascore tennis {date_str} error: {e}")
+    
+    if results:
+        logger.info(f"    {sport_code} Sofascore fallback: {len(results)} completed matches (last {days_back} days)")
+    
+    return results
+
+
 async def _grade_game_predictions(db: AsyncSession, game_id, home_score: int, away_score: int) -> int:
     """
     Grade all predictions for a single game that already has scores.
@@ -940,6 +1048,24 @@ async def grade_predictions(db: AsyncSession, api_key: str) -> dict:
                         all_completed.append(es)
                         logger.info(f"      ESPN added: {es['home_team']} vs {es['away_team']} "
                                     f"({es['home_score']}-{es['away_score']})")
+
+            # Source 3: Sofascore fallback for tennis (ESPN returns 0 individual tennis matches)
+            if sport_code in ("ATP", "WTA"):
+                sofascore_scores = await _fetch_sofascore_tennis_scores(client, sport_code, days_back=7)
+                for ss in sofascore_scores:
+                    ss["source"] = "sofascore"
+                    ss_home_norm = _normalize_name(ss["home_team"])
+                    ss_home_last = ss["home_team"].split()[-1].lower() if ss["home_team"].split() else ""
+                    already = any(
+                        _normalize_name(c["home_team"]) == ss_home_norm
+                        or (ss_home_last and len(ss_home_last) >= 3
+                            and ss_home_last in _normalize_name(c["home_team"]))
+                        for c in all_completed
+                    )
+                    if not already:
+                        all_completed.append(ss)
+                        logger.info(f"      Sofascore added: {ss['home_team']} vs {ss['away_team']} "
+                                    f"({ss['home_score']}-{ss['away_score']})")
 
             if not all_completed:
                 logger.info(f"    {sport_code}: No completed scores from any source")

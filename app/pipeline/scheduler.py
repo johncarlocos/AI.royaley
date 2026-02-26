@@ -427,6 +427,13 @@ async def _match_upcoming_game(
       5. Broadest: any game with same sport within time window (pick closest)
     """
     ct = commence_time if commence_time else "2000-01-01T00:00:00Z"
+    # asyncpg requires datetime objects, not strings
+    if isinstance(ct, str):
+        from datetime import datetime as _dt
+        try:
+            ct = _dt.fromisoformat(ct.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            ct = _dt(2000, 1, 1, tzinfo=__import__('datetime').timezone.utc)
 
     # Strategy 1: Exact home name
     r = await db.execute(text("""

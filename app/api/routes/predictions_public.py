@@ -1783,6 +1783,136 @@ def _build_pick_label(
 
 
 # ============================================================================
+# AI PREDICTION ANALYSIS - Powered by Claude
+# ============================================================================
+
+@router.post("/ai-analysis")
+async def generate_ai_analysis(
+    body: dict,
+):
+    """
+    Generate AI-powered detailed prediction analysis.
+    Uses Claude API if ANTHROPIC_API_KEY is set, otherwise returns template analysis.
+    No auth required.
+    """
+    import httpx
+
+    row = body.get("prediction", {})
+    sport = row.get("sport", "")
+    away_team = row.get("away_team", "")
+    home_team = row.get("home_team", "")
+    date_str = row.get("date", "")
+    time_str = row.get("time", "")
+    away_record = row.get("away_record", "N/A")
+    home_record = row.get("home_record", "N/A")
+    bet_type = row.get("bet_type_label", "")
+    pick = row.get("system_pick", "")
+    probability = row.get("probability", 0)
+    edge = row.get("edge", 0)
+    signal_tier = row.get("signal_tier", "D")
+    clv = row.get("clv")
+    result = row.get("result", "pending")
+    profit_loss = row.get("profit_loss")
+    away_circa_open = row.get("away_circa_open", "")
+    home_circa_open = row.get("home_circa_open", "")
+    away_circa_current = row.get("away_circa_current", "")
+    home_circa_current = row.get("home_circa_current", "")
+    away_system = row.get("away_system_current", "")
+    home_system = row.get("home_system_current", "")
+
+    prob_pct = round(probability * 100)
+    edge_pct = round(edge * 100, 1)
+    market_prob = round((probability - edge) * 100)
+    clv_str = f"{clv:+.1f}%" if clv is not None else "N/A"
+
+    tier_desc = {"A": "highest conviction (65%+ prob, 10%+ edge)", "B": "strong signal (60%+ prob, 5%+ edge)", "C": "moderate signal (55%+ prob, 2%+ edge)", "D": "below threshold"}.get(signal_tier, "")
+
+    # Try Claude API first
+    if settings.ANTHROPIC_API_KEY:
+        try:
+            prompt = f"""You are a senior sports betting analyst at ROYALEY, an elite quantitative prediction platform. Generate a professional prediction analysis. Be concise, insightful, use professional betting terminology.
+
+PREDICTION DATA:
+- Sport: {sport} | Game: {away_team} ({away_record}) @ {home_team} ({home_record})
+- Date: {date_str} {time_str}
+- Bet Type: {bet_type} | Pick: {pick}
+- Model Probability: {prob_pct}% | Market Implied: {market_prob}% | Edge: {edge_pct}%
+- Signal Tier: {signal_tier} — {tier_desc}
+- CLV: {clv_str}
+- Opening Line: Away={away_circa_open}, Home={home_circa_open}
+- Current Line: Away={away_circa_current}, Home={home_circa_current}
+- System Fair Line: Away={away_system}, Home={home_system}
+- Result: {result}{f' | P/L: ${profit_loss:.0f}' if profit_loss is not None else ''}
+
+Write with these sections (use **bold** headers):
+1. **Pick Summary** — One sentence thesis
+2. **Edge Analysis** — Where the edge comes from, model vs market discrepancy
+3. **Line Analysis** — Opening vs current vs system fair line, note movement
+4. **Risk Assessment** — Confidence level, key risks
+{f'5. **Result Review** — Grade the outcome' if result != 'pending' else ''}
+
+Under 200 words total. Professional prose, no bullet points."""
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": settings.ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 500,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+                    if text:
+                        return {"analysis": text, "source": "ai"}
+        except Exception as e:
+            import logging
+            logging.getLogger("royaley").warning(f"AI analysis failed: {e}")
+
+    # Fallback: Rich template-based analysis
+    tier_label = {"A": "Tier A — Highest Conviction", "B": "Tier B — Strong Signal", "C": "Tier C — Moderate Signal", "D": "Tier D — Below Threshold"}.get(signal_tier, f"Tier {signal_tier}")
+
+    line_moved = ""
+    try:
+        if away_circa_open and away_circa_current:
+            o = float(str(away_circa_open).replace("+", ""))
+            c = float(str(away_circa_current).replace("+", ""))
+            diff = c - o
+            if abs(diff) >= 0.5:
+                line_moved = f" The line has moved {abs(diff):.1f} points {'toward' if diff < 0 else 'away from'} our pick since opening."
+    except (ValueError, TypeError):
+        pass
+
+    edge_quality = "significant" if abs(edge_pct) >= 5 else "moderate" if abs(edge_pct) >= 2 else "marginal"
+
+    analysis = f"""**Pick Summary**
+{pick} — Our model identifies a {edge_quality} edge of {edge_pct:+.1f}% on this {bet_type.lower()} market for {away_team} at {home_team}.
+
+**Edge Analysis**
+The model assigns {prob_pct}% probability versus the market-implied {market_prob}%, creating a {edge_pct:+.1f}% edge. This qualifies as {tier_label}, meaning {tier_desc}. {"This is a high-confidence play backed by strong model conviction." if signal_tier in ("A", "B") else "The signal meets minimum thresholds but warrants measured position sizing."}
+
+**Line Analysis**
+Opening line: Away {away_circa_open} / Home {home_circa_open}. Current market: Away {away_circa_current} / Home {home_circa_current}. Our system's fair value: Away {away_system} / Home {home_system}.{line_moved}{"" if not line_moved else " Line movement aligned with our model suggests sharp money agrees with this position." if "toward" in line_moved else ""}
+
+**Risk Assessment**
+Model confidence sits at {prob_pct}% — {"above the key 60% threshold suggesting strong predictive signal" if prob_pct >= 60 else "a moderate read that warrants standard position sizing"}. Key risk: {"narrow edge susceptible to line movement" if abs(edge_pct) < 3 else "model reliance on historical patterns that may not hold"}.{f" CLV of {clv_str} {'validates the pick timing' if clv and clv > 0 else 'suggests we may have gotten a suboptimal number'}." if clv is not None else ""}"""
+
+    if result != "pending":
+        result_text = {"won": "Winner. The model correctly identified value.", "lost": "Loss. The edge was real but variance went against us.", "push": "Push. No harm done — the line was accurate."}.get(result, "")
+        pnl_text = f" P/L: ${profit_loss:.0f}." if profit_loss is not None else ""
+        analysis += f"\n\n**Result Review**\n{result_text}{pnl_text}"
+
+    return {"analysis": analysis, "source": "template"}
+
+
+# ============================================================================
 # SYSTEM HEALTH - Public endpoint for System Health dashboard
 # ============================================================================
 

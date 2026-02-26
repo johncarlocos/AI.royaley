@@ -1,13 +1,13 @@
 // src/pages/Predictions/Predictions.tsx - Original design with real opening/current line data
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, IconButton, Button, Select, MenuItem,
   FormControl, InputLabel, Grid, LinearProgress, Dialog,
   DialogTitle, DialogContent, DialogActions, Tabs, Tab, TablePagination,
-  TableSortLabel, useTheme, Tooltip
+  TableSortLabel, useTheme, Tooltip, CircularProgress, Divider
 } from '@mui/material';
-import { Refresh, ExpandMore, CheckCircle, Cancel, Schedule, Remove, TrendingUp, TrendingDown, Assessment, EmojiEvents, Casino, SportsSoccer, Timer, CalendarToday, RestartAlt } from '@mui/icons-material';
+import { Refresh, ExpandMore, CheckCircle, Cancel, Schedule, Remove, TrendingUp, TrendingDown, Assessment, EmojiEvents, Casino, SportsSoccer, Timer, CalendarToday, RestartAlt, AutoAwesome } from '@mui/icons-material';
 import { api } from '../../api/client';
 import { useFilterStore, useSettingsStore } from '../../store';
 import { SPORTS } from '../../types';
@@ -208,6 +208,48 @@ const Predictions: React.FC = () => {
   const [sortField, setSortField] = useState<SortField>('datetime');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [reasonDialog, setReasonDialog] = useState<{ open: boolean; row: FlatRow | null }>({ open: false, row: null });
+  const [aiAnalysis, setAiAnalysis] = useState<string>('');
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const generateAIAnalysis = useCallback(async (row: FlatRow) => {
+    setAiLoading(true);
+    setAiAnalysis('');
+    try {
+      const resp = await api.getAIAnalysis({
+        sport: row.sport,
+        away_team: row.away_team,
+        home_team: row.home_team,
+        date: row.date,
+        time: row.time,
+        away_record: row.away_record,
+        home_record: row.home_record,
+        bet_type_label: row.bet_type_label,
+        system_pick: row.system_pick,
+        probability: row.probability,
+        edge: row.edge,
+        signal_tier: row.signal_tier,
+        clv: row.clv,
+        result: row.result,
+        profit_loss: row.profit_loss,
+        away_circa_open: row.away_circa_open,
+        home_circa_open: row.home_circa_open,
+        away_circa_current: row.away_circa_current,
+        home_circa_current: row.home_circa_current,
+        away_system_current: row.away_system_current,
+        home_system_current: row.home_system_current,
+      });
+      setAiAnalysis(resp.analysis || row.reason || '');
+    } catch (err) {
+      console.error('AI analysis error:', err);
+      setAiAnalysis(row.reason || 'Analysis unavailable.');
+    }
+    setAiLoading(false);
+  }, []);
+
+  const openReasonDialog = useCallback((row: FlatRow) => {
+    setReasonDialog({ open: true, row });
+    generateAIAnalysis(row);
+  }, [generateAIAnalysis]);
   const [positiveEdgeOnly, setPositiveEdgeOnly] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [dateRange, setDateRange] = useState<'1' | '3' | '7' | '30' | 'all'>('7');
@@ -585,7 +627,7 @@ const Predictions: React.FC = () => {
                             <TableCell rowSpan={2} align="center" sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx, color: row.clv != null ? (row.clv > 0 ? 'success.main' : row.clv < 0 ? 'error.main' : 'inherit') : 'inherit' }}>{row.clv != null ? `${row.clv > 0 ? '+' : ''}${row.clv.toFixed(1)}%` : '-'}</TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}><TierBadge tier={row.signal_tier} /></TableCell>
                             <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}>{getStatusChip(row.result)}</TableCell>
-                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}><IconButton size="small" onClick={() => setReasonDialog({ open: true, row })}><ExpandMore /></IconButton></TableCell>
+                            <TableCell rowSpan={2} sx={{ py: 0.75, fontSize: 11, verticalAlign: 'middle', ...gameBorderSx }}><IconButton size="small" onClick={() => openReasonDialog(row)}><ExpandMore /></IconButton></TableCell>
                           </TableRow>
                           {/* Home Row */}
                           <TableRow sx={{ bgcolor: tierBg }}>
@@ -613,26 +655,145 @@ const Predictions: React.FC = () => {
           rowsPerPageOptions={[20, 50, 100, { value: -1, label: 'All' }]} labelRowsPerPage="Predictions per page:" />
       </Card>
 
-      <Dialog open={reasonDialog.open} onClose={() => setReasonDialog({ open: false, row: null })} maxWidth="sm" fullWidth>
-        <DialogTitle><Box display="flex" alignItems="center" gap={2}><Typography variant="h6" fontWeight={700}>📊 Prediction Reason</Typography>{reasonDialog.row && <TierBadge tier={reasonDialog.row.signal_tier} />}</Box></DialogTitle>
+      <Dialog open={reasonDialog.open} onClose={() => { setReasonDialog({ open: false, row: null }); setAiAnalysis(''); }} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={2}>
+            <AutoAwesome sx={{ color: 'primary.main' }} />
+            <Typography variant="h6" fontWeight={700}>AI Prediction Analysis</Typography>
+            {reasonDialog.row && <TierBadge tier={reasonDialog.row.signal_tier} />}
+            {reasonDialog.row && (
+              <Chip
+                label={reasonDialog.row.result === 'won' ? 'WON' : reasonDialog.row.result === 'lost' ? 'LOST' : reasonDialog.row.result === 'push' ? 'PUSH' : 'PENDING'}
+                size="small"
+                color={reasonDialog.row.result === 'won' ? 'success' : reasonDialog.row.result === 'lost' ? 'error' : 'default'}
+                sx={{ fontWeight: 600, fontSize: 11 }}
+              />
+            )}
+          </Box>
+        </DialogTitle>
         <DialogContent>
           {reasonDialog.row && (
             <Box>
-              <Box sx={{ mb: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                <Typography variant="subtitle1" fontWeight={700} color="success.main">{reasonDialog.row.system_pick}</Typography>
-                <Chip label={reasonDialog.row.bet_type_label} size="small" sx={{ mt: 1 }} />
+              {/* Pick Header */}
+              <Box sx={{ mb: 2.5, p: 2, bgcolor: isDark ? 'rgba(46, 125, 50, 0.12)' : 'rgba(46, 125, 50, 0.06)', borderRadius: 2, borderLeft: 4, borderColor: 'success.main' }}>
+                <Typography variant="h6" fontWeight={700} color="success.main" sx={{ fontSize: 16 }}>{reasonDialog.row.system_pick}</Typography>
+                <Box display="flex" gap={1} mt={0.5}>
+                  <Chip label={reasonDialog.row.bet_type_label} size="small" />
+                  <Chip label={`${reasonDialog.row.sport}`} size="small" variant="outlined" />
+                  <Chip label={`${reasonDialog.row.away_team} @ ${reasonDialog.row.home_team}`} size="small" variant="outlined" />
+                </Box>
               </Box>
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Probability</Typography><Typography variant="h6" fontWeight={700}>{formatPercent(reasonDialog.row.probability)}</Typography></Grid>
-                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Edge</Typography><Typography variant="h6" fontWeight={700} color={reasonDialog.row.edge >= 0 ? 'success.main' : 'error.main'}>{reasonDialog.row.edge >= 0 ? '+' : ''}{(reasonDialog.row.edge * 100).toFixed(1)}%</Typography></Grid>
-                <Grid item xs={4}><Typography variant="caption" color="text.secondary">CLV</Typography><Typography variant="h6" fontWeight={700}>{reasonDialog.row.clv != null ? `${reasonDialog.row.clv > 0 ? '+' : ''}${reasonDialog.row.clv.toFixed(1)}%` : '-'}</Typography></Grid>
+
+              {/* Key Metrics */}
+              <Grid container spacing={2} sx={{ mb: 2.5 }}>
+                <Grid item xs={3}>
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>Probability</Typography>
+                    <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>{formatPercent(reasonDialog.row.probability)}</Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={3}>
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>Edge</Typography>
+                    <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20, color: reasonDialog.row.edge >= 0 ? 'success.main' : 'error.main' }}>
+                      {reasonDialog.row.edge >= 0 ? '+' : ''}{(reasonDialog.row.edge * 100).toFixed(1)}%
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={3}>
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>CLV</Typography>
+                    <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>
+                      {reasonDialog.row.clv != null ? `${reasonDialog.row.clv > 0 ? '+' : ''}${reasonDialog.row.clv.toFixed(1)}%` : '-'}
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={3}>
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>Kelly</Typography>
+                    <Typography variant="h5" fontWeight={700} sx={{ fontSize: 20 }}>
+                      {reasonDialog.row.odds_display != null ? fmtOdds(reasonDialog.row.odds_display, 'american') : '-'}
+                    </Typography>
+                  </Box>
+                </Grid>
               </Grid>
-              <Typography variant="subtitle2" fontWeight={700} gutterBottom>Why this pick?</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.8 }}>{reasonDialog.row.reason}</Typography>
+
+              {/* Line Comparison Table */}
+              <Box sx={{ mb: 2.5, p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                <Typography variant="caption" fontWeight={600} color="text.secondary" sx={{ mb: 1, display: 'block', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Line Comparison</Typography>
+                <Grid container spacing={1}>
+                  <Grid item xs={3}><Typography variant="caption" color="text.disabled" sx={{ fontSize: 10 }}>Side</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="caption" color="text.disabled" sx={{ fontSize: 10 }}>Opening</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="caption" color="text.disabled" sx={{ fontSize: 10 }}>Current</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="caption" color="text.disabled" sx={{ fontSize: 10 }}>System Fair</Typography></Grid>
+
+                  <Grid item xs={3}><Typography variant="body2" fontWeight={600} sx={{ fontSize: 12 }}>{reasonDialog.row.away_team.split(' ').pop()}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" sx={{ fontSize: 12 }}>{reasonDialog.row.away_circa_open}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" fontWeight={600} sx={{ fontSize: 12 }}>{reasonDialog.row.away_circa_current}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" color="info.main" sx={{ fontSize: 12 }}>{reasonDialog.row.away_system_current}</Typography></Grid>
+
+                  <Grid item xs={3}><Typography variant="body2" fontWeight={600} sx={{ fontSize: 12 }}>{reasonDialog.row.home_team.split(' ').pop()}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" sx={{ fontSize: 12 }}>{reasonDialog.row.home_circa_open}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" fontWeight={600} sx={{ fontSize: 12 }}>{reasonDialog.row.home_circa_current}</Typography></Grid>
+                  <Grid item xs={3}><Typography variant="body2" fontFamily="monospace" color="info.main" sx={{ fontSize: 12 }}>{reasonDialog.row.home_system_current}</Typography></Grid>
+                </Grid>
+              </Box>
+
+              <Divider sx={{ mb: 2 }} />
+
+              {/* AI Analysis */}
+              <Box>
+                <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+                  <AutoAwesome sx={{ fontSize: 16, color: 'primary.main' }} />
+                  <Typography variant="subtitle2" fontWeight={700}>AI Analysis</Typography>
+                  {aiLoading && <CircularProgress size={14} sx={{ ml: 1 }} />}
+                </Box>
+                {aiLoading ? (
+                  <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                      Generating detailed analysis...
+                    </Typography>
+                  </Box>
+                ) : aiAnalysis ? (
+                  <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(248, 250, 252, 0.8)' }}>
+                    {aiAnalysis.split('\n').map((line, i) => {
+                      // Bold headers (marked with **)
+                      const boldMatch = line.match(/^\*\*(.+?)\*\*(.*)$/);
+                      if (boldMatch) {
+                        return (
+                          <Box key={i} sx={{ mt: i > 0 ? 1.5 : 0 }}>
+                            <Typography variant="subtitle2" fontWeight={700} color="primary.main" sx={{ fontSize: 12, mb: 0.3 }}>
+                              {boldMatch[1]}
+                            </Typography>
+                            {boldMatch[2] && (
+                              <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
+                                {boldMatch[2].replace(/^\s*[-–—]\s*/, '')}
+                              </Typography>
+                            )}
+                          </Box>
+                        );
+                      }
+                      if (!line.trim()) return <Box key={i} sx={{ height: 8 }} />;
+                      return (
+                        <Typography key={i} variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
+                          {line}
+                        </Typography>
+                      );
+                    })}
+                  </Box>
+                ) : (
+                  <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.8 }}>{reasonDialog.row.reason}</Typography>
+                )}
+              </Box>
             </Box>
           )}
         </DialogContent>
-        <DialogActions><Button onClick={() => setReasonDialog({ open: false, row: null })}>Close</Button></DialogActions>
+        <DialogActions>
+          <Button size="small" startIcon={<AutoAwesome sx={{ fontSize: 14 }} />} onClick={() => reasonDialog.row && generateAIAnalysis(reasonDialog.row)} disabled={aiLoading}>
+            Regenerate
+          </Button>
+          <Button onClick={() => { setReasonDialog({ open: false, row: null }); setAiAnalysis(''); }}>Close</Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );

@@ -154,6 +154,11 @@ export const api = {
     return data;
   },
 
+  getAIAnalysis: async (prediction: Record<string, unknown>) => {
+    const { data } = await axiosClient.post('/public/ai-analysis', { prediction });
+    return data;
+  },
+
   getDataCollectors: async () => {
     const { data } = await axiosClient.get('/public/data-collectors');
     return data;

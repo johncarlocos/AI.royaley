@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     
     # External API Settings
     ODDS_API_KEY: str = "8508537db871e84356d777894318f6c3"
+    
+    # AI Analysis (optional - for AI-powered prediction reasons)
+    ANTHROPIC_API_KEY: str = ""
     ODDS_API_BASE_URL: str = "https://api.the-odds-api.com/v4"
     ODDS_API_RATE_LIMIT: int = 500
     ESPN_API_BASE_URL: str = "https://site.api.espn.com/apis/site/v2"

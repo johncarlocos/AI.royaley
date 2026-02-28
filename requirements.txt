@@ -68,6 +68,7 @@ numba==0.59.1
 # HTTP & APIs
 # =============================================================================
 httpx==0.25.2
+curl_cffi>=0.7.0           # Cloudflare bypass for Sofascore tennis scores
 aiohttp==3.9.1
 requests==2.31.0
 tenacity==8.2.3

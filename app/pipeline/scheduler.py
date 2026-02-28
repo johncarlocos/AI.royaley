@@ -696,9 +696,56 @@ async def _fetch_espn_scores(client: httpx.AsyncClient, sport_code: str) -> list
     return results
 
 
+def _sofascore_fetch_sync(date_str: str) -> dict:
+    """
+    Synchronous Sofascore fetch using curl_cffi to bypass Cloudflare.
+    curl_cffi impersonates Chrome's TLS fingerprint, avoiding 403 blocks.
+    Falls back to httpx if curl_cffi is not available.
+    """
+    url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date_str}"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Referer": "https://www.sofascore.com/",
+        "Origin": "https://www.sofascore.com",
+    }
+
+    # Method 1: curl_cffi with Chrome impersonation (bypasses Cloudflare)
+    try:
+        from curl_cffi import requests as cffi_requests
+        resp = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        logger.debug(f"    Sofascore curl_cffi {date_str}: HTTP {resp.status_code}")
+    except ImportError:
+        logger.debug("    curl_cffi not installed, trying httpx fallback")
+    except Exception as e:
+        logger.debug(f"    Sofascore curl_cffi {date_str} error: {e}")
+
+    # Method 2: httpx with full browser headers (fallback)
+    try:
+        import httpx as _httpx
+        headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
+        with _httpx.Client(timeout=15.0, follow_redirects=True) as cl:
+            resp = cl.get(url, headers=headers)
+            if resp.status_code == 200:
+                return resp.json()
+            logger.debug(f"    Sofascore httpx {date_str}: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.debug(f"    Sofascore httpx {date_str} error: {e}")
+
+    return {}
+
+
 async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: str, days_back: int = 7) -> list:
     """
-    Fetch completed tennis match scores from Sofascore public API.
+    Fetch completed tennis match scores from Sofascore API.
+    Uses curl_cffi to bypass Cloudflare (impersonates Chrome TLS fingerprint).
     ESPN doesn't return individual tennis matches (only tournament-level events).
     Sofascore provides match-level data with set scores.
     
@@ -711,22 +758,16 @@ async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: 
     results = []
     seen = set()
     now = datetime.now(timezone.utc)
+    loop = asyncio.get_event_loop()
     
     for d in range(days_back):
         date_str = (now - timedelta(days=d)).strftime("%Y-%m-%d")
         try:
-            resp = await client.get(
-                f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date_str}",
-                headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Accept": "application/json",
-                },
-                timeout=10.0,
-            )
-            if resp.status_code != 200:
+            # Run synchronous curl_cffi in thread pool to avoid blocking async loop
+            data = await loop.run_in_executor(None, _sofascore_fetch_sync, date_str)
+            if not data:
                 continue
             
-            data = resp.json()
             for event in data.get("events", []):
                 # Only completed matches
                 status = event.get("status", {})
@@ -737,8 +778,6 @@ async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: 
                 tournament = event.get("tournament", {})
                 category = tournament.get("category", {}).get("name", "")
                 unique_tournament = tournament.get("uniqueTournament", {})
-                # ATP events typically have category "ATP" or similar
-                # WTA events have "WTA"
                 sport_match = False
                 if sport_code == "ATP" and ("ATP" in category.upper() or "atp" in str(unique_tournament.get("slug", "")).lower()):
                     sport_match = True
@@ -760,7 +799,6 @@ async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: 
                 home_score = 0
                 away_score = 0
                 
-                # Try homeScore.periods / awayScore.periods first (set-by-set games)
                 home_score_obj = event.get("homeScore", {})
                 away_score_obj = event.get("awayScore", {})
                 
@@ -800,6 +838,8 @@ async def _fetch_sofascore_tennis_scores(client: httpx.AsyncClient, sport_code: 
     
     if results:
         logger.info(f"    {sport_code} Sofascore fallback: {len(results)} completed matches (last {days_back} days)")
+    else:
+        logger.info(f"    {sport_code} Sofascore: 0 matches (all {days_back} days returned empty/blocked)")
     
     return results
 
@@ -1323,7 +1363,7 @@ async def run_scheduler():
 
     ODDS_INTERVAL = timedelta(hours=8)
     CLOSING_INTERVAL = timedelta(minutes=15)
-    GRADING_INTERVAL = timedelta(minutes=30)
+    GRADING_INTERVAL = timedelta(minutes=15)   # Was 30min; reduced since Sofascore is free (no API budget impact)
 
     cycle = 0
     while True:

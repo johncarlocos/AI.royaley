@@ -1830,7 +1830,7 @@ async def generate_ai_analysis(
     # Try Claude API first
     if settings.ANTHROPIC_API_KEY:
         try:
-            prompt = f"""You are a senior sports betting analyst at ROYALEY, an elite quantitative prediction platform. Generate a professional prediction analysis. Be concise, insightful, use professional betting terminology.
+            prompt = f"""You are a senior sports betting analyst at ROYALEY, an elite quantitative sports prediction platform powered by advanced machine learning models (XGBoost, LightGBM, CatBoost ensemble). Generate a comprehensive, professional prediction analysis.
 
 PREDICTION DATA:
 - Sport: {sport} | Game: {away_team} ({away_record}) @ {home_team} ({home_record})
@@ -1838,20 +1838,21 @@ PREDICTION DATA:
 - Bet Type: {bet_type} | Pick: {pick}
 - Model Probability: {prob_pct}% | Market Implied: {market_prob}% | Edge: {edge_pct}%
 - Signal Tier: {signal_tier} — {tier_desc}
-- CLV: {clv_str}
+- CLV (Closing Line Value): {clv_str}
 - Opening Line: Away={away_circa_open}, Home={home_circa_open}
 - Current Line: Away={away_circa_current}, Home={home_circa_current}
 - System Fair Line: Away={away_system}, Home={home_system}
 - Result: {result}{f' | P/L: ${profit_loss:.0f}' if profit_loss is not None else ''}
 
 Write with these sections (use **bold** headers):
-1. **Pick Summary** — One sentence thesis
-2. **Edge Analysis** — Where the edge comes from, model vs market discrepancy
-3. **Line Analysis** — Opening vs current vs system fair line, note movement
-4. **Risk Assessment** — Confidence level, key risks
-{f'5. **Result Review** — Grade the outcome' if result != 'pending' else ''}
+1. **Pick Summary** — 2-3 sentence thesis explaining the pick, the matchup context, and why this is actionable (or not).
+2. **Edge Analysis** — Detail the model vs market discrepancy. Explain what the {edge_pct}% edge means in practical terms. Discuss whether this edge is significant enough given the sport and bet type. Reference the signal tier classification and what it implies for position sizing.
+3. **Line Movement & Market Signals** — Analyze opening vs current line movement direction and magnitude. Compare market consensus to our system fair value. Discuss what the line movement tells us about sharp money sentiment and whether it confirms or contradicts our model's position.
+4. **Key Factors & Matchup Context** — Based on the sport ({sport}), teams, and records, discuss relevant factors: team form, home/away splits, conference dynamics, strength of schedule, injury context, pace of play, or any sport-specific factors that could drive the outcome.
+5. **Risk Assessment & Sizing** — Confidence level based on probability and tier. Identify 2-3 specific risks that could cause this pick to lose. Recommend appropriate position sizing (full unit, half unit, or pass) based on edge and tier.
+{f'6. **Result Review** — Grade the outcome. Was the edge real? Did variance go against us or was the model wrong? What can we learn?' if result != 'pending' else ''}
 
-Under 200 words total. Professional prose, no bullet points."""
+Target 300-400 words. Professional prose with sports betting terminology. No bullet points. Write as if briefing a professional bettor."""
 
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
@@ -1862,8 +1863,8 @@ Under 200 words total. Professional prose, no bullet points."""
                         "content-type": "application/json",
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 500,
+                        "model": "claude-haiku-4-5-20251001",
+                        "max_tokens": 1024,
                         "messages": [{"role": "user", "content": prompt}],
                     },
                 )

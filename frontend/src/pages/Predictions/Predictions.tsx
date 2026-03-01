@@ -796,7 +796,6 @@ const Predictions: React.FC = () => {
                 </Box>
               )}
               </Box>
-            </Box>
           )}
         </DialogContent>
         <DialogActions>

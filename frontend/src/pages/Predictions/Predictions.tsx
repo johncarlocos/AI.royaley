@@ -248,8 +248,8 @@ const Predictions: React.FC = () => {
 
   const openReasonDialog = useCallback((row: FlatRow) => {
     setReasonDialog({ open: true, row });
-    generateAIAnalysis(row);
-  }, [generateAIAnalysis]);
+    setAiAnalysis('');  // Reset AI analysis; show reason by default
+  }, []);
   const [positiveEdgeOnly, setPositiveEdgeOnly] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [dateRange, setDateRange] = useState<'1' | '3' | '7' | '30' | 'all'>('7');
@@ -659,7 +659,7 @@ const Predictions: React.FC = () => {
         <DialogTitle>
           <Box display="flex" alignItems="center" gap={2}>
             <AutoAwesome sx={{ color: 'primary.main' }} />
-            <Typography variant="h6" fontWeight={700}>AI Prediction Analysis</Typography>
+            <Typography variant="h6" fontWeight={700}>Prediction Reason</Typography>
             {reasonDialog.row && <TierBadge tier={reasonDialog.row.signal_tier} />}
             {reasonDialog.row && (
               <Chip
@@ -741,56 +741,67 @@ const Predictions: React.FC = () => {
 
               <Divider sx={{ mb: 2 }} />
 
-              {/* AI Analysis */}
+              {/* Reason - always shown */}
               <Box>
                 <Box display="flex" alignItems="center" gap={1} mb={1.5}>
-                  <AutoAwesome sx={{ fontSize: 16, color: 'primary.main' }} />
-                  <Typography variant="subtitle2" fontWeight={700}>AI Analysis</Typography>
-                  {aiLoading && <CircularProgress size={14} sx={{ ml: 1 }} />}
+                  <Assessment sx={{ fontSize: 16, color: 'primary.main' }} />
+                  <Typography variant="subtitle2" fontWeight={700}>Reason</Typography>
                 </Box>
-                {aiLoading ? (
-                  <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: 'action.hover' }}>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                      Generating detailed analysis...
-                    </Typography>
+                <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(248, 250, 252, 0.8)' }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.8, fontSize: 12 }}>{reasonDialog.row.reason}</Typography>
+                </Box>
+              </Box>
+
+              {/* AI Analysis - shown only when requested */}
+              {(aiAnalysis || aiLoading) && (
+                <Box sx={{ mt: 2 }}>
+                  <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+                    <AutoAwesome sx={{ fontSize: 16, color: 'primary.main' }} />
+                    <Typography variant="subtitle2" fontWeight={700}>AI Analysis</Typography>
+                    {aiLoading && <CircularProgress size={14} sx={{ ml: 1 }} />}
                   </Box>
-                ) : aiAnalysis ? (
-                  <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(248, 250, 252, 0.8)' }}>
-                    {aiAnalysis.split('\n').map((line, i) => {
-                      // Bold headers (marked with **)
-                      const boldMatch = line.match(/^\*\*(.+?)\*\*(.*)$/);
-                      if (boldMatch) {
-                        return (
-                          <Box key={i} sx={{ mt: i > 0 ? 1.5 : 0 }}>
-                            <Typography variant="subtitle2" fontWeight={700} color="primary.main" sx={{ fontSize: 12, mb: 0.3 }}>
-                              {boldMatch[1]}
-                            </Typography>
-                            {boldMatch[2] && (
-                              <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
-                                {boldMatch[2].replace(/^\s*[-–—]\s*/, '')}
+                  {aiLoading ? (
+                    <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                        Generating detailed analysis...
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Box sx={{ p: 2, borderRadius: 1.5, bgcolor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(248, 250, 252, 0.8)' }}>
+                      {aiAnalysis.split('\n').map((line, i) => {
+                        const boldMatch = line.match(/^\*\*(.+?)\*\*(.*)$/);
+                        if (boldMatch) {
+                          return (
+                            <Box key={i} sx={{ mt: i > 0 ? 1.5 : 0 }}>
+                              <Typography variant="subtitle2" fontWeight={700} color="primary.main" sx={{ fontSize: 12, mb: 0.3 }}>
+                                {boldMatch[1]}
                               </Typography>
-                            )}
-                          </Box>
+                              {boldMatch[2] && (
+                                <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
+                                  {boldMatch[2].replace(/^\s*[-–—]\s*/, '')}
+                                </Typography>
+                              )}
+                            </Box>
+                          );
+                        }
+                        if (!line.trim()) return <Box key={i} sx={{ height: 8 }} />;
+                        return (
+                          <Typography key={i} variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
+                            {line}
+                          </Typography>
                         );
-                      }
-                      if (!line.trim()) return <Box key={i} sx={{ height: 8 }} />;
-                      return (
-                        <Typography key={i} variant="body2" color="text.secondary" sx={{ lineHeight: 1.7, fontSize: 12 }}>
-                          {line}
-                        </Typography>
-                      );
-                    })}
-                  </Box>
-                ) : (
-                  <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.8 }}>{reasonDialog.row.reason}</Typography>
-                )}
+                      })}
+                    </Box>
+                  )}
+                </Box>
+              )}
               </Box>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
           <Button size="small" startIcon={<AutoAwesome sx={{ fontSize: 14 }} />} onClick={() => reasonDialog.row && generateAIAnalysis(reasonDialog.row)} disabled={aiLoading}>
-            Regenerate
+            {aiAnalysis ? 'Regenerate AI Analysis' : 'Get AI Analysis'}
           </Button>
           <Button onClick={() => { setReasonDialog({ open: false, row: null }); setAiAnalysis(''); }}>Close</Button>
         </DialogActions>

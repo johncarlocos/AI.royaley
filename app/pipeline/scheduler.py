@@ -427,13 +427,16 @@ async def _match_upcoming_game(
       5. Broadest: any game with same sport within time window (pick closest)
     """
     ct = commence_time if commence_time else "2000-01-01T00:00:00Z"
-    # asyncpg requires datetime objects, not strings
-    if isinstance(ct, str):
-        from datetime import datetime as _dt
+    # asyncpg requires datetime objects, not strings or ints
+    from datetime import datetime as _dt, timezone as _tz
+    if isinstance(ct, (int, float)):
+        # Unix timestamp from Sofascore (e.g. 1772406000)
+        ct = _dt.fromtimestamp(ct, tz=_tz.utc)
+    elif isinstance(ct, str):
         try:
             ct = _dt.fromisoformat(ct.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
-            ct = _dt(2000, 1, 1, tzinfo=__import__('datetime').timezone.utc)
+            ct = _dt(2000, 1, 1, tzinfo=_tz.utc)
 
     # Strategy 0: Exact BOTH home+away name — NO time window
     # If both team names match exactly, this IS the game regardless of time

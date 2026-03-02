@@ -37,6 +37,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.core.config import settings, ODDS_API_SPORT_KEYS, SPORT_DISPLAY_NAMES
 from app.pipeline.model_loader import predict_probability, load_model
 from app.pipeline.live_feature_builder import build_features_for_game
+from app.pipeline.claude_predictor import CLAUDE_API_SPORTS, claude_predict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -444,11 +445,14 @@ async def generate_predictions_for_game(
     game_info = await db.execute(
         text("""
             SELECT ug.home_team_id, ug.away_team_id, ug.scheduled_at, ug.sport_id,
+                   ht.name as home_team_name, at.name as away_team_name,
                    COUNT(uo.id) as num_books
             FROM upcoming_games ug
             LEFT JOIN upcoming_odds uo ON uo.upcoming_game_id = ug.id
+            LEFT JOIN teams ht ON ht.id = ug.home_team_id
+            LEFT JOIN teams at ON at.id = ug.away_team_id
             WHERE ug.id = :game_id
-            GROUP BY ug.id
+            GROUP BY ug.id, ht.name, at.name
         """),
         {"game_id": upcoming_game_id},
     )
@@ -519,28 +523,33 @@ async def generate_predictions_for_game(
     odds_data.setdefault("moneyline_away_close", -110)
     odds_data.setdefault("moneyline_home_open", -110)
     
-    # 4. Build features for ML model
+    # 4. Build features for ML model (skip for Claude API sports)
     features = None
-    # Check if ANY model exists for this sport (spread, total, or moneyline)
-    has_model = any(
-        load_model(sport_code, bt) is not None
-        for bt in ["spread", "total", "moneyline"]
-    )
+    use_claude = sport_code in CLAUDE_API_SPORTS and settings.ANTHROPIC_API_KEY
     
-    if has_model:
-        try:
-            features = await build_features_for_game(
-                db=db,
-                sport_id=game.sport_id,
-                home_team_id=game.home_team_id,
-                away_team_id=game.away_team_id,
-                game_time=game.scheduled_at,
-                odds_data=odds_data,
-            )
-            if features:
-                logger.info(f"  🧠 ML features built ({len(features)} features)")
-        except Exception as e:
-            logger.warning(f"  Feature building failed, using market-implied: {e}")
+    if use_claude:
+        logger.info(f"  🤖 Using Claude API for {sport_code} (low-data sport)")
+    else:
+        # Check if ANY model exists for this sport (spread, total, or moneyline)
+        has_model = any(
+            load_model(sport_code, bt) is not None
+            for bt in ["spread", "total", "moneyline"]
+        )
+        
+        if has_model:
+            try:
+                features = await build_features_for_game(
+                    db=db,
+                    sport_id=game.sport_id,
+                    home_team_id=game.home_team_id,
+                    away_team_id=game.away_team_id,
+                    game_time=game.scheduled_at,
+                    odds_data=odds_data,
+                )
+                if features:
+                    logger.info(f"  🧠 ML features built ({len(features)} features)")
+            except Exception as e:
+                logger.warning(f"  Feature building failed, using market-implied: {e}")
     
     # 5. Generate predictions for each bet type
     count = 0
@@ -549,9 +558,23 @@ async def generate_predictions_for_game(
         
         predictions_to_make = []
         
-        # --- Try ML model prediction ---
+        # --- Try ML model prediction or Claude API ---
         model_prob = None
-        if features is not None:
+        if use_claude:
+            # Claude API prediction for CFL/WNBA/NCAAB
+            home_name = getattr(game, 'home_team_name', None) or 'Home'
+            away_name = getattr(game, 'away_team_name', None) or 'Away'
+            result = await claude_predict(
+                sport_code=sport_code,
+                bet_type=bet_type,
+                home_team=home_name,
+                away_team=away_name,
+                odds_data=odds_data,
+                api_key=settings.ANTHROPIC_API_KEY,
+            )
+            if result:
+                model_prob = result  # (positive_prob, negative_prob)
+        elif features is not None:
             result = predict_probability(sport_code, bet_type, feature_dict=features)
             if result:
                 model_prob = result  # (positive_prob, negative_prob)

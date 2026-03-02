@@ -63,6 +63,24 @@ TIER_THRESHOLDS = {
     "D": {"min_prob": 0.00, "min_edge": 0.00, "kelly_mult": 0.00, "max_bet_pct": 0.000},
 }
 
+# ============================================================================
+# SPORT PREDICTION CORRECTIONS
+# ============================================================================
+# "invert": Model is systematically wrong — flip predictions (1 - p).
+#           Use when win% < 48% over 500+ graded picks (model learned inverted target).
+# "market": Model has too few training samples — fall back to market-implied probability.
+#           Use when training data < 200 rows (predictions are random noise).
+# "none":   Model is fine — use as-is.
+#
+# Review and update after every 500 new graded predictions.
+# ============================================================================
+SPORT_CORRECTIONS = {
+    "NCAAB":  "invert",   # 45.8% on 965 picks → inverted → ~54.2%
+    "CFL":    "market",   # 62 training rows — model is random noise
+    "WNBA":   "market",   # 114 training rows — model is random noise
+    # All other sports: no correction needed
+}
+
 
 # ============================================================================
 # MODEL LOADER — Loads actual trained models from disk
@@ -530,6 +548,20 @@ async def generate_predictions(
                         f"No models available for {sport_code}/{bet_type}. Skipping."
                     )
                     continue
+
+                # ── Apply sport-level corrections ──
+                correction = SPORT_CORRECTIONS.get(sport_code, "none")
+                if correction == "invert":
+                    # Model is systematically inverted — flip probability
+                    logger.info(f"  ⚡ INVERT correction for {sport_code}/{bet_type}: {pred_prob:.4f} → {1-pred_prob:.4f}")
+                    pred_prob = 1.0 - pred_prob
+                elif correction == "market":
+                    # Model is unreliable (too few training samples) — use market-implied
+                    # Slight bias toward favorite (52.5% → ~53%) to capture vig edge
+                    market_prob = max(home_implied, away_implied)
+                    # Blend: 80% market + 20% model (model adds tiny signal, market dominates)
+                    pred_prob = 0.80 * market_prob + 0.20 * pred_prob
+                    logger.info(f"  📊 MARKET correction for {sport_code}/{bet_type}: using blended prob {pred_prob:.4f}")
 
                 # Determine predicted side
                 if bet_type == "moneyline":
